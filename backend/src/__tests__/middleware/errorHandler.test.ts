@@ -1,0 +1,341 @@
+import { NextFunction, Request, Response } from 'express';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  DownloadError,
+  ServiceError,
+  ValidationError,
+  NotFoundError,
+  DuplicateError,
+} from '../../errors/DownloadErrors';
+import { errorHandler, asyncHandler } from '../../middleware/errorHandler';
+import { logger } from '../../utils/logger';
+
+vi.mock('../../utils/logger', () => ({
+  logger: {
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
+describe('ErrorHandler Middleware', () => {
+  let req: Partial<Request>;
+  let res: Partial<Response>;
+  let next: NextFunction;
+  let json: any;
+  let status: any;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    json = vi.fn();
+    const chainedRes = {
+      json,
+      send: vi.fn(),
+    };
+    status = vi.fn().mockReturnValue(chainedRes);
+    req = {};
+    res = {
+      json,
+      send: chainedRes.send,
+      status,
+    };
+    next = vi.fn();
+  });
+
+  describe('errorHandler', () => {
+    it('delegates streaming failures without writing or logging a second response', () => {
+      const error = new Error('disk read failed');
+      res.headersSent = true;
+      errorHandler(error, req as Request, res as Response, next);
+      expect(next).toHaveBeenCalledWith(error);
+      expect(status).not.toHaveBeenCalled();
+      expect(logger.error).not.toHaveBeenCalled();
+    });
+
+    it('should handle DownloadError with 400 status', () => {
+      const error = new DownloadError('network', 'Network error', true);
+
+      errorHandler(error, req as Request, res as Response, next);
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        '[DownloadError] network: Network error'
+      );
+      expect(status).toHaveBeenCalledWith(400);
+      expect(json).toHaveBeenCalledWith({
+        error: 'Network error',
+        type: 'network',
+        recoverable: true,
+      });
+    });
+
+    it('should handle ServiceError with 400 status by default', () => {
+      const error = new ServiceError('validation', 'Invalid input', false);
+
+      errorHandler(error, req as Request, res as Response, next);
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        '[ServiceError] validation: Invalid input'
+      );
+      expect(status).toHaveBeenCalledWith(400);
+      expect(json).toHaveBeenCalledWith({
+        error: 'Invalid input',
+        type: 'validation',
+        recoverable: false,
+      });
+    });
+
+    it('should handle NotFoundError with 404 status', () => {
+      const error = new NotFoundError('Video', 'video-123');
+
+      errorHandler(error, req as Request, res as Response, next);
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        '[ServiceError] not_found: Video not found: video-123'
+      );
+      expect(status).toHaveBeenCalledWith(404);
+      expect(json).toHaveBeenCalledWith({
+        error: 'Video not found: video-123',
+        type: 'not_found',
+        recoverable: false,
+      });
+    });
+
+    it('should handle DuplicateError with 409 status', () => {
+      const error = new DuplicateError('Subscription', 'Already exists');
+
+      errorHandler(error, req as Request, res as Response, next);
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        '[ServiceError] duplicate: Already exists'
+      );
+      expect(status).toHaveBeenCalledWith(409);
+      expect(json).toHaveBeenCalledWith({
+        error: 'Already exists',
+        type: 'duplicate',
+        recoverable: false,
+      });
+    });
+
+    it('should handle ServiceError with execution type and 500 status', () => {
+      const error = new ServiceError('execution', 'Execution failed', false);
+
+      errorHandler(error, req as Request, res as Response, next);
+
+      expect(status).toHaveBeenCalledWith(500);
+      expect(json).toHaveBeenCalledWith({
+        error: 'Execution failed',
+        type: 'execution',
+        recoverable: false,
+      });
+    });
+
+    it('should handle ServiceError with database type and 500 status', () => {
+      const error = new ServiceError('database', 'Database error', false);
+
+      errorHandler(error, req as Request, res as Response, next);
+
+      expect(status).toHaveBeenCalledWith(500);
+      expect(json).toHaveBeenCalledWith({
+        error: 'Database error',
+        type: 'database',
+        recoverable: false,
+      });
+    });
+
+    it('should handle ServiceError with migration type and 500 status', () => {
+      const error = new ServiceError('migration', 'Migration failed', false);
+
+      errorHandler(error, req as Request, res as Response, next);
+
+      expect(status).toHaveBeenCalledWith(500);
+      expect(json).toHaveBeenCalledWith({
+        error: 'Migration failed',
+        type: 'migration',
+        recoverable: false,
+      });
+    });
+
+    it('should handle unknown errors with 500 status', () => {
+      const error = new Error('Unexpected error');
+
+      errorHandler(error, req as Request, res as Response, next);
+
+      expect(logger.error).toHaveBeenCalledWith('Unhandled error', error);
+      expect(status).toHaveBeenCalledWith(500);
+      expect(json).toHaveBeenCalledWith({
+        error: 'Internal server error',
+        message: undefined,
+      });
+    });
+
+    it('should return 416 for an unsatisfiable range instead of 500', () => {
+      const error = Object.assign(new Error('Range Not Satisfiable'), {
+        name: 'RangeNotSatisfiableError',
+        status: 416,
+        statusCode: 416,
+      });
+      req = {
+        path: '/videos/clip.webm',
+      };
+
+      errorHandler(error, req as Request, res as Response, next);
+
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(status).toHaveBeenCalledWith(416);
+      expect((res.send as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith('Range Not Satisfiable');
+      expect(json).not.toHaveBeenCalled();
+    });
+
+    it('should read 416 from statusCode when status is absent', () => {
+      const error = Object.assign(new Error('Range Not Satisfiable'), {
+        statusCode: 416,
+      });
+      req = {
+        path: '/images/poster.jpg',
+      };
+
+      errorHandler(error, req as Request, res as Response, next);
+
+      expect(status).toHaveBeenCalledWith(416);
+      expect(logger.error).not.toHaveBeenCalled();
+    });
+
+    it('should return plain 404 for missing static assets', () => {
+      const error = Object.assign(
+        new Error("ENOENT: no such file or directory, stat '/app/frontend/dist/assets/js/LoginPage.js'"),
+        {
+          code: 'ENOENT',
+          status: 404,
+        },
+      );
+      req = {
+        path: '/assets/js/LoginPage.js',
+      };
+
+      errorHandler(error, req as Request, res as Response, next);
+
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(status).toHaveBeenCalledWith(404);
+      expect((res.send as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith('Not Found');
+      expect(json).not.toHaveBeenCalled();
+    });
+
+    it('should return json 404 for api requests', () => {
+      const error = Object.assign(new Error('Route not found'), {
+        status: 404,
+      });
+      req = {
+        path: '/api/videos/missing',
+      };
+
+      errorHandler(error, req as Request, res as Response, next);
+
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(status).toHaveBeenCalledWith(404);
+      expect(json).toHaveBeenCalledWith({
+        error: 'Not Found',
+      });
+    });
+
+    it('should treat non-static 404 errors as unexpected failures', () => {
+      const error = Object.assign(new Error("ENOENT: no such file or directory, stat '/app/frontend/dist/index.html'"), {
+        code: 'ENOENT',
+        status: 404,
+      });
+      req = {
+        path: '/home',
+      };
+
+      errorHandler(error, req as Request, res as Response, next);
+
+      expect(logger.error).toHaveBeenCalledWith('Unhandled error', error);
+      expect(status).toHaveBeenCalledWith(500);
+      expect(json).toHaveBeenCalledWith({
+        error: 'Internal server error',
+        message: undefined,
+      });
+      expect((res.send as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+    });
+
+    it('should handle csrf errors with 403 status', () => {
+      const error = Object.assign(new Error('invalid csrf token'), {
+        code: 'EBADCSRFTOKEN',
+      });
+
+      errorHandler(error, req as Request, res as Response, next);
+
+      expect(logger.warn).toHaveBeenCalledWith('[CSRF] invalid csrf token');
+      expect(status).toHaveBeenCalledWith(403);
+      expect(json).toHaveBeenCalledWith({
+        error: 'invalid csrf token',
+        type: 'csrf',
+      });
+    });
+
+    it('should handle body parser payload limit errors with 413 status', () => {
+      const error = Object.assign(new Error('request entity too large'), {
+        status: 413,
+        type: 'entity.too.large',
+      });
+
+      errorHandler(error, req as Request, res as Response, next);
+
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(status).toHaveBeenCalledWith(413);
+      expect(json).toHaveBeenCalledWith({
+        error: 'Payload too large.',
+        type: 'validation',
+      });
+    });
+
+    it('should include error message in development mode', () => {
+      const originalEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'development';
+      const error = new Error('Unexpected error');
+
+      errorHandler(error, req as Request, res as Response, next);
+
+      expect(json).toHaveBeenCalledWith({
+        error: 'Internal server error',
+        message: 'Unexpected error',
+      });
+
+      process.env.NODE_ENV = originalEnv;
+    });
+  });
+
+  describe('asyncHandler', () => {
+    it('should wrap async function and catch errors', async () => {
+      const asyncFn = vi.fn().mockRejectedValue(new Error('Test error'));
+      const wrapped = asyncHandler(asyncFn);
+      const next = vi.fn();
+
+      await wrapped(req as Request, res as Response, next);
+
+      expect(asyncFn).toHaveBeenCalledWith(req, res, next);
+      expect(next).toHaveBeenCalledWith(expect.any(Error));
+    });
+
+    it('should pass through successful async function', async () => {
+      const asyncFn = vi.fn().mockResolvedValue(undefined);
+      const wrapped = asyncHandler(asyncFn);
+      const next = vi.fn();
+
+      await wrapped(req as Request, res as Response, next);
+
+      expect(asyncFn).toHaveBeenCalledWith(req, res, next);
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it('should handle promise rejections from async functions', async () => {
+      const asyncFn = vi.fn().mockRejectedValue(new Error('Async error'));
+      const wrapped = asyncHandler(asyncFn);
+      const next = vi.fn();
+
+      await wrapped(req as Request, res as Response, next);
+
+      expect(asyncFn).toHaveBeenCalledWith(req, res, next);
+      expect(next).toHaveBeenCalledWith(expect.any(Error));
+      expect((next.mock.calls[0][0] as Error).message).toBe('Async error');
+    });
+  });
+});

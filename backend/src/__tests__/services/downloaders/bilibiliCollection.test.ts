@@ -1,0 +1,898 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DownloadCancelledError } from "../../../errors/DownloadErrors";
+
+const mocks = vi.hoisted(() => ({
+  axiosGet: vi.fn(),
+  getCollectionById: vi.fn(),
+  getCollectionByName: vi.fn(),
+  getCollectionBySourceKey: vi.fn(),
+  getCollectionsByVideoId: vi.fn(),
+  saveCollection: vi.fn(),
+  updateActiveDownloadTitle: vi.fn(),
+  getVideoBySourceUrl: vi.fn(),
+  getDownloadStatus: vi.fn(),
+  linkVideoToCollection: vi.fn(),
+  getSettings: vi.fn(),
+  cleanupCollectionDirectories: vi.fn(),
+  downloadSinglePart: vi.fn(),
+  logger: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
+vi.mock("axios", () => ({
+  default: {
+    get: (...args: any[]) => mocks.axiosGet(...args),
+  },
+}));
+
+vi.mock("../../../services/storageService", () => ({
+  getCollectionById: (...args: any[]) => mocks.getCollectionById(...args),
+  getCollectionByName: (...args: any[]) => mocks.getCollectionByName(...args),
+  getCollectionBySourceKey: (...args: any[]) =>
+    mocks.getCollectionBySourceKey(...args),
+  getCollectionsByVideoId: (...args: any[]) => mocks.getCollectionsByVideoId(...args),
+  saveCollection: (...args: any[]) => mocks.saveCollection(...args),
+  updateActiveDownloadTitle: (...args: any[]) =>
+    mocks.updateActiveDownloadTitle(...args),
+  getVideoBySourceUrl: (...args: any[]) => mocks.getVideoBySourceUrl(...args),
+  getDownloadStatus: (...args: any[]) => mocks.getDownloadStatus(...args),
+  linkVideoToCollection: (...args: any[]) => mocks.linkVideoToCollection(...args),
+  getSettings: (...args: any[]) => mocks.getSettings(...args),
+  cleanupCollectionDirectories: (...args: any[]) =>
+    mocks.cleanupCollectionDirectories(...args),
+}));
+
+vi.mock("../../../services/downloaders/bilibili/bilibiliVideo", () => ({
+  downloadSinglePart: (...args: any[]) => mocks.downloadSinglePart(...args),
+}));
+
+vi.mock("../../../utils/logger", () => ({
+  logger: mocks.logger,
+}));
+
+import {
+  downloadCollection,
+  getCollectionVideos,
+  getSeriesVideos,
+} from "../../../services/downloaders/bilibili/bilibiliCollection";
+
+describe("bilibiliCollection.downloadCollection", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.axiosGet.mockResolvedValue({
+      data: {
+        code: 0,
+        data: {
+          archives: [
+            { bvid: "BV1", title: "Episode 1", aid: 1 },
+            { bvid: "BV2", title: "Episode 2", aid: 2 },
+          ],
+          page: { total: 2 },
+        },
+      },
+    });
+    mocks.getCollectionById.mockReturnValue({
+      id: "col-existing",
+      name: "Series",
+      title: "Series",
+      videos: [],
+    });
+    mocks.getCollectionByName.mockReturnValue(undefined);
+    mocks.getCollectionBySourceKey.mockReturnValue(undefined);
+    mocks.getCollectionsByVideoId.mockReturnValue([]);
+    mocks.getDownloadStatus.mockReturnValue({
+      activeDownloads: [
+        { id: "download-riskretry" },
+        { id: "download-riskhint" },
+        { id: "download-riskthengeneric" },
+      ],
+    });
+    mocks.saveCollection.mockImplementation((collection: any) => collection);
+    mocks.linkVideoToCollection.mockReturnValue(undefined);
+    mocks.getSettings.mockReturnValue({});
+    mocks.downloadSinglePart.mockResolvedValue({
+      success: true,
+      videoData: { id: "video-2" },
+    });
+  });
+
+  it.each([getCollectionVideos, getSeriesVideos])(
+    "preserves publication precision and date-only fallback through %s",
+    async (fetchVideos) => {
+      const publishedAt = Date.parse("2026-09-06T20:34:56Z") / 1000;
+      mocks.axiosGet.mockResolvedValueOnce({
+        data: {
+          code: 0,
+          data: {
+            archives: [
+              {
+                bvid: "BVseconds",
+                title: "Seconds",
+                aid: 1,
+                pubdate: publishedAt,
+              },
+              {
+                bvid: "BVmilliseconds",
+                title: "Milliseconds",
+                aid: 2,
+                ctime: publishedAt * 1000,
+              },
+              { bvid: "BVday", title: "Day only", aid: 3, created: "20260907" },
+            ],
+            page: { total: 3 },
+          },
+        },
+      });
+      const result = await fetchVideos(9, 42);
+      expect(result.success).toBe(true);
+      expect(result.videos).toEqual([
+        expect.objectContaining({
+          bvid: "BVseconds",
+          publishedAt,
+          uploadDate: "20260906",
+        }),
+        expect.objectContaining({
+          bvid: "BVmilliseconds",
+          publishedAt,
+          uploadDate: "20260906",
+        }),
+        expect.objectContaining({
+          bvid: "BVday",
+          publishedAt: undefined,
+          uploadDate: "20260907",
+        }),
+      ]);
+    }
+  );
+
+  it("rejects Bilibili collection API error payloads", async () => {
+    mocks.axiosGet.mockResolvedValueOnce({
+      data: { code: -412, message: "rate limited" },
+    });
+
+    const result = await getCollectionVideos(9, 42);
+
+    expect(result).toEqual({ success: false, videos: [] });
+    expect(mocks.logger.error).toHaveBeenCalledWith(
+      "Error fetching collection videos:",
+      expect.any(Error),
+    );
+  });
+
+  it("rejects Bilibili series payloads that are missing archives", async () => {
+    mocks.axiosGet.mockResolvedValueOnce({
+      data: { code: 0, data: { page: { total: 0 } } },
+    });
+
+    const result = await getSeriesVideos(9, 42);
+
+    expect(result).toEqual({ success: false, videos: [] });
+    expect(mocks.logger.error).toHaveBeenCalledWith(
+      "Error fetching series videos:",
+      expect.any(Error),
+    );
+  });
+
+  it("keeps verified empty Bilibili collection pages as successful", async () => {
+    mocks.axiosGet.mockResolvedValueOnce({
+      data: { code: 0, data: { archives: [], page: { total: 0 } } },
+    });
+
+    const result = await getCollectionVideos(9, 42);
+
+    expect(result).toEqual({ success: true, videos: [] });
+  });
+
+  it("rejects collection pages whose total is missing", async () => {
+    mocks.axiosGet.mockResolvedValueOnce({
+      data: {
+        code: 0,
+        data: { archives: [{ bvid: "BV1", title: "One", aid: 1 }] },
+      },
+    });
+
+    const result = await getCollectionVideos(9, 42);
+
+    expect(result).toEqual({ success: false, videos: [] });
+    expect(mocks.axiosGet).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a short collection page before the advertised total", async () => {
+    mocks.axiosGet.mockResolvedValueOnce({
+      data: {
+        code: 0,
+        data: {
+          archives: [{ bvid: "BV1", title: "One", aid: 1 }],
+          page: { total: 500 },
+        },
+      },
+    });
+
+    const result = await getCollectionVideos(9, 42);
+
+    expect(result).toEqual({ success: false, videos: [] });
+    expect(mocks.axiosGet).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a short series page instead of reporting a truncated success", async () => {
+    mocks.axiosGet.mockResolvedValueOnce({
+      data: {
+        code: 0,
+        data: {
+          archives: [{ bvid: "BV1", title: "One", aid: 1 }],
+          page: { total: 500 },
+        },
+      },
+    });
+
+    const result = await getSeriesVideos(9, 42);
+
+    expect(result).toEqual({ success: false, videos: [] });
+    expect(mocks.axiosGet).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([getCollectionVideos, getSeriesVideos])(
+    "completes full enumeration past 100 pages through %s",
+    async (fetchVideos) => {
+      mocks.axiosGet.mockImplementation(async (_url: string, config: any) => {
+        const page = config.params.page_num ?? config.params.pn;
+        return {
+          data: {
+            code: 0,
+            data: {
+              archives: Array.from(
+                { length: page === 101 ? 1 : 30 },
+                (_, index) => ({
+                  bvid: `BV${page}-${index}`,
+                  title: `Video ${page}-${index}`,
+                  aid: page * 100 + index,
+                }),
+              ),
+              page: { total: 3_001 },
+            },
+          },
+        };
+      });
+
+      const result = await fetchVideos(9, 42);
+
+      expect(result.success).toBe(true);
+      expect(result.videos).toHaveLength(3_001);
+      expect(result.videos[result.videos.length - 1]?.bvid).toBe("BV101-0");
+      expect(mocks.axiosGet).toHaveBeenCalledTimes(101);
+    },
+  );
+
+  it.each([getCollectionVideos, getSeriesVideos])(
+    "rejects repeated pages instead of advancing an incomplete scan through %s",
+    async (fetchVideos) => {
+      mocks.axiosGet.mockResolvedValue({
+        data: {
+          code: 0,
+          data: {
+            archives: Array.from({ length: 30 }, (_, index) => ({
+              bvid: `BV${index}`,
+              title: "Repeated",
+              aid: index,
+            })),
+            page: { total: 3_001 },
+          },
+        },
+      });
+      expect(await fetchVideos(9, 42)).toEqual({ success: false, videos: [] });
+      expect(mocks.axiosGet).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each([getCollectionVideos, getSeriesVideos])(
+    "rejects changing totals instead of chasing an unbounded feed through %s",
+    async (fetchVideos) => {
+      mocks.axiosGet.mockImplementation(async (_url: string, config: any) => {
+        const page = config.params.page_num ?? config.params.pn;
+        return {
+          data: {
+            code: 0,
+            data: {
+              archives: Array.from({ length: 30 }, (_, index) => ({
+                bvid: `BV${page}-${index}`,
+                title: "Growing",
+                aid: page * 100 + index,
+              })),
+              page: { total: 3_000 + page },
+            },
+          },
+        };
+      });
+      expect(await fetchVideos(9, 42)).toEqual({ success: false, videos: [] });
+      expect(mocks.axiosGet).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each([getCollectionVideos, getSeriesVideos])(
+    "rejects invalid archive identities and totals through %s",
+    async (fetchVideos) => {
+      for (const data of [
+        { archives: [null], page: { total: 1 } },
+        { archives: [{ title: "Missing ID" }], page: { total: 1 } },
+        { archives: [{ bvid: "BV1" }], page: { total: 0 } },
+      ]) {
+        mocks.axiosGet.mockResolvedValueOnce({ data: { code: 0, data } });
+        expect(await fetchVideos(9, 42)).toEqual({
+          success: false,
+          videos: [],
+        });
+      }
+    },
+  );
+
+  it("allows an explicitly bounded head probe to return a prefix", async () => {
+    mocks.axiosGet.mockResolvedValueOnce({
+      data: {
+        code: 0,
+        data: {
+          archives: [{ bvid: "BVHEAD", title: "Head", aid: 1 }],
+          page: { total: 500 },
+        },
+      },
+    });
+
+    const result = await getCollectionVideos(9, 42, {
+      pageSize: 1,
+      maxPages: 1,
+    });
+
+    expect(result).toEqual({
+      success: true,
+      videos: [
+        expect.objectContaining({ bvid: "BVHEAD", title: "Head", aid: 1 }),
+      ],
+    });
+    expect(mocks.axiosGet).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses the linked collection and downloads only missing videos", async () => {
+    mocks.getVideoBySourceUrl.mockImplementation((sourceUrl: string) => {
+      if (sourceUrl.endsWith("/BV1")) {
+        return { id: "video-1", sourceUrl };
+      }
+      return undefined;
+    });
+
+    const retryMetadata: any = {
+      shape: "bilibili_collection" as const,
+      collectionName: "Series",
+      collectionInfo: {
+        success: true,
+        type: "collection" as const,
+        id: 42,
+        mid: 9,
+        title: "Series",
+      },
+      linkedCollectionId: "col-existing",
+      completedVideoBvids: ["BV1"],
+      failedVideoBvids: ["BV2"],
+    };
+
+    const result = await downloadCollection(
+      retryMetadata.collectionInfo,
+      "Series",
+      "download-1",
+      undefined,
+      retryMetadata,
+    );
+
+    expect(mocks.saveCollection).toHaveBeenCalledTimes(1);
+    expect(mocks.saveCollection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "col-existing",
+        sourcePlatform: "bilibili",
+        sourceType: "collection",
+        sourceMid: "9",
+        sourceId: "42",
+      }),
+    );
+    expect(mocks.downloadSinglePart).toHaveBeenCalledTimes(1);
+    expect(mocks.downloadSinglePart).toHaveBeenCalledWith(
+      "https://www.bilibili.com/video/BV2",
+      2,
+      2,
+      "Series",
+      "download-1",
+      undefined,
+      "Series",
+      {
+        sourceCollectionName: "Series",
+        sourceCollectionType: "playlist",
+        mediaPlaylistIndex: 2,
+      },
+    );
+    expect(result).toEqual(
+      expect.objectContaining({
+        success: true,
+        partial: false,
+        collectionId: "col-existing",
+        expectedCount: 2,
+        downloadedCount: 1,
+        skippedCount: 1,
+        // Only the newly saved member, so its history row keeps its own
+        // skipped-fragment note; the reused BV1 already has a row.
+        downloadedVideos: [{ id: "video-2" }],
+      }),
+    );
+    expect(retryMetadata.linkedCollectionId).toBe("col-existing");
+    expect(retryMetadata.expectedVideoBvids).toEqual(["BV1", "BV2"]);
+    expect(retryMetadata.completedVideoBvids).toEqual(["BV1", "BV2"]);
+    expect(retryMetadata.failedVideoBvids).toBeUndefined();
+    expect(mocks.linkVideoToCollection).toHaveBeenNthCalledWith(
+      1,
+      "col-existing",
+      "video-1",
+      { moveFiles: false, order: 1 },
+    );
+    expect(mocks.linkVideoToCollection).toHaveBeenNthCalledWith(
+      2,
+      "col-existing",
+      "video-2",
+      { moveFiles: false, order: 2 },
+    );
+  });
+
+  it("reuses an existing manual collection when prior retry metadata is unavailable", async () => {
+    mocks.getCollectionById.mockReturnValue(undefined);
+    mocks.getVideoBySourceUrl.mockImplementation((sourceUrl: string) => {
+      if (sourceUrl.endsWith("/BV1")) {
+        return { id: "video-1", sourceUrl };
+      }
+      return undefined;
+    });
+    mocks.getCollectionsByVideoId.mockReturnValue([
+      {
+        id: "col-existing",
+        name: "Series",
+        title: "Series",
+        origin: "manual",
+        videos: ["video-1"],
+      },
+      {
+        id: "author-auto",
+        name: "Uploader",
+        title: "Uploader",
+        origin: "author_auto",
+        videos: ["video-1"],
+      },
+    ]);
+
+    const result = await downloadCollection(
+      {
+        success: true,
+        type: "collection",
+        id: 42,
+        mid: 9,
+        title: "Series",
+      },
+      "Series",
+      "download-2",
+    );
+
+    expect(mocks.saveCollection).toHaveBeenCalledTimes(1);
+    expect(mocks.saveCollection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "col-existing",
+        sourcePlatform: "bilibili",
+        sourceType: "collection",
+        sourceMid: "9",
+        sourceId: "42",
+      }),
+    );
+    expect(result.collectionId).toBe("col-existing");
+    expect(mocks.linkVideoToCollection).toHaveBeenNthCalledWith(
+      1,
+      "col-existing",
+      "video-1",
+      { moveFiles: false, order: 1 },
+    );
+  });
+
+  it("reuses the collection found by stable source key instead of creating a duplicate (issue #295)", async () => {
+    // No retry metadata link, and the name/membership resolver finds nothing,
+    // but the stable source key (type+mid+id) matches an existing collection.
+    mocks.getCollectionById.mockReturnValue(undefined);
+    mocks.getCollectionByName.mockReturnValue(undefined);
+    mocks.getCollectionsByVideoId.mockReturnValue([]);
+    mocks.getVideoBySourceUrl.mockImplementation((sourceUrl: string) => {
+      if (sourceUrl.endsWith("/BV1")) {
+        return { id: "video-1", sourceUrl };
+      }
+      return undefined;
+    });
+    mocks.getSettings.mockReturnValue({
+      authorOrganizationMode: "author_folder_only",
+    });
+    mocks.getCollectionBySourceKey.mockImplementation(
+      (platform: string, type: string, mid: string, id: string) => {
+        if (
+          platform === "bilibili" &&
+          type === "collection" &&
+          mid === "9" &&
+          id === "42"
+        ) {
+          return {
+            id: "col-existing",
+            name: "Renamed Series",
+            title: "Renamed Series",
+            origin: "manual",
+            videos: ["video-1"],
+            sourcePlatform: "bilibili",
+            sourceType: "collection",
+            sourceMid: "9",
+            sourceId: "42",
+          };
+        }
+        return undefined;
+      },
+    );
+
+    const result = await downloadCollection(
+      {
+        success: true,
+        type: "collection",
+        id: 42,
+        mid: 9,
+        title: "Series",
+      },
+      "Series",
+      "download-3",
+    );
+
+    // Reused the existing collection by key, did not create a new one.
+    expect(result.collectionId).toBe("col-existing");
+    expect(mocks.getCollectionBySourceKey).toHaveBeenCalledWith(
+      "bilibili",
+      "collection",
+      "9",
+      "42",
+    );
+    // Key already present on the matched collection, so no backfill write is needed.
+    expect(mocks.saveCollection).not.toHaveBeenCalled();
+    // Only the missing episode is downloaded; the existing one is linked.
+    expect(mocks.downloadSinglePart).toHaveBeenCalledTimes(1);
+    expect(mocks.downloadSinglePart).toHaveBeenCalledWith(
+      "https://www.bilibili.com/video/BV2",
+      2,
+      2,
+      "Series",
+      "download-3",
+      undefined,
+      "Renamed Series",
+      expect.objectContaining({
+        sourceCollectionName: "Renamed Series",
+      }),
+    );
+    expect(mocks.linkVideoToCollection).toHaveBeenNthCalledWith(
+      1,
+      "col-existing",
+      "video-1",
+      { moveFiles: false, order: 1 },
+    );
+    expect(mocks.cleanupCollectionDirectories).toHaveBeenCalledWith(
+      "Renamed Series",
+    );
+    expect(mocks.cleanupCollectionDirectories).toHaveBeenCalledWith("Series");
+  });
+
+  it("does not reuse a same-named Bilibili collection with a different source key", async () => {
+    mocks.getCollectionById.mockReturnValue(undefined);
+    mocks.getVideoBySourceUrl.mockReturnValue(undefined);
+    mocks.getCollectionsByVideoId.mockReturnValue([]);
+    mocks.getCollectionByName.mockReturnValue({
+      id: "col-other-source",
+      name: "Series",
+      title: "Series",
+      origin: "manual",
+      videos: [],
+      sourcePlatform: "bilibili",
+      sourceType: "collection",
+      sourceMid: "99",
+      sourceId: "100",
+    });
+
+    const result = await downloadCollection(
+      {
+        success: true,
+        type: "collection",
+        id: 42,
+        mid: 9,
+        title: "Series",
+      },
+      "Series",
+      "download-same-name-conflict",
+    );
+
+    expect(result.collectionId).not.toBe("col-other-source");
+    expect(mocks.saveCollection).toHaveBeenCalledTimes(1);
+    expect(mocks.saveCollection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "Series",
+        sourcePlatform: "bilibili",
+        sourceType: "collection",
+        sourceMid: "9",
+        sourceId: "42",
+      }),
+    );
+    expect(mocks.saveCollection).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "col-other-source",
+        sourceMid: "9",
+        sourceId: "42",
+      }),
+    );
+  });
+
+  it("marks collection retries as partial when existing videos are skipped and a missing video still fails", async () => {
+    mocks.getCollectionById.mockReturnValue({
+      id: "col-existing",
+      name: "Series",
+      title: "Series",
+      videos: [],
+    });
+    mocks.getVideoBySourceUrl.mockImplementation((sourceUrl: string) => {
+      if (sourceUrl.endsWith("/BV1")) {
+        return { id: "video-1", sourceUrl };
+      }
+      return undefined;
+    });
+    mocks.downloadSinglePart.mockResolvedValueOnce({
+      success: false,
+      error: "network error",
+    });
+
+    const retryMetadata: any = {
+      shape: "bilibili_collection" as const,
+      collectionName: "Series",
+      collectionInfo: {
+        success: true,
+        type: "collection" as const,
+        id: 42,
+        mid: 9,
+        title: "Series",
+      },
+      linkedCollectionId: "col-existing",
+      completedVideoBvids: ["BV1"],
+      failedVideoBvids: ["BV2"],
+    };
+
+    const result = await downloadCollection(
+      retryMetadata.collectionInfo,
+      "Series",
+      "download-3",
+      undefined,
+      retryMetadata,
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        success: false,
+        partial: true,
+        expectedCount: 2,
+        downloadedCount: 0,
+        skippedCount: 1,
+        failedPartNumbers: [2],
+      }),
+    );
+  });
+
+  it("cleans up the residual collection folder under author_folder_only (issue #295 2-2)", async () => {
+    mocks.getCollectionById.mockReturnValue(undefined);
+    mocks.getVideoBySourceUrl.mockReturnValue(undefined);
+    mocks.getSettings.mockReturnValue({
+      authorOrganizationMode: "author_folder_only",
+    });
+
+    await downloadCollection(
+      { success: true, type: "collection", id: 42, mid: 9, title: "Series" },
+      "Series",
+      "download-cleanup",
+    );
+
+    expect(mocks.cleanupCollectionDirectories).toHaveBeenCalledWith("Series");
+  });
+
+  it("does not clean up collection folders in non-author_folder_only modes", async () => {
+    mocks.getCollectionById.mockReturnValue(undefined);
+    mocks.getVideoBySourceUrl.mockReturnValue(undefined);
+    mocks.getSettings.mockReturnValue({ authorOrganizationMode: "root" });
+
+    await downloadCollection(
+      { success: true, type: "collection", id: 42, mid: 9, title: "Series" },
+      "Series",
+      "download-no-cleanup",
+    );
+
+    expect(mocks.cleanupCollectionDirectories).not.toHaveBeenCalled();
+  });
+
+  it("retries an episode once after a Bilibili risk-control rejection (issue #295)", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.axiosGet.mockResolvedValue({
+        data: {
+          code: 0,
+          data: {
+            archives: [{ bvid: "BV1", title: "Episode 1", aid: 1 }],
+            page: { total: 1 },
+          },
+        },
+      });
+      mocks.getCollectionById.mockReturnValue(undefined);
+      mocks.getVideoBySourceUrl.mockReturnValue(undefined);
+      mocks.downloadSinglePart
+        .mockResolvedValueOnce({
+          success: false,
+          error: "ERROR: HTTP Error 412: Precondition Failed (-352)",
+        })
+        .mockResolvedValueOnce({ success: true, videoData: { id: "video-1" } });
+
+      const promise = downloadCollection(
+        { success: true, type: "collection", id: 42, mid: 9, title: "Series" },
+        "Series",
+        "download-riskretry",
+      );
+      await vi.runAllTimersAsync();
+      const result = await promise;
+
+      // Initial attempt + exactly one backoff retry.
+      expect(mocks.downloadSinglePart).toHaveBeenCalledTimes(2);
+      expect(result.success).toBe(true);
+      expect(result.downloadedCount).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("surfaces a cookie-refresh hint when an episode keeps failing risk control", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.axiosGet.mockResolvedValue({
+        data: {
+          code: 0,
+          data: {
+            archives: [{ bvid: "BV1", title: "Episode 1", aid: 1 }],
+            page: { total: 1 },
+          },
+        },
+      });
+      mocks.getCollectionById.mockReturnValue(undefined);
+      mocks.getVideoBySourceUrl.mockReturnValue(undefined);
+      mocks.downloadSinglePart.mockResolvedValue({
+        success: false,
+        error: "请先登录 (-101)",
+      });
+
+      const promise = downloadCollection(
+        { success: true, type: "collection", id: 42, mid: 9, title: "Series" },
+        "Series",
+        "download-riskhint",
+      );
+      await vi.runAllTimersAsync();
+      const result = await promise;
+
+      // Initial attempt + one retry, then it gives up and surfaces the hint.
+      expect(mocks.downloadSinglePart).toHaveBeenCalledTimes(2);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("refresh");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the cookie-refresh hint when risk control is followed by a generic retry failure (issue #295)", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.axiosGet.mockResolvedValue({
+        data: {
+          code: 0,
+          data: {
+            archives: [{ bvid: "BV1", title: "Episode 1", aid: 1 }],
+            page: { total: 1 },
+          },
+        },
+      });
+      mocks.getCollectionById.mockReturnValue(undefined);
+      mocks.getVideoBySourceUrl.mockReturnValue(undefined);
+      // First attempt hits risk control; the retry fails with an unrelated
+      // generic error. The hint must still come from the first attempt rather
+      // than being dropped because the retry's error is not risk-control.
+      mocks.downloadSinglePart
+        .mockResolvedValueOnce({
+          success: false,
+          error: "ERROR: HTTP Error 412: Precondition Failed (-352)",
+        })
+        .mockResolvedValueOnce({ success: false, error: "network error" });
+
+      const promise = downloadCollection(
+        { success: true, type: "collection", id: 42, mid: 9, title: "Series" },
+        "Series",
+        "download-riskthengeneric",
+      );
+      await vi.runAllTimersAsync();
+      const result = await promise;
+
+      expect(mocks.downloadSinglePart).toHaveBeenCalledTimes(2);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("refresh");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retry risk-control failures after cancellation during backoff", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.axiosGet.mockResolvedValue({
+        data: {
+          code: 0,
+          data: {
+            archives: [{ bvid: "BV1", title: "Episode 1", aid: 1 }],
+            page: { total: 1 },
+          },
+        },
+      });
+      mocks.getCollectionById.mockReturnValue(undefined);
+      mocks.getVideoBySourceUrl.mockReturnValue(undefined);
+      mocks.getDownloadStatus
+        .mockReturnValueOnce({ activeDownloads: [{ id: "download-cancel" }] })
+        .mockReturnValueOnce({ activeDownloads: [] });
+      mocks.downloadSinglePart.mockResolvedValue({
+        success: false,
+        error: "ERROR: HTTP Error 412: Precondition Failed (-352)",
+      });
+
+      const promise = downloadCollection(
+        { success: true, type: "collection", id: 42, mid: 9, title: "Series" },
+        "Series",
+        "download-cancel",
+      );
+      const cancellationExpectation = expect(promise).rejects.toBeInstanceOf(
+        DownloadCancelledError,
+      );
+      await vi.runAllTimersAsync();
+
+      await cancellationExpectation;
+      expect(mocks.downloadSinglePart).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retry a generic (non-risk-control) failure", async () => {
+    mocks.axiosGet.mockResolvedValue({
+      data: {
+        code: 0,
+        data: {
+          archives: [{ bvid: "BV1", title: "Episode 1", aid: 1 }],
+          page: { total: 1 },
+        },
+      },
+    });
+    mocks.getCollectionById.mockReturnValue(undefined);
+    mocks.getVideoBySourceUrl.mockReturnValue(undefined);
+    mocks.downloadSinglePart.mockResolvedValue({
+      success: false,
+      error: "network error",
+    });
+
+    const result = await downloadCollection(
+      { success: true, type: "collection", id: 42, mid: 9, title: "Series" },
+      "Series",
+      "download-generic-fail",
+    );
+
+    expect(mocks.downloadSinglePart).toHaveBeenCalledTimes(1);
+    expect(result.success).toBe(false);
+    expect(result.error ?? "").not.toContain("refresh");
+  });
+});

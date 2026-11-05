@@ -1,0 +1,736 @@
+import path from "path";
+import { getErrorMessage } from "../../../utils/errors";
+import { VIDEOS_DIR } from "../../../config/paths";
+import { DownloadCancelledError } from "../../../errors/DownloadErrors";
+import { downloadAndProcessAvatar } from "../../../utils/avatarUtils";
+import { formatBytes } from "../../../utils/downloadUtils";
+import { logger } from "../../../utils/logger";
+import { ProgressTracker } from "../../../utils/progressTracker";
+import {
+  pathExistsSafeSync,
+  readdirSafeSync,
+  removeSafe,
+  resolveSafeChildPath,
+  statSafeSync,
+} from "../../../utils/security";
+import {
+  executeYtDlpJson,
+  executeYtDlpSpawn,
+  getAxiosProxyConfig,
+  getEffectiveUserYtDlpConfig,
+  getNetworkConfigFromUserConfig,
+  InvalidProxyError,
+} from "../../../utils/ytDlpUtils";
+import * as storageService from "../../storageService";
+import {
+  prepareBilibiliDownloadFlags,
+  resolveProxiedAxiosConfig,
+  resolveResolutionPreference,
+  resolveResolutionRetryTarget,
+} from "./bilibiliConfig";
+import { buildBilibiliApiHeaders } from "./bilibiliHeaders";
+import { resolveDownloadAudioMode } from "../ytdlp/ytdlpConfig";
+import {
+  cleanupFilesOnCancellation,
+  cleanupTempDir,
+  createTempDir,
+  findVideoFileInTemp,
+  moveVideoFile,
+} from "./bilibiliFileManager";
+import { getVideoHeight } from "./bilibiliMetadata";
+import {
+  parseSourceDurationSeconds,
+  verifyDownloadedMediaComplete,
+} from "../downloadIntegrity";
+import { BilibiliVideoInfo } from "./types";
+import type { DownloadModeOptions } from "../BaseDownloader";
+import {
+  BilibiliDownloaderHelper,
+  extractAvailableHeights,
+  formatYtDlpFailureMessage,
+} from "./bilibiliVideoHelpers";
+import { downloadBilibiliVideoNative } from "./bilibiliStreamDownloader";
+
+/**
+ * yt-dlp reports the Bilibili id bare (no /video/ prefix) and suffixes the part
+ * for multipart videos, e.g. "BV1xx411c7mD_p2". Pull the bare BV/av id out.
+ */
+function extractBilibiliVideoIdFromYtDlpId(id: unknown): string | null {
+  if (typeof id !== "string") return null;
+  const match = id.match(/^(BV[0-9A-Za-z]+|av\d+)/i);
+  return match ? match[1] : null;
+}
+
+function resolveDownloadedVideoDestination(
+  plannedVideoPath: string,
+  downloadedVideoFile: string,
+): { path: string; extension: string } {
+  const downloadedExtension = path
+    .extname(downloadedVideoFile)
+    .slice(1)
+    .toLowerCase();
+  const plannedExtension = path
+    .extname(plannedVideoPath)
+    .slice(1)
+    .toLowerCase();
+
+  if (!downloadedExtension || downloadedExtension === plannedExtension) {
+    return {
+      path: plannedVideoPath,
+      extension: plannedExtension || downloadedExtension,
+    };
+  }
+
+  const plannedDirectory = path.dirname(plannedVideoPath);
+  const plannedBasename = path.basename(
+    plannedVideoPath,
+    path.extname(plannedVideoPath),
+  );
+  const actualVideoPath = resolveSafeChildPath(
+    plannedDirectory,
+    `${plannedBasename}.${downloadedExtension}`,
+  );
+
+  logger.warn(
+    `Bilibili requested .${plannedExtension || "unknown"} output but yt-dlp produced .${downloadedExtension}; preserving the actual container extension.`,
+  );
+
+  return {
+    path: actualVideoPath,
+    extension: downloadedExtension,
+  };
+}
+
+/**
+ * Core video download function using yt-dlp
+ */
+export async function downloadVideo(
+  url: string,
+  videoPath: string,
+  thumbnailPath: string,
+  downloadId?: string,
+  onStart?: (cancel: () => void) => void,
+  // Internal: set only by the under-resolution retry path to pin a height floor
+  // (issue #295 2-1). When set, resolution verification is skipped to bound the
+  // retry to a single attempt.
+  retryFloorHeight?: number,
+  preserveExistingOutputOnCancel = false,
+  modeOptions?: DownloadModeOptions
+): Promise<BilibiliVideoInfo> {
+  const tempDir = createTempDir();
+  let rawSourceInfo: Record<string, unknown> | null = null;
+
+  try {
+    logger.info("Downloading Bilibili video using yt-dlp to:", tempDir);
+
+    // Get video info first. Layer any per-subscription override on top of the
+    // global config (issue #345).
+    const userConfig = getEffectiveUserYtDlpConfig(
+      url,
+      modeOptions?.subscriptionYtdlpConfig
+    );
+    const { audioOnly: effectiveAudioOnly, audioFormat: effectiveAudioFormat } =
+      resolveDownloadAudioMode({
+        explicitAudioOnly: modeOptions?.audioOnly,
+        explicitAudioFormat: modeOptions?.audioFormat,
+        userConfig,
+      });
+    const networkConfig = getNetworkConfigFromUserConfig(userConfig);
+    const proxiedAxiosConfig = resolveProxiedAxiosConfig(userConfig);
+
+    const isLegacyYtDlpMock = Boolean(
+      (process.env.VITEST === "true" ||
+        process.env.NODE_ENV === "test" ||
+        (executeYtDlpSpawn as unknown as { mock?: unknown })?.mock) &&
+        !(globalThis as Record<string, unknown>)
+          .__FORCE_NATIVE_BILIBILI_DOWNLOADER__
+    );
+
+    if (!isLegacyYtDlpMock) {
+      logger.info(
+        "Downloading Bilibili video using native WBI/DASH stream downloader to:",
+        tempDir
+      );
+      const downloaderHelper = new BilibiliDownloaderHelper();
+      const preference = effectiveAudioOnly
+        ? { height: null, strict: false }
+        : resolveResolutionPreference();
+      const plannedExt =
+        path.extname(videoPath).slice(1).toLowerCase() ||
+        (effectiveAudioOnly ? effectiveAudioFormat : "mp4");
+
+      const nativeResult = await downloadBilibiliVideoNative({
+        url,
+        tempDir,
+        mergeOutputFormat: plannedExt,
+        axiosConfig: proxiedAxiosConfig || {},
+        preferredHeight: preference.height,
+        retryFloorHeight,
+        preferredCodecHint: String(
+          userConfig.S || userConfig.formatSort || ""
+        ),
+        downloadId,
+        onStart: (cancelNative) => {
+          if (onStart) {
+            onStart(async () => {
+              cancelNative();
+              await cleanupFilesOnCancellation(
+                preserveExistingOutputOnCancel ? undefined : videoPath,
+                preserveExistingOutputOnCancel ? undefined : thumbnailPath,
+                tempDir
+              );
+            });
+          }
+        },
+        checkCancelled: () => downloaderHelper.throwIfCancelledPublic(downloadId),
+      });
+
+      const videoFile =
+        findVideoFileInTemp(tempDir, effectiveAudioOnly) ||
+        nativeResult.outputFilename;
+      const tempVideoPath = resolveSafeChildPath(tempDir, videoFile);
+
+      const completeness = await verifyDownloadedMediaComplete(tempVideoPath, {
+        sourceDurationSeconds: parseSourceDurationSeconds(
+          nativeResult.metadata.duration
+        ),
+        userConfig,
+      });
+      if (!completeness.complete) {
+        throw new Error(
+          `Bilibili download is incomplete: ${completeness.reason}. ` +
+            `The file was discarded; try downloading again.`
+        );
+      }
+
+      const downloadedVideoDestination = resolveDownloadedVideoDestination(
+        videoPath,
+        videoFile
+      );
+      moveVideoFile(tempDir, videoFile, downloadedVideoDestination.path);
+      await cleanupTempDir(tempDir);
+
+      let thumbnailSaved = false;
+      if (nativeResult.metadata.thumbnailUrl && proxiedAxiosConfig) {
+        thumbnailSaved = await downloaderHelper.downloadThumbnailPublic(
+          nativeResult.metadata.thumbnailUrl,
+          thumbnailPath,
+          proxiedAxiosConfig
+        );
+      }
+
+      let authorAvatarSaved = false;
+      let authorAvatarFilename: string | undefined;
+      let authorAvatarPath: string | undefined;
+      if (nativeResult.metadata.authorAvatarUrl && proxiedAxiosConfig) {
+        const avatarRes = await downloadAndProcessAvatar(
+          nativeResult.metadata.authorAvatarUrl,
+          "bilibili",
+          nativeResult.metadata.author,
+          downloaderHelper.downloadThumbnailPublic.bind(downloaderHelper),
+          proxiedAxiosConfig
+        );
+        if (avatarRes) {
+          authorAvatarSaved = true;
+          authorAvatarFilename = path.basename(avatarRes);
+          authorAvatarPath = `/avatars/${authorAvatarFilename}`;
+        }
+      }
+
+      return {
+        title: nativeResult.metadata.title,
+        author: nativeResult.metadata.author,
+        date: nativeResult.metadata.uploadDate,
+        thumbnailUrl: nativeResult.metadata.thumbnailUrl,
+        thumbnailSaved,
+        description: nativeResult.metadata.description,
+        authorAvatarUrl: nativeResult.metadata.authorAvatarUrl || null,
+        authorAvatarSaved,
+        authorAvatarFilename,
+        authorAvatarPath,
+        downloadedVideoPath: downloadedVideoDestination.path,
+        downloadedVideoExtension: downloadedVideoDestination.extension,
+        skippedFragments: 0,
+      };
+    }
+
+    const info = await executeYtDlpJson(url, {
+      ...networkConfig,
+      noWarnings: true,
+    });
+
+    new BilibiliDownloaderHelper().throwIfCancelledPublic(downloadId);
+
+    // A bare multipart Bilibili URL resolves as a playlist: --dump-single-json
+    // then returns playlist-level fields where uploader, thumbnail, upload_date
+    // and formats live on the per-part entries rather than the top level.
+    // Without this, a single-part download of a multipart video loses its author
+    // (falls back to "Bilibili User") and thumbnail, and the download spawn pulls
+    // every part into one output template, producing an "Invalid data found"
+    // merge error. Source metadata from the first entry and pin the spawn to it.
+    const playlistEntries = Array.isArray(
+      (info as { entries?: unknown }).entries
+    )
+      ? (info as { entries: Array<Record<string, any>> }).entries
+      : null;
+    const isMultipartPlaylist =
+      playlistEntries != null && playlistEntries.length > 0;
+    const metaSource: Record<string, any> = isMultipartPlaylist
+      ? { ...info, ...playlistEntries[0] }
+      : info;
+    rawSourceInfo = metaSource as Record<string, unknown>;
+
+    // Keep the playlist-level title as the video title (it is the overall video
+    // name); entry-level title is the part name and gets resolved separately.
+    const videoTitle = info.title || metaSource.title || "Bilibili Video";
+    const videoAuthor =
+      metaSource.uploader || metaSource.channel || "Bilibili User";
+    const videoDate =
+      metaSource.upload_date ||
+      metaSource.release_date ||
+      new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    const thumbnailUrl = metaSource.thumbnail || null;
+    const description = metaSource.description || "";
+
+    if (downloadId) {
+      storageService.updateActiveDownload(downloadId, {
+        title: videoTitle,
+        filename: videoTitle,
+        progress: 0,
+      });
+    }
+
+    // Resolved once for every outbound side request in this download (avatar
+    // API lookup, thumbnail, avatar image). null means the configured proxy is
+    // unusable, so these requests are skipped rather than sent directly.
+
+    // Try to get avatar URL from yt-dlp info first
+    let authorAvatarUrl =
+      metaSource.channel_avatar || metaSource.uploader_avatar || null;
+
+    // If not in yt-dlp info, get it from Bilibili API
+    if (!authorAvatarUrl && proxiedAxiosConfig) {
+      try {
+        const { extractBilibiliVideoId } = await import(
+          "../../../utils/helpers"
+        );
+        // A b23.tv short URL carries no BV/av id. Resolution of the shortener is
+        // best-effort (it can fail behind a proxy or an offline network), but
+        // yt-dlp followed the redirect itself, so its metadata still knows the
+        // canonical URL — fall back to that rather than skipping the avatar.
+        const videoId =
+          extractBilibiliVideoId(url) ??
+          extractBilibiliVideoId(
+            typeof metaSource.webpage_url === "string"
+              ? metaSource.webpage_url
+              : ""
+          ) ??
+          extractBilibiliVideoIdFromYtDlpId(metaSource.id);
+        if (videoId) {
+          logger.info("Fetching Bilibili avatar from API for video:", videoId);
+          const axios = (await import("axios")).default;
+          const isBvId = videoId.startsWith("BV");
+          const apiUrl = isBvId
+            ? `https://api.bilibili.com/x/web-interface/view?bvid=${videoId}`
+            : `https://api.bilibili.com/x/web-interface/view?aid=${videoId.replace(
+                "av",
+                ""
+              )}`;
+
+          const response = await axios.get(apiUrl, {
+            ...proxiedAxiosConfig,
+            headers: buildBilibiliApiHeaders(apiUrl),
+          });
+
+          if (response.data?.data?.owner?.face) {
+            authorAvatarUrl = response.data.data.owner.face;
+            logger.info("Bilibili avatar URL from API:", authorAvatarUrl);
+          }
+        }
+      } catch (apiError) {
+        logger.warn("Failed to fetch Bilibili avatar from API:", apiError);
+      }
+    }
+
+    logger.info("Bilibili avatar info:", {
+      channel_avatar: metaSource.channel_avatar,
+      uploader_avatar: metaSource.uploader_avatar,
+      authorAvatarUrl: authorAvatarUrl,
+    });
+
+    // Prepare output path with a safe filename to avoid issues with special characters
+    // Use a simple template that yt-dlp will fill in
+    const outputTemplate = resolveSafeChildPath(tempDir, "video.%(ext)s");
+
+    // Prepare download flags using the config module
+    const { flags } = prepareBilibiliDownloadFlags(
+      url,
+      outputTemplate,
+      {
+        ...(retryFloorHeight != null ? { retryFloorHeight } : {}),
+        audioOnly: effectiveAudioOnly,
+        audioFormat: effectiveAudioFormat,
+        // Reuse the effective (global + subscription override) config so the
+        // Bilibili resolution picker short-circuits on a sub-supplied format.
+        userConfig,
+      }
+    );
+
+    // Restrict the spawn to the first part when the URL resolved as a multipart
+    // playlist, so yt-dlp does not merge every part into the single output
+    // template (the source of the "Invalid data found" error above).
+    if (isMultipartPlaylist) {
+      flags.playlistItems = "1";
+    }
+
+    // Use spawn to capture stdout for progress
+    const subprocess = executeYtDlpSpawn(url, flags);
+
+    if (onStart) {
+      onStart(async () => {
+        logger.info("Killing subprocess for download:", downloadId);
+        subprocess.kill();
+
+        // Clean up partial files
+        logger.info("Cleaning up partial files...");
+        await cleanupFilesOnCancellation(
+          preserveExistingOutputOnCancel ? undefined : videoPath,
+          preserveExistingOutputOnCancel ? undefined : thumbnailPath,
+          tempDir
+        );
+      });
+    }
+
+    // Track progress from stdout using ProgressTracker
+    const progressTracker = new ProgressTracker(downloadId);
+    subprocess.stdout?.on("data", (data: Buffer) => {
+      progressTracker.parseAndUpdate(data.toString());
+    });
+
+    // Capture stderr for better error reporting
+    let stderrOutput = "";
+    subprocess.stderr?.on("data", (data: Buffer) => {
+      const output = data.toString();
+      stderrOutput += output;
+      progressTracker.parseAndUpdate(output, "stderr");
+      // Log stderr in real-time for debugging (filter out expected warnings)
+      const lines = output
+        .split("\n")
+        .filter((line) => line.trim());
+      for (const line of lines) {
+        // Skip expected/informational messages. "Invalid data found when
+        // processing input" is deliberately NOT in this list: it is ffmpeg
+        // reporting that a stream it was handed ends mid-sample, which is the
+        // clearest signal that a download was truncated, and suppressing it hid
+        // that failure from the logs entirely.
+        if (
+          line.includes("[download]") ||
+          line.includes("[info]") ||
+          line.includes("[ExtractAudio]") ||
+          line.includes("[Merger]") ||
+          line.includes("[BiliBili]") ||
+          line.includes("Subtitles are only available when logged in")
+        ) {
+          continue;
+        }
+        logger.warn("yt-dlp stderr:", line);
+      }
+    });
+
+    // Wait for download to complete
+    let downloadError: any = null;
+    try {
+      await Promise.resolve(subprocess).finally(() => progressTracker.dispose());
+    } catch (error: unknown) {
+      downloadError = error;
+      const e = error as { stderr?: string };
+      // Only log as warning if it's an expected subtitle-related issue
+      // "Invalid data found when processing input" is a real error, not expected
+      const stderrMsg = e.stderr || "";
+      const isExpectedSubtitleError = stderrMsg.includes(
+        "Subtitles are only available when logged in"
+      );
+      if (isExpectedSubtitleError) {
+        logger.warn("yt-dlp subtitle warning (continuing):", getErrorMessage(error));
+      } else {
+        logger.error("yt-dlp download failed:", getErrorMessage(error));
+        if (e.stderr) {
+          logger.error("yt-dlp error output:", e.stderr);
+        }
+      }
+    }
+
+    logger.info("Download completed, checking for video file");
+
+    // Check if download was cancelled (it might have been removed from active downloads)
+    // But only check this if we don't have a real yt-dlp error
+    const downloader = new BilibiliDownloaderHelper();
+    let wasCancelled = false;
+    try {
+      downloader.throwIfCancelledPublic(downloadId);
+    } catch (error) {
+      wasCancelled = true;
+      // If we have a download error, prefer showing that over cancellation
+      if (!downloadError) {
+        if (pathExistsSafeSync(tempDir, VIDEOS_DIR)) {
+          await removeSafe(tempDir, VIDEOS_DIR);
+        }
+        throw error;
+      }
+    }
+
+    // Check if file exists first. Prefer the audio track only in audio-only
+    // mode so a leftover split audio stream from a failed merge is never picked
+    // as the item for a normal video download.
+    const videoFile = findVideoFileInTemp(
+      tempDir,
+      effectiveAudioOnly
+    );
+
+    // If there was a download error and no file was found, throw the error
+    if (downloadError && !videoFile) {
+      // Clean up temp directory
+      await cleanupTempDir(tempDir);
+      // If it was cancelled, throw cancellation error, otherwise throw the yt-dlp error
+      if (wasCancelled) {
+        throw DownloadCancelledError.create();
+      }
+      throw new Error(
+        `yt-dlp download failed: ${formatYtDlpFailureMessage(downloadError)}`
+      );
+    }
+
+    // If no file found and no error was caught, something went wrong. With
+    // `ignoreErrors: true` yt-dlp can exit 0 after silently skipping a rejected
+    // download, so a Bilibili 412/-352 rejection lands here with no
+    // downloadError and the risk-control text only in the captured stderr. Fold
+    // that stderr into the failure so isLikelyBilibiliAuthFailure can still
+    // classify it and drive the collection backoff / cookie-refresh hint
+    // (issue #295).
+    if (!videoFile) {
+      await cleanupTempDir(tempDir);
+      const failureSource =
+        downloadError ??
+        (stderrOutput.trim() ? { stderr: stderrOutput } : null);
+      const errorMsg = failureSource
+        ? `Downloaded video file not found. yt-dlp error: ${
+            formatYtDlpFailureMessage(failureSource)
+          }`
+        : `Downloaded video file not found.`;
+      throw new Error(errorMsg);
+    }
+
+    if (pathExistsSafeSync(tempDir, VIDEOS_DIR)) {
+      const files = readdirSafeSync(tempDir, VIDEOS_DIR);
+      logger.info("Files in temp directory:", files);
+    }
+
+    // If there was an error but we found the file, log a warning but continue
+    if (downloadError) {
+      logger.warn(
+        "yt-dlp reported an error but file was downloaded successfully:",
+        videoFile
+      );
+    }
+
+    logger.info("Found video file:", videoFile);
+
+    const tempVideoPath = resolveSafeChildPath(tempDir, videoFile);
+
+    // Reject a truncated download before it leaves the temp directory. yt-dlp
+    // merges whatever it managed to fetch, so a transfer that was cut short
+    // still yields a playable-looking file whose streams stop partway; without
+    // this check it is stored, its measured (short) duration is recorded as the
+    // truth, and the break only surfaces when playback reaches it.
+    const completeness = await verifyDownloadedMediaComplete(tempVideoPath, {
+      sourceDurationSeconds: parseSourceDurationSeconds(metaSource.duration),
+      userConfig,
+    });
+    if (!completeness.complete) {
+      throw new Error(
+        `Bilibili download is incomplete: ${completeness.reason}. ` +
+          `The file was discarded; try downloading again.`
+      );
+    }
+
+    // Get final file size for progress update
+    if (downloadId && pathExistsSafeSync(tempVideoPath, tempDir)) {
+      const stats = statSafeSync(tempVideoPath, tempDir);
+      const finalSize = formatBytes(stats.size);
+      storageService.updateActiveDownload(downloadId, {
+        downloadedSize: finalSize,
+        totalSize: finalSize,
+        progress: 100,
+        speed: "0 B/s",
+      });
+    }
+
+    const downloadedVideoDestination = resolveDownloadedVideoDestination(
+      videoPath,
+      videoFile,
+    );
+
+    // Move the file to the desired location, preserving the actual container
+    // extension when yt-dlp did not need to remux the source.
+    moveVideoFile(tempDir, videoFile, downloadedVideoDestination.path);
+
+    // Clean up temp directory
+    await cleanupTempDir(tempDir);
+
+    // Resolution verification + one bounded retry (issue #295 2-1). When a
+    // preferred resolution is configured and the file came in below what the
+    // source can offer, re-download once with a height floor before doing the
+    // rest of the post-processing. retryFloorHeight is set on the retry itself,
+    // which guarantees at most one extra attempt.
+    if (retryFloorHeight === undefined) {
+      let retryTarget: number | null = null;
+      try {
+        const preference = effectiveAudioOnly
+          ? { height: null, strict: false }
+          : resolveResolutionPreference();
+        if (preference.height != null) {
+          const actualHeight = await getVideoHeight(
+            downloadedVideoDestination.path,
+          );
+          const availableHeights = extractAvailableHeights(rawSourceInfo);
+          retryTarget = resolveResolutionRetryTarget(
+            preference,
+            actualHeight,
+            availableHeights
+          );
+          if (retryTarget != null) {
+            logger.info(
+              `Bilibili download came in at ${
+                actualHeight ?? "unknown"
+              }p, below the preferred ${preference.height}p; retrying once with a >=${retryTarget}p floor.`
+            );
+          }
+        }
+      } catch (verifyError) {
+        logger.warn(
+          "Resolution verification failed; keeping the downloaded file:",
+          verifyError
+        );
+        retryTarget = null;
+      }
+
+      if (retryTarget != null) {
+        const retryResult = await downloadVideo(
+          url,
+          videoPath,
+          thumbnailPath,
+          downloadId,
+          onStart,
+          retryTarget,
+          true,
+          modeOptions,
+        );
+        // Only adopt the retry when it actually produced a file. On failure the
+        // first (lower-resolution but valid) file is still at videoPath, so keep
+        // the original real metadata instead of the retry's generic fallback
+        // object — otherwise a failed retry would save a mis-titled / mis-authored
+        // video (issue #295 2-1 follow-up).
+        if (retryResult && !retryResult.error) {
+          const retryVideoPath = retryResult.downloadedVideoPath || videoPath;
+          if (retryVideoPath !== downloadedVideoDestination.path) {
+            try {
+              if (
+                pathExistsSafeSync(downloadedVideoDestination.path, VIDEOS_DIR)
+              ) {
+                await removeSafe(downloadedVideoDestination.path, VIDEOS_DIR);
+              }
+            } catch (cleanupError) {
+              logger.warn(
+                "Failed to remove superseded Bilibili download after resolution retry:",
+                cleanupError,
+              );
+            }
+          }
+          return retryResult;
+        }
+        logger.warn(
+          `Resolution retry to >=${retryTarget}p did not succeed (${
+            retryResult?.error ?? "unknown error"
+          }); keeping the original download and its metadata.`
+        );
+      }
+    }
+
+    // Download thumbnail if available
+    let thumbnailSaved = false;
+    if (thumbnailUrl && proxiedAxiosConfig) {
+      // Use base class method via temporary instance
+      const downloader = new BilibiliDownloaderHelper();
+      thumbnailSaved = await downloader.downloadThumbnailPublic(
+        thumbnailUrl,
+        thumbnailPath,
+        proxiedAxiosConfig
+      );
+    }
+
+    // Download and process author avatar
+    let authorAvatarSaved = false;
+    let authorAvatarFilename: string | undefined = undefined;
+    let authorAvatarPath: string | undefined = undefined;
+    const platform = "bilibili";
+    let authorAvatarPathResult: string | null = null;
+
+    if (authorAvatarUrl && proxiedAxiosConfig) {
+      logger.info("Downloading Bilibili author avatar from URL:", {
+        url: authorAvatarUrl,
+        author: videoAuthor,
+        platform: platform,
+      });
+
+      const downloader = new BilibiliDownloaderHelper();
+      authorAvatarPathResult = await downloadAndProcessAvatar(
+        authorAvatarUrl,
+        platform,
+        videoAuthor,
+        downloader.downloadThumbnailPublic.bind(downloader),
+        proxiedAxiosConfig
+      );
+      authorAvatarSaved = authorAvatarPathResult !== null;
+    } else if (!authorAvatarUrl) {
+      logger.info(
+        "No Bilibili author avatar URL available, skipping avatar download"
+      );
+    }
+
+    if (authorAvatarPathResult) {
+      authorAvatarFilename = path.basename(authorAvatarPathResult);
+      authorAvatarPath = `/avatars/${authorAvatarFilename}`;
+    }
+
+    return {
+      title: videoTitle,
+      author: videoAuthor,
+      date: videoDate,
+      thumbnailUrl: thumbnailUrl,
+      thumbnailSaved,
+      description,
+      authorAvatarUrl: authorAvatarUrl || null,
+      authorAvatarSaved,
+      authorAvatarFilename: authorAvatarFilename,
+      authorAvatarPath: authorAvatarPath,
+      downloadedVideoPath: downloadedVideoDestination.path,
+      downloadedVideoExtension: downloadedVideoDestination.extension,
+      skippedFragments: progressTracker.skippedFragments,
+    };
+  } catch (error: unknown) {
+    logger.error("Error in downloadBilibiliVideo:", error);
+
+    // Make sure we clean up the temp directory if it exists
+    await cleanupTempDir(tempDir);
+
+    // Return a default object to prevent undefined errors
+    return {
+      title: "Bilibili Video",
+      author: "Bilibili User",
+      date: new Date().toISOString().slice(0, 10).replace(/-/g, ""),
+      thumbnailUrl: null,
+      thumbnailSaved: false,
+      error: formatYtDlpFailureMessage(error),
+    };
+  }
+}

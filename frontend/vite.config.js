@@ -1,0 +1,157 @@
+
+import react from "@vitejs/plugin-react";
+import { dirname } from "path";
+import { fileURLToPath } from "url";
+import { defineConfig, loadEnv } from "vite";
+import packageJson from "./package.json";
+
+// Get the directory of the current file (frontend directory)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// https://vite.dev/config/
+export default defineConfig(({ mode }) => {
+  // Load env file based on `mode` in the frontend directory.
+  // Only load environment variables prefixed with VITE_
+  const env = loadEnv(mode, __dirname, "VITE_");
+
+  // Get API URL from environment variable or use default
+  // In dev mode, use relative path to leverage Vite proxy
+  // In production, use environment variable or default to localhost
+  // Note: In Vite, mode is 'development' by default, 'production' when building
+  // const isDev = mode === "development";
+
+  return {
+    plugins: [react()],
+    build: {
+      // Enable CSS code splitting for better performance
+      cssCodeSplit: true,
+      // Use esbuild for faster CSS minification
+      cssMinify: "esbuild",
+      // Enable minification for better performance
+      minify: "esbuild",
+      // Optimize chunk size for better loading
+      chunkSizeWarningLimit: 1000,
+      rollupOptions: {
+        output: {
+          // Split stable vendor dependencies into their own long-cacheable chunks
+          // so app-code changes don't bust the vendor chunks on redeploy. Only
+          // third-party packages are routed here — they never import app code,
+          // so this cannot introduce the circular-dependency initialization
+          // errors that an app-aware manualChunks function risked.
+          manualChunks: (id) => {
+            if (!id.includes("node_modules")) return undefined;
+            if (id.includes("react-router") || id.includes("@remix-run")) {
+              return "vendor-react-router";
+            }
+            if (id.includes("@tanstack")) {
+              return "vendor-tanstack";
+            }
+            if (id.includes("@mui") || id.includes("@emotion")) {
+              return "vendor-mui";
+            }
+            if (
+              id.includes("/react/") ||
+              id.includes("/react-dom/") ||
+              id.includes("/scheduler/")
+            ) {
+              return "vendor-react";
+            }
+            if (id.includes("axios")) {
+              return "vendor-axios";
+            }
+            return undefined;
+          },
+          // Optimize chunk names for better caching
+          chunkFileNames: "assets/js/[name]-[hash].js",
+          entryFileNames: "assets/js/[name]-[hash].js",
+          assetFileNames: "assets/[ext]/[name]-[hash].[ext]",
+        },
+      },
+    },
+    server: {
+      host: "0.0.0.0", // Listen on all network interfaces to allow LAN access
+      port: 5556,
+      allowedHosts: env.VITE_ALLOWED_HOSTS
+        ? env.VITE_ALLOWED_HOSTS.split(",")
+            .map((host) => host.trim())
+            .filter(Boolean)
+        : [],
+      watch: {
+        usePolling: true,
+        interval: 2000,
+        ignored: ["/node_modules/"],
+      },
+      // Use environment variable for backend URL, fallback to localhost
+      // In dev mode, proxy runs on server side, so localhost works even when accessed via LAN IP
+      proxy: {
+        "/api": {
+          target: env.VITE_BACKEND_URL || "http://127.0.0.1:5551",
+          changeOrigin: true,
+          secure: false,
+          // Forward WebSocket upgrades (live audio translation) to the backend.
+          ws: true,
+        },
+        "/cloud": {
+          target: env.VITE_BACKEND_URL || "http://127.0.0.1:5551",
+          changeOrigin: true,
+          secure: false,
+        },
+        "/images": {
+          target: env.VITE_BACKEND_URL || "http://127.0.0.1:5551",
+          changeOrigin: true,
+          secure: false,
+        },
+        "/videos": {
+          target: env.VITE_BACKEND_URL || "http://127.0.0.1:5551",
+          changeOrigin: true,
+          secure: false,
+        },
+        "/subtitles": {
+          target: env.VITE_BACKEND_URL || "http://127.0.0.1:5551",
+          changeOrigin: true,
+          secure: false,
+        },
+        "/avatars": {
+          target: env.VITE_BACKEND_URL || "http://127.0.0.1:5551",
+          changeOrigin: true,
+          secure: false,
+        },
+      },
+    },
+    define: {
+      "import.meta.env.VITE_APP_VERSION": JSON.stringify(packageJson.version),
+      // Only define VITE_API_URL if explicitly set, otherwise let runtime code handle it
+      // This allows getApiUrl() to work correctly in both dev and production
+      ...(env.VITE_API_URL
+        ? { "import.meta.env.VITE_API_URL": JSON.stringify(env.VITE_API_URL) }
+        : {}),
+      "import.meta.env.VITE_BUILD_DATE": JSON.stringify(
+        new Date().toISOString()
+      ),
+    },
+    test: {
+      globals: true,
+      environment: "jsdom",
+      setupFiles: "./src/setupTests.ts",
+      env: {
+        VITE_API_URL: "http://localhost:5551/api",
+      },
+      coverage: {
+        provider: "v8",
+        exclude: [
+          "node_modules/**",
+          "dist/**",
+          "**/*.config.js",
+          "**/*.config.ts",
+          "**/__tests__/**",
+          "src/vite-env.d.ts", // Types
+          "src/types.ts", // Types
+          "src/theme.ts", // Theme config
+          "src/setupTests.ts", // Test setup
+          "src/version.ts", // Version constant
+        ],
+      },
+    },
+  };
+});

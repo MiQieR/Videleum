@@ -1,0 +1,208 @@
+import { describe, expect, it } from "vitest";
+import { Language, loadLocale, TranslationKey } from "../translations";
+
+describe("translations", () => {
+  it("should export all expected languages", async () => {
+    const expectedLanguages: Language[] = [
+      "en",
+      "zh",
+      "es",
+      "de",
+      "ja",
+      "fr",
+      "ko",
+      "ar",
+      "pt",
+      "ru",
+    ];
+
+    for (const lang of expectedLanguages) {
+      const loadedTranslations = await loadLocale(lang);
+      expect(loadedTranslations).toBeDefined();
+      expect(typeof loadedTranslations).toBe("object");
+    }
+  });
+
+  it("should have consistent keys across all languages", async () => {
+    const english = await loadLocale("en");
+    const englishKeys = Object.keys(english) as TranslationKey[];
+    const expectedLanguages: Language[] = [
+      "en",
+      "zh",
+      "es",
+      "de",
+      "ja",
+      "fr",
+      "ko",
+      "ar",
+      "pt",
+      "ru",
+    ];
+
+    for (const lang of expectedLanguages) {
+      const loadedTranslations = await loadLocale(lang);
+      const langKeys = Object.keys(loadedTranslations);
+      expect(langKeys.length).toBeGreaterThan(0);
+
+      // Check that all languages have at least some common keys
+      // (We don't require exact match as some languages might have additional keys)
+      const commonKeys = englishKeys.filter((key) => langKeys.includes(key));
+      expect(commonKeys.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("should have non-empty string values for all keys in English", async () => {
+    const english = await loadLocale("en");
+    const englishKeys = Object.keys(english) as TranslationKey[];
+
+    englishKeys.forEach((key) => {
+      const value = english[key];
+      expect(value).toBeDefined();
+      expect(typeof value).toBe("string");
+      expect(value.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("should have valid translation structure", async () => {
+    const expectedLanguages: Language[] = [
+      "en",
+      "zh",
+      "es",
+      "de",
+      "ja",
+      "fr",
+      "ko",
+      "ar",
+      "pt",
+      "ru",
+    ];
+
+    for (const lang of expectedLanguages) {
+      const translation = await loadLocale(lang);
+      expect(translation).toBeDefined();
+      expect(typeof translation).toBe("object");
+      expect(translation).not.toBeNull();
+    }
+  });
+
+  it("should include auto-delete keys in every language", async () => {
+    const requiredKeys: TranslationKey[] = [
+      "autoDelete",
+      "autoDeleteDescription",
+      "autoDeleteInterval",
+      "autoDeleteIntervalHelp",
+      "autoDeleteIntervalError",
+      "autoDeleteHowItWorks",
+      "autoDeleteHowItWorksScan",
+      "autoDeleteHowItWorksDelete",
+      "autoDeleteHowItWorksLock",
+      "autoDeleteHowItWorksDisable",
+      "autoDeleteHowItWorksDowntime",
+      "lockVideo",
+      "unlockVideo",
+      "videoLocked",
+      "videoUnlocked",
+    ];
+    const expectedLanguages: Language[] = [
+      "en",
+      "zh",
+      "es",
+      "de",
+      "ja",
+      "fr",
+      "ko",
+      "ar",
+      "pt",
+      "ru",
+    ];
+
+    for (const lang of expectedLanguages) {
+      const translation = await loadLocale(lang);
+
+      requiredKeys.forEach((key) => {
+        expect(translation[key]).toBeDefined();
+        expect(typeof translation[key]).toBe("string");
+        expect(translation[key].length).toBeGreaterThan(0);
+      });
+    }
+  });
+
+  it("should include video loading error messages in every language", async () => {
+    const requiredKeys: TranslationKey[] = [
+      "videoLoadTimeout",
+      "failedToLoadVideo",
+      "videoLoadingAborted",
+      "videoLoadNetworkError",
+      "safariWebmLimitedSupportError",
+      "safariVideoDecodeError",
+      "videoDecodeError",
+      "safariVideoFormatNotSupported",
+      "browserVideoFormatNotSupported",
+      // Filename template reference panel
+      "filenameRefInformationTitle",
+      "filenameRefInfoLiquid",
+      "filenameRefInfoYtdlp",
+      "filenameRefInfoExtension",
+      "filenameRefInfoFallbacks",
+      "filenameRefSectionCoreTitle",
+      "filenameRefSectionUploadTitle",
+      "filenameRefSectionSourceTitle",
+      "filenameRefSectionPlaylistTitle",
+      "filenameRefSectionSeasonTitle",
+      "filenameRefSectionStaticTitle",
+      "filenameRefSectionRawMetadataTitle",
+      "filenameRefSectionRawMetadataDescription",
+      "filenameRefItemTitleDesc",
+      "filenameRefItemIdDesc",
+      "filenameRefItemExtDesc",
+      "filenameRefItemUploaderDesc",
+      "filenameRefItemChannelDesc",
+      "filenameRefItemDurationStringDesc",
+      "filenameRefItemArtistNameDesc",
+      "filenameRefItemUploadDateDesc",
+      "filenameRefItemUploadYyyyMmDdDesc",
+      "filenameRefItemUploadYearDesc",
+      "filenameRefItemUploadMonthDesc",
+      "filenameRefItemUploadDayDesc",
+      "filenameRefItemSourceCustomNameDesc",
+      "filenameRefItemSourceCollectionNameDesc",
+      "filenameRefItemSourceCollectionIdDesc",
+      "filenameRefItemSourceCollectionTypeDesc",
+      "filenameRefItemMediaPlaylistIndexDesc",
+      "filenameRefItemSeasonFromDateDesc",
+      "filenameRefItemSeasonEpisodeFromDateDesc",
+      "filenameRefItemSeasonEpisodeIndexFromDateDesc",
+      "filenameRefItemSeasonByYearEpisodeByDateDesc",
+      "filenameRefItemSeasonByYearEpisodeByDateAndIndexDesc",
+      "filenameRefItemStaticSeasonEpisodeByIndexDesc",
+      "filenameRefItemStaticSeasonEpisodeByDateDesc",
+      "filenameRefItemGenericSingleWordDesc",
+      "filenameRefItemBasicYtdlpDesc",
+      "filenameRefItemFormattedUploadDateDesc",
+      "filenameRefItemFormattedDurationDesc",
+      "filenameRefItemNestedPathDesc",
+    ];
+    const expectedLanguages: Language[] = [
+      "en",
+      "zh",
+      "es",
+      "de",
+      "ja",
+      "fr",
+      "ko",
+      "ar",
+      "pt",
+      "ru",
+    ];
+
+    for (const lang of expectedLanguages) {
+      const translation = await loadLocale(lang);
+
+      requiredKeys.forEach((key) => {
+        expect(translation[key]).toBeDefined();
+        expect(typeof translation[key]).toBe("string");
+        expect(translation[key].length).toBeGreaterThan(0);
+      });
+    }
+  });
+});

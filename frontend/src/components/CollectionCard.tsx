@@ -1,0 +1,208 @@
+import { Folder, Star } from '@mui/icons-material';
+import {
+    Box,
+    Card,
+    CardActionArea,
+    CardContent,
+    CardMedia,
+    Chip,
+    Typography,
+    useMediaQuery,
+    useTheme
+} from '@mui/material';
+import { useNavigate } from 'react-router';
+import { overlay } from '../theme/colors';
+import { useThumbnailCandidates } from '../hooks/useThumbnailCandidates';
+import { useFavoriteCollections } from '../hooks/useFavoriteCollections';
+import { Collection, Video } from '../types';
+import { formatDisplayDate } from '../utils/formatUtils';
+import { handleThumbnailError } from '../utils/thumbnailPlaceholder';
+
+interface CollectionCardProps {
+    collection: Collection;
+    videos: Video[];
+}
+
+const CollectionCard: React.FC<CollectionCardProps> = ({ collection, videos }) => {
+    const navigate = useNavigate();
+    const theme = useTheme();
+    const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+    const { isFavorite } = useFavoriteCollections();
+    const favorited = isFavorite(collection.id);
+
+    // Get the first 4 videos in the collection
+    const collectionVideos = collection.videos
+        .map(id => videos.find(v => v.id === id))
+        .filter((v): v is Video => v !== undefined)
+        .slice(0, 4);
+
+    const handleClick = () => {
+        navigate(`/collection/${collection.id}`);
+    };
+
+    return (
+        <Card
+            elevation={0}
+            sx={{
+                height: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                position: 'relative',
+                bgcolor: 'transparent',
+                backgroundImage: 'none',
+                boxShadow: 'none',
+                borderRadius: 2,
+                overflow: 'visible',
+                border: 'none',
+                transition: 'background-color 0.15s ease, color 0.3s, border-color 0.3s',
+                ...(!isMobile && {
+                    '&:hover': {
+                        bgcolor: 'action.hover',
+                        boxShadow: 'none'
+                    }
+                })
+            }}
+        >
+            <CardActionArea
+                onClick={handleClick}
+                sx={{
+                    flexGrow: 1,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'stretch',
+                    borderRadius: 2,
+                    color: 'inherit',
+                    '& .MuiCardActionArea-focusHighlight': {
+                        bgcolor: 'transparent'
+                    },
+                    '&.Mui-focusVisible': {
+                        outline: `2px solid ${theme.palette.primary.main}`,
+                        outlineOffset: 2
+                    }
+                }}
+            >
+                <Box sx={{ position: 'relative', paddingTop: '56.25%' /* 16:9 aspect ratio */, bgcolor: 'action.hover', borderRadius: isMobile ? 0 : 2, overflow: 'hidden' }}>
+                    {/* 2x2 Grid for Thumbnails */}
+                    <Box
+                        sx={{
+                            position: 'absolute',
+                            top: 0,
+                            left: 0,
+                            width: '100%',
+                            height: '100%',
+                            display: 'flex',
+                            flexWrap: 'wrap'
+                        }}
+                    >
+                        {collectionVideos.length > 0 ? (
+                            collectionVideos.map((video, index) => (
+                                <CollectionThumbnail key={video.id} video={video} index={index} />
+                            ))
+                        ) : (
+                            <Box sx={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <Folder sx={{ fontSize: 60, color: 'text.disabled' }} />
+                            </Box>
+                        )}
+                    </Box>
+
+                    <Chip
+                        icon={<Folder />}
+                        label={collection.videos.length}
+                        color="secondary"
+                        size="small"
+                        sx={{ position: 'absolute', bottom: 8, right: 8 }}
+                    />
+
+                    {favorited && (
+                        <Box
+                            component="span"
+                            aria-label="favorited"
+                            sx={{
+                                position: 'absolute',
+                                top: 8,
+                                right: 8,
+                                width: 28,
+                                height: 28,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                bgcolor: overlay.black60,
+                                color: 'warning.main',
+                                borderRadius: '50%',
+                                zIndex: 3,
+                                pointerEvents: 'none'
+                            }}
+                        >
+                            <Star sx={{ fontSize: 18 }} />
+                        </Box>
+                    )}
+                </Box>
+
+                <CardContent sx={{ flexGrow: 1, px: 1, py: isMobile ? 1.5 : 1, display: 'flex', flexDirection: 'column' }}>
+                    <Typography
+                        gutterBottom
+                        variant="subtitle1"
+                        component="div"
+                        sx={{
+                            fontWeight: 600,
+                            lineHeight: 1.2,
+                            mb: 1,
+                            display: '-webkit-box',
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: 'vertical',
+                            overflow: 'hidden'
+                        }}
+                    >
+                        {collection.name}
+                    </Typography>
+
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 'auto' }}>
+                        <Typography variant="caption" color="text.secondary">
+                            {formatDisplayDate(collection.createdAt)}
+                        </Typography>
+                    </Box>
+                </CardContent>
+            </CardActionArea>
+        </Card>
+    );
+};
+
+// Component for individual thumbnail with cloud storage support
+const CollectionThumbnail: React.FC<{ video: Video; index: number }> = ({ video, index }) => {
+    const { src, candidates } = useThumbnailCandidates(video);
+
+    return (
+        <Box
+            sx={{
+                width: '50%',
+                height: '50%',
+                position: 'relative',
+                borderRight: index % 2 === 0 ? `1px solid ${overlay.white10}` : 'none',
+                borderBottom: index < 2 ? `1px solid ${overlay.white10}` : 'none',
+                overflow: 'hidden'
+            }}
+        >
+            <CardMedia
+                component="img"
+                image={src}
+                alt={video.title}
+                loading="lazy"
+                decoding="async"
+                width="240"
+                height="135"
+                sx={{
+                    width: '100%',
+                    height: '100%',
+                    objectFit: 'cover'
+                }}
+                onError={(e) => {
+                    handleThumbnailError(e.currentTarget, candidates);
+                }}
+            />
+        </Box>
+    );
+};
+
+
+
+export default CollectionCard;

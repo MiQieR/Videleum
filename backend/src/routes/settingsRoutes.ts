@@ -1,0 +1,189 @@
+import express from "express";
+import multer from "multer";
+import {
+    checkCookies,
+    deleteCookies,
+    uploadCookies,
+} from "../controllers/cookieController";
+import {
+    cleanupBackupDatabases,
+    exportDatabase,
+    getLastBackupInfo,
+    importDatabase,
+    mergeDatabase,
+    previewMergeDatabase,
+    restoreFromLastBackup,
+} from "../controllers/databaseBackupController";
+import {
+    deleteHook,
+    getHookStatus,
+    uploadHook,
+} from "../controllers/hookController";
+import {
+    authenticateGestureLogin,
+    configureGestureLogin,
+    getGestureLoginStatus,
+    removeGestureLogin,
+} from "../controllers/gestureLoginController";
+import {
+    checkPasskeysExist,
+    generateAuthenticationOptions,
+    generateRegistrationOptions,
+    getPasskeys,
+    removeAllPasskeys,
+    verifyAuthentication,
+    verifyRegistration,
+} from "../controllers/passkeyController";
+import {
+    confirmAdminPassword,
+    getPasswordEnabled,
+    logout,
+    verifyPassword,
+    verifyAdminPassword,
+    verifyVisitorUserLogin,
+    verifyVisitorPassword,
+} from "../controllers/passwordController";
+import {
+    cleanupAuthorCollections,
+    deleteLegacyData,
+    getCloudflaredStatus,
+    getSettings,
+    getStoragePathHandler,
+    migrateData,
+    openStoragePathHandler,
+    patchSettings,
+    renameTag,
+    testTMDBCredential,
+    testTelegramNotification,
+    updateStoragePathHandler,
+} from "../controllers/settingsController";
+import {
+    cancelBatchRename,
+    getFilenameTemplateCatalog,
+    getFilenameTemplatePresets,
+    getRenameJobStatus,
+    previewFilenameTemplate,
+    startBatchRename,
+    validateFilenameTemplate,
+} from "../controllers/filenameTemplateController";
+import {
+    cancelMediaServerExportRebuild,
+    getMediaServerExportRebuildStatus,
+    refreshMediaServersHandler,
+    startMediaServerExportRebuild,
+    testEmbyConnectionHandler,
+    testJellyfinConnectionHandler,
+    testPlexConnectionHandler,
+} from "../controllers/mediaServerExportController";
+import {
+    getYtDlpVersion,
+    updateYtDlpVersion,
+} from "../controllers/ytDlpController";
+import { asyncHandler } from "../middleware/errorHandler";
+
+const router = express.Router();
+const uploadInMemory = multer({ storage: multer.memoryStorage() });
+const uploadCookieFile = uploadInMemory.single("file");
+const uploadHookFile = uploadInMemory.single("file");
+const uploadDatabaseFile = uploadInMemory.single("file");
+
+router.get("/", asyncHandler(getSettings));
+router.patch("/", asyncHandler(patchSettings));
+router.get("/storage-path", asyncHandler(getStoragePathHandler));
+router.post("/storage-path", asyncHandler(updateStoragePathHandler));
+router.post("/open-storage-path", asyncHandler(openStoragePathHandler));
+router.post("/migrate", asyncHandler(migrateData));
+router.post("/delete-legacy", asyncHandler(deleteLegacyData));
+router.post("/cleanup-author-collections", asyncHandler(cleanupAuthorCollections));
+router.get("/cloudflared/status", asyncHandler(getCloudflaredStatus));
+router.post("/tags/rename", asyncHandler(renameTag));
+
+// yt-dlp version / self-update routes
+router.get("/ytdlp/version", asyncHandler(getYtDlpVersion));
+router.post("/ytdlp/update", asyncHandler(updateYtDlpVersion));
+
+// Password routes
+router.get("/password-enabled", asyncHandler(getPasswordEnabled));
+router.post("/verify-password", asyncHandler(verifyPassword));
+router.post("/verify-admin-password", asyncHandler(verifyAdminPassword));
+router.post("/verify-user-login", asyncHandler(verifyVisitorUserLogin));
+router.post("/verify-visitor-password", asyncHandler(verifyVisitorPassword));
+router.post("/confirm-admin-password", asyncHandler(confirmAdminPassword));
+router.post("/logout", asyncHandler(logout));
+
+// Passkey routes
+router.get("/passkeys", asyncHandler(getPasskeys));
+router.get("/passkeys/exists", asyncHandler(checkPasskeysExist));
+router.post("/passkeys/register", asyncHandler(generateRegistrationOptions));
+router.post("/passkeys/register/verify", asyncHandler(verifyRegistration));
+router.post("/passkeys/authenticate", asyncHandler(generateAuthenticationOptions));
+router.post("/passkeys/authenticate/verify", asyncHandler(verifyAuthentication));
+router.delete("/passkeys", asyncHandler(removeAllPasskeys));
+
+// Gesture Login routes. Status and authenticate are public (allowlisted in both
+// role middlewares); the collection route is admin-only.
+router.get("/gesture-login/status", asyncHandler(getGestureLoginStatus));
+router.post("/gesture-login/authenticate", asyncHandler(authenticateGestureLogin));
+router.put("/gesture-login", asyncHandler(configureGestureLogin));
+router.delete("/gesture-login", asyncHandler(removeGestureLogin));
+
+// ... existing imports ...
+
+// Cookie routes
+router.post(
+  "/upload-cookies",
+  uploadCookieFile,
+  asyncHandler(uploadCookies)
+);
+router.post("/delete-cookies", asyncHandler(deleteCookies));
+router.get("/check-cookies", asyncHandler(checkCookies));
+
+// Telegram routes
+router.post("/telegram/test", asyncHandler(testTelegramNotification));
+router.post("/tmdb/test", asyncHandler(testTMDBCredential));
+
+// Hook routes
+router.post("/hooks/:name", uploadHookFile, asyncHandler(uploadHook));
+router.delete("/hooks/:name", asyncHandler(deleteHook));
+router.get("/hooks/status", asyncHandler(getHookStatus));
+
+// Database backup routes
+router.get("/export-database", asyncHandler(exportDatabase));
+router.post(
+  "/import-database",
+  uploadDatabaseFile,
+  asyncHandler(importDatabase)
+);
+router.post(
+  "/merge-database-preview",
+  uploadDatabaseFile,
+  asyncHandler(previewMergeDatabase)
+);
+router.post(
+  "/merge-database",
+  uploadDatabaseFile,
+  asyncHandler(mergeDatabase)
+);
+router.post("/cleanup-backup-databases", asyncHandler(cleanupBackupDatabases));
+router.get("/last-backup-info", asyncHandler(getLastBackupInfo));
+router.post("/restore-from-last-backup", asyncHandler(restoreFromLastBackup));
+
+// Filename template routes
+router.get("/filename-template/catalog", asyncHandler(getFilenameTemplateCatalog));
+router.get("/filename-template/presets", asyncHandler(getFilenameTemplatePresets));
+router.post("/filename-template/validate", asyncHandler(validateFilenameTemplate));
+router.post("/filename-template/preview", asyncHandler(previewFilenameTemplate));
+router.post("/filename-template/rename-all", asyncHandler(startBatchRename));
+router.get("/filename-template/rename-jobs/:jobId", asyncHandler(getRenameJobStatus));
+router.post("/filename-template/rename-jobs/:jobId/cancel", asyncHandler(cancelBatchRename));
+
+// Media server sidecar export and client notification routes
+router.post("/media-server-export/rebuild", asyncHandler(startMediaServerExportRebuild));
+router.get("/media-server-export/jobs/:jobId", asyncHandler(getMediaServerExportRebuildStatus));
+router.post("/media-server-export/jobs/:jobId/cancel", asyncHandler(cancelMediaServerExportRebuild));
+router.post("/media-server/jellyfin/test", asyncHandler(testJellyfinConnectionHandler));
+router.post("/media-server/emby/test", asyncHandler(testEmbyConnectionHandler));
+router.post("/media-server/plex/test", asyncHandler(testPlexConnectionHandler));
+router.post("/media-server/refresh", asyncHandler(refreshMediaServersHandler));
+
+export default router;

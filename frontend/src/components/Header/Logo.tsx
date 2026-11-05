@@ -1,0 +1,48 @@
+import { Box, Typography } from '@mui/material';
+import { Link } from 'react-router';
+import logo from '../../assets/logo.svg';
+import { useCloudflareStatus } from '../../hooks/useCloudflareStatus';
+import { useSettings } from '../../hooks/useSettings';
+import { shadow, status } from '../../theme/colors';
+
+interface LogoProps {
+    websiteName: string;
+    onResetSearch?: () => void;
+}
+
+const Logo: React.FC<LogoProps> = ({ websiteName, onResetSearch }) => {
+    // Only check Cloudflare status if it's enabled in settings
+    const { data: settings } = useSettings();
+    const cloudflaredEnabled = settings?.cloudflaredTunnelEnabled ?? false;
+    const { data: cloudflaredStatus } = useCloudflareStatus(cloudflaredEnabled);
+
+    return (
+        <Link to="/" onClick={onResetSearch} style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', color: 'inherit' }}>
+            <Box sx={{ position: 'relative' }}>
+                <img src={logo} alt="Videleum Logo" height={40} />
+                {cloudflaredStatus?.isRunning && (
+                    <Box
+                        sx={{
+                            position: 'absolute',
+                            top: 2,
+                            right: -2,
+                            width: 8,
+                            height: 8,
+                            bgcolor: status.success,
+                            borderRadius: '50%',
+                            boxShadow: shadow.successGlow
+                        }}
+                    />
+                )}
+            </Box>
+            <Box sx={{ ml: 1, display: 'flex', flexDirection: 'column' }}>
+                <Typography variant="h5" sx={{ fontWeight: 'bold', lineHeight: 1 }}>
+                    {websiteName}
+                </Typography>
+            </Box>
+        </Link>
+    );
+};
+
+export default Logo;
+

@@ -1,0 +1,158 @@
+import fs from "fs-extra";
+import os from "os";
+import path from "path";
+import { AVATARS_DIR } from "../config/paths";
+import { logger } from "./logger";
+import { formatAvatarFilename } from "./helpers";
+import {
+  execFileSafe,
+  pathExistsSafeSync,
+  resolveSafeChildPath,
+  unlinkSafeSync,
+} from "./security";
+
+const LOCAL_AVATAR_SOURCE_ALLOWED_DIRS = [AVATARS_DIR, os.tmpdir(), "/tmp"];
+type AvatarDownloadConfig = Record<string, unknown> | undefined;
+
+/**
+ * Check if avatar exists for a given platform and author
+ * Returns the avatar path if it exists, null otherwise
+ */
+export function getExistingAvatarPath(
+  platform: string,
+  author: string
+): string | null {
+  const avatarFilename = formatAvatarFilename(platform, author);
+  const avatarPath = resolveSafeChildPath(AVATARS_DIR, avatarFilename);
+
+  if (pathExistsSafeSync(avatarPath, AVATARS_DIR)) {
+    logger.info("Avatar already exists", { platform });
+    return avatarPath;
+  }
+
+  return null;
+}
+
+/**
+ * Resize image to 100x100px and save
+ * Returns true if successful, false otherwise
+ */
+export async function resizeAvatar(
+  inputPath: string,
+  outputPath: string
+): Promise<boolean> {
+  try {
+    // Ensure output directory exists
+    fs.ensureDirSync(path.dirname(outputPath));
+
+    await execFileSafe("ffmpeg", [
+      "-y",
+      "-i",
+      inputPath,
+      "-vf",
+      "scale=100:100:force_original_aspect_ratio=increase,crop=100:100",
+      "-frames:v",
+      "1",
+      outputPath,
+    ]);
+
+    logger.info(`Resized avatar to 100x100px: ${outputPath}`);
+    return true;
+  } catch (error) {
+    logger.error(`Error resizing avatar: ${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  }
+}
+
+/**
+ * Download and process avatar: check if exists, download if needed, resize to 100x100px
+ * Returns the avatar path if successful, null otherwise
+ * 
+ * @param avatarUrl - URL to download from, or file path if already downloaded
+ * @param platform - Platform name (e.g., "youtube", "bilibili")
+ * @param author - Author name
+ * @param downloadFunction - Function to download the avatar, or move file if already downloaded
+ * @param axiosConfig - Optional axios config for downloads
+ */
+export async function downloadAndProcessAvatar(
+  avatarUrl: string,
+  platform: string,
+  author: string,
+  downloadFunction: (
+    url: string,
+    savePath: string,
+    config?: AvatarDownloadConfig
+  ) => Promise<boolean>,
+  axiosConfig?: AvatarDownloadConfig
+): Promise<string | null> {
+  // Check if avatar already exists
+  const existingPath = getExistingAvatarPath(platform, author);
+  if (existingPath) {
+    logger.info(`Skipping avatar download - already exists: ${existingPath}`);
+    return existingPath;
+  }
+
+  // Generate avatar filename
+  const avatarFilename = formatAvatarFilename(platform, author);
+  const finalAvatarPath = resolveSafeChildPath(AVATARS_DIR, avatarFilename);
+
+  // Check if the input is already a local file path (for yt-dlp downloaded avatars)
+  const isLocalFile = !avatarUrl.startsWith("http") &&
+    pathExistsSafeSync(avatarUrl, LOCAL_AVATAR_SOURCE_ALLOWED_DIRS);
+  
+  let tempAvatarPath: string;
+  if (isLocalFile) {
+    // If it's already a local file, use it directly
+    tempAvatarPath = avatarUrl;
+  } else {
+    // Otherwise, download to temp path
+    tempAvatarPath = resolveSafeChildPath(
+      AVATARS_DIR,
+      `temp_${Date.now()}_${avatarFilename}`
+    );
+  }
+
+  try {
+    // Ensure avatars directory exists
+    fs.ensureDirSync(AVATARS_DIR);
+
+    // Download avatar to temporary path (if not already local)
+    if (!isLocalFile) {
+      const downloaded = await downloadFunction(avatarUrl, tempAvatarPath, axiosConfig);
+      if (!downloaded) {
+        logger.warn(`Failed to download avatar from ${avatarUrl}`);
+        return null;
+      }
+    }
+
+    // Resize to 100x100px
+    const resized = await resizeAvatar(tempAvatarPath, finalAvatarPath);
+    if (!resized) {
+      logger.warn(`Failed to resize avatar: ${tempAvatarPath}`);
+      // Clean up temp file (only if we created it)
+      if (!isLocalFile && pathExistsSafeSync(tempAvatarPath, AVATARS_DIR)) {
+        unlinkSafeSync(tempAvatarPath, AVATARS_DIR);
+      }
+      return null;
+    }
+
+    // Clean up temp file (only if we created it)
+    if (!isLocalFile && pathExistsSafeSync(tempAvatarPath, AVATARS_DIR)) {
+      unlinkSafeSync(tempAvatarPath, AVATARS_DIR);
+    }
+
+    logger.info(`Successfully processed avatar: ${finalAvatarPath}`);
+    return finalAvatarPath;
+  } catch (error) {
+    logger.error(`Error processing avatar: ${error instanceof Error ? error.message : String(error)}`);
+    // Clean up temp file on error (only if we created it)
+    if (!isLocalFile && pathExistsSafeSync(tempAvatarPath, AVATARS_DIR)) {
+      try {
+        unlinkSafeSync(tempAvatarPath, AVATARS_DIR);
+      } catch (cleanupError) {
+        logger.error(`Error cleaning up temp avatar: ${cleanupError}`);
+      }
+    }
+    return null;
+  }
+}

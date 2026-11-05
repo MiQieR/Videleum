@@ -1,0 +1,1760 @@
+# Locale Key List
+
+Canonical locale key order derived from `frontend/src/utils/locales/en.ts`.
+
+Generated — do not edit by hand. `localeParity.test.ts` fails when this file
+and `en.ts` disagree; regenerate with:
+
+```
+UPDATE_KEY_LIST=1 npx vitest run src/utils/locales/__tests__/localeParity.test.ts
+```
+
+This list is intentionally unnumbered. When new keys are inserted, only the local section order changes.
+
+Total keys: 1459
+
+## Summary
+
+| Section | Keys | First Key | Last Key |
+| --- | ---: | --- | --- |
+| Bulk video organization | 28 | `bulkInvalidVideos` | `bulkRequestUnknown` |
+| Header | 11 | `videleum` | `instruction` |
+| Home | 30 | `pasteUrl` | `views` |
+| Settings | 4 | `general` | `downloadSettings` |
+| Settings Categories | 261 | `interfaceDisplay` | `enterNewTagName` |
+| Database | 38 | `database` | `cleanupTempFilesConfirmMessage` |
+| Task Hooks | 101 | `taskHooks` | `cleanupTempFilesFailed` |
+| Cookie Settings | 14 | `cookieSettings` | `youtubeCookiesRequiredForBotCheck` |
+| Cloud Drive | 38 | `cloudDriveSettings` | `clearThumbnailCacheConfirmMessage` |
+| Manage | 46 | `manageContent` | `confirmBulkDelete` |
+| Video Player | 35 | `playing` | `loadingVideo` |
+| D Mode (canvas + WebCodecs playback, no media element) | 36 | `compatibilityMode` | `deletingVideos` |
+| Login | 23 | `signIn` | `tooManyAttempts` |
+| Passkeys | 19 | `createPasskey` | `copyUrl` |
+| Collection Page | 4 | `loadingCollection` | `back` |
+| Author Videos | 18 | `loadVideosError` | `addVideosToExistingCollectionConfirmationWithMove` |
+| Delete Collection Modal | 5 | `deleteCollectionTitle` | `deleteCollectionAndVideos` |
+| Common | 15 | `loading` | `collapse` |
+| Video Card | 9 | `unknownDate` | `weeksAgo` |
+| Upload Modal | 19 | `selectVideoFile` | `thumbnailUploaded` |
+| Bilibili Modal | 22 | `bilibiliCollectionDetected` | `waitingInQueue` |
+| Downloads | 31 | `downloads` | `incompleteDownloadFragments` |
+| Snackbar Messages | 22 | `videoDownloading` | `subtitleDeleted` |
+| Batch Download | 6 | `batchDownload` | `addBatchTasks` |
+| Subscriptions | 78 | `subscribeToAuthor` | `clear` |
+| Subscription Retention | 11 | `retentionDays` | `retentionDaysUpdateFailed` |
+| Auto Delete (library-wide age-based cleanup) | 15 | `autoDelete` | `videoUnlocked` |
+| Per-subscription yt-dlp config override (issue #345) | 5 | `editYtdlpConfigOverride` | `ytdlpConfigOverrideUpdateFailed` |
+| Per-subscription filename-template override (issue #368) | 10 | `subscriptionFilenameTemplate` | `subscriptionFilenameTemplateUpdateFailed` |
+| Subscription Pause/Resume | 12 | `pause` | `viaContinuousDownload` |
+| Playlist Subscription | 5 | `subscribeToPlaylist` | `playlistSubscription` |
+| Issue #368.2 — subscribe-only / history choice | 6 | `subscribeOnlyNewPlaylistVideos` | `playlistBaselineFailed` |
+| Instruction Page | 39 | `instructionSection1Title` | `instructionSection3Item3Text` |
+| Disclaimer | 3 | `disclaimerTitle` | `history` |
+| Existing Video Detection | 16 | `existingVideoDetected` | `changeSettings` |
+| Sorting | 11 | `select` | `random` |
+| yt-dlp Configuration | 62 | `ytDlpConfiguration` | `cleanupAuthorCollectionsFailed` |
+| Cloudflare Tunnel | 16 | `cloudflaredTunnel` | `managedInDashboard` |
+| Database Export/Import | 41 | `exportImportDatabase` | `backupDatabasesCleanedUp` |
+| Media Integrity Audit | 14 | `mediaIntegrityAudit` | `mediaIntegrityAuditActionManualReview` |
+| History Filter | 33 | `filterAll` | `browserVideoFormatNotSupported` |
+| RSS Feed Settings | 42 | `rssFeedSettings` | `rssDays` |
+| Role-based settings middleware errors | 5 | `settingsApiKeyForbidden` | `settingsAuthRequired` |
+| Filename template | 37 | `filenameTemplate` | `filenameBatchRenameError` |
+| Filename template reference (information panel) | 45 | `filenameRefInformationTitle` | `filenameRefItemNestedPathDesc` |
+| Statistics | 87 | `statisticsTitle` | `openCollection` |
+| Gesture Login (admin only) | 31 | `or` | `gestureLoginRetryStatus` |
+
+### Bulk video organization
+
+| Key |
+| --- |
+| `bulkInvalidVideos` |
+| `bulkRemoveInvalid` |
+| `bulkRequestNotSent` |
+| `bulkSelectVideos` |
+| `bulkExitSelection` |
+| `bulkSelectedCount` |
+| `bulkSelectPage` |
+| `bulkSelectPageDescription` |
+| `bulkSelectResults` |
+| `bulkClearSelection` |
+| `bulkSelectionLimit` |
+| `bulkTagsTitle` |
+| `bulkTagsHint` |
+| `bulkTagsValidation` |
+| `bulkCollectionTitle` |
+| `bulkCollectionHint` |
+| `bulkExistingCollection` |
+| `bulkNewCollection` |
+| `bulkCollectionNameHint` |
+| `bulkAddToCollection` |
+| `bulkSelectVideo` |
+| `bulkSaved` |
+| `bulkUnchanged` |
+| `bulkSavedRefreshFailed` |
+| `bulkMissingVideos` |
+| `bulkRemoveMissing` |
+| `bulkCollectionConflict` |
+| `bulkRequestUnknown` |
+
+### Header
+
+| Key |
+| --- |
+| `videleum` |
+| `manage` |
+| `settings` |
+| `logout` |
+| `pleaseEnterUrlOrSearchTerm` |
+| `unexpectedErrorOccurred` |
+| `uploadVideo` |
+| `enterUrlOrSearchTerm` |
+| `enterSearchTerm` |
+| `manageVideos` |
+| `instruction` |
+
+### Home
+
+| Key |
+| --- |
+| `pasteUrl` |
+| `download` |
+| `search` |
+| `recentDownloads` |
+| `noDownloads` |
+| `downloadStarted` |
+| `downloadFailed` |
+| `downloadSuccess` |
+| `downloadAudioOnly` |
+| `downloadAudioOnlyHint` |
+| `audioFormat` |
+| `audioFormatM4a` |
+| `audioFormatMp3` |
+| `audioFormatOpus` |
+| `confirmDownloadAllPlaylists` |
+| `downloadAll` |
+| `loadingVideos` |
+| `searchResultsFor` |
+| `fromYourLibrary` |
+| `noMatchingVideos` |
+| `fromYouTube` |
+| `loadingYouTubeResults` |
+| `noYouTubeResults` |
+| `fromBilibili` |
+| `loadingBilibiliResults` |
+| `noBilibiliResults` |
+| `bilibiliSearchFailed` |
+| `bilibiliSearchRiskControlled` |
+| `noVideosYet` |
+| `views` |
+
+### Settings
+
+| Key |
+| --- |
+| `general` |
+| `security` |
+| `videoDefaults` |
+| `downloadSettings` |
+
+### Settings Categories
+
+| Key |
+| --- |
+| `interfaceDisplay` |
+| `videoPlayback` |
+| `downloadsFiles` |
+| `libraryStorage` |
+| `securityAccess` |
+| `integrationsAdvanced` |
+| `fileOrganization` |
+| `language` |
+| `websiteName` |
+| `websiteNameHelper` |
+| `theme` |
+| `themeLight` |
+| `themeDark` |
+| `themeSystem` |
+| `showThemeButtonInHeader` |
+| `showAudioDownloadButton` |
+| `tmdbApiKey` |
+| `tmdbApiKeyHelper` |
+| `testTmdbCredential` |
+| `tmdbCredentialMissing` |
+| `tmdbCredentialValid` |
+| `tmdbCredentialTestFailed` |
+| `tmdbCredentialValidApiKey` |
+| `tmdbCredentialValidReadAccessToken` |
+| `tmdbCredentialInvalid` |
+| `tmdbCredentialRequestFailed` |
+| `mountDirectories` |
+| `mountDirectoriesPlaceholder` |
+| `mountDirectoriesHelper` |
+| `mountDirectoriesEmptyError` |
+| `infiniteScroll` |
+| `infiniteScrollDisabled` |
+| `maxVideoColumns` |
+| `videoColumns` |
+| `columnsCount` |
+| `enableLogin` |
+| `allowPasswordLogin` |
+| `allowPasswordLoginHelper` |
+| `allowPasswordLoginHttpsOnlyHelper` |
+| `allowResetPassword` |
+| `allowResetPasswordHelper` |
+| `enableApiKeyAuth` |
+| `apiKeyAuthHelper` |
+| `apiKey` |
+| `refreshApiKey` |
+| `refreshApiKeyTitle` |
+| `refreshApiKeyConfirm` |
+| `copyApiKey` |
+| `apiKeySaveHint` |
+| `apiKeyCopied` |
+| `apiKeyCopyFailed` |
+| `password` |
+| `enterPassword` |
+| `togglePasswordVisibility` |
+| `passwordHelper` |
+| `passwordSetHelper` |
+| `autoPlay` |
+| `autoLoop` |
+| `maxConcurrent` |
+| `maxConcurrentDescription` |
+| `autoRetry` |
+| `autoRetryDescription` |
+| `retryTimes` |
+| `retryTimesDescription` |
+| `retryInterval` |
+| `retryIntervalDescription` |
+| `dontSkipDeletedVideo` |
+| `dontSkipDeletedVideoDescription` |
+| `mediaServerExportMode` |
+| `mediaServerExportModeDescription` |
+| `mediaServerExportModeOff` |
+| `mediaServerExportModeNfo` |
+| `mediaServerExportModeNfoAndSourceJson` |
+| `mediaServerExportModeOffDescription` |
+| `mediaServerExportCleanupHint` |
+| `mediaServerExportRecommendedLayoutWarning` |
+| `mediaServerExportRebuild` |
+| `mediaServerExportRebuildConfirmTitle` |
+| `mediaServerExportRebuildConfirmBody` |
+| `mediaServerExportRebuildError` |
+| `mediaServerExportRebuildRunning` |
+| `mediaServerExportRebuildComplete` |
+| `mediaServerExportRebuildSummary` |
+| `mediaServerExportRebuildDisabledOff` |
+| `mediaServerExportRebuildDisabledRunning` |
+| `mediaServerExportCleanup` |
+| `mediaServerExportCleanupConfirmTitle` |
+| `mediaServerExportCleanupConfirmBody` |
+| `mediaServerExportCleanupError` |
+| `mediaServerExportCleanupRunning` |
+| `mediaServerExportCleanupComplete` |
+| `mediaServerExportCleanupSummary` |
+| `mediaServerExportSweptSummary` |
+| `mediaServerExportActiveDownloadsError` |
+| `mediaServerExportQueuedDownloadsError` |
+| `mediaServerExportUnsupportedModeError` |
+| `mediaServerExportCleanupUnsupportedModeError` |
+| `mediaServerIntegrationTitle` |
+| `mediaServerIntegrationDescription` |
+| `jellyfinServerUrl` |
+| `jellyfinApiKey` |
+| `embyServerUrl` |
+| `embyApiKey` |
+| `plexServerUrl` |
+| `plexToken` |
+| `connectionSuccess` |
+| `connectionFailed` |
+| `refreshMediaServers` |
+| `refreshingMediaServers` |
+| `refreshTriggered` |
+| `mediaServerAutoRefreshOnDownload` |
+| `liveTranslation` |
+| `liveTranslationDescription` |
+| `enableLiveTranslation` |
+| `liveTranslationOriginalAudioWithSubtitles` |
+| `liveTranslationOriginalAudioWithSubtitlesDescription` |
+| `liveTranslationApiKey` |
+| `liveTranslationApiKeyConfigured` |
+| `liveTranslationApiKeyReplaceHelper` |
+| `liveTranslationClearApiKey` |
+| `liveTranslationModel` |
+| `liveTranslationSourceLanguage` |
+| `liveTranslationTargetLanguage` |
+| `liveTranslationSourceAuto` |
+| `liveTranslationTargetRequired` |
+| `liveTranslationSettingsSaved` |
+| `liveTranslationDocumentation` |
+| `liveTranslate` |
+| `stopLiveTranslation` |
+| `liveTranslationConnecting` |
+| `liveTranslationTranslatingTo` |
+| `liveTranslationPaused` |
+| `liveTranslationRetry` |
+| `liveTranslationUnavailable` |
+| `liveTranslationUnsupportedBrowser` |
+| `liveTranslationInsecureContext` |
+| `liveTranslationAudioCaptureBlocked` |
+| `liveTranslationAdminRequiredPlayer` |
+| `liveTranslationApiKeyMissingPlayer` |
+| `liveTranslationErrorGeneric` |
+| `liveTranslationErrorRequiresNormalSpeed` |
+| `liveTranslationErrorTicket` |
+| `liveTranslationErrorCaptureFailed` |
+| `liveTranslationErrorConnection` |
+| `liveTranslationErrorWebSocket` |
+| `liveTranslationErrorRateLimited` |
+| `liveTranslationErrorSessionTimeout` |
+| `liveTranslationErrorTooManySessions` |
+| `preferredAudioLanguage` |
+| `preferredAudioLanguageDescription` |
+| `preferredAudioLanguageDefault` |
+| `preferredAudioLanguage_en` |
+| `preferredAudioLanguage_zh` |
+| `preferredAudioLanguage_ja` |
+| `preferredAudioLanguage_ko` |
+| `preferredAudioLanguage_es` |
+| `preferredAudioLanguage_fr` |
+| `preferredAudioLanguage_de` |
+| `preferredAudioLanguage_pt` |
+| `preferredAudioLanguage_ru` |
+| `preferredAudioLanguage_ar` |
+| `preferredAudioLanguage_hi` |
+| `preferredAudioLanguage_it` |
+| `preferredAudioLanguage_nl` |
+| `preferredAudioLanguage_pl` |
+| `preferredAudioLanguage_tr` |
+| `preferredAudioLanguage_vi` |
+| `preferredVideoResolution` |
+| `preferredVideoResolutionDescription` |
+| `preferredVideoResolutionAuto` |
+| `preferredVideoResolutionStrict` |
+| `preferredVideoResolutionStrictDescription` |
+| `defaultVideoCodec` |
+| `defaultVideoCodecDescription` |
+| `defaultVideoCodecDefault` |
+| `defaultVideoCodec_h264` |
+| `defaultVideoCodec_h265` |
+| `defaultVideoCodec_av1` |
+| `defaultVideoCodec_vp9` |
+| `preferredVideoContainer` |
+| `preferredVideoContainerDescription` |
+| `preferredVideoContainer_auto` |
+| `preferredVideoContainer_mp4` |
+| `preferredVideoContainer_webm` |
+| `preferredVideoContainer_mkv` |
+| `saveSettings` |
+| `saving` |
+| `backToManage` |
+| `settingsSaved` |
+| `settingsFailed` |
+| `debugMode` |
+| `debugModeDescription` |
+| `telegramNotifications` |
+| `telegramNotificationsDescription` |
+| `telegramEnabled` |
+| `telegramBotToken` |
+| `telegramBotTokenHelper` |
+| `telegramChatId` |
+| `telegramChatIdHelper` |
+| `telegramDownloadEnabled` |
+| `telegramNotifyOnSuccess` |
+| `telegramNotifyOnFail` |
+| `twitchSubscriptions` |
+| `twitchClientId` |
+| `twitchClientSecret` |
+| `twitchSubscriptionCredentialsHelper` |
+| `twitchSubscriptionDescription` |
+| `twitchSubscriptionCredentialsMissing` |
+| `twitchSubscriptionVodsOnly` |
+| `twitchClientHelpLink` |
+| `twitchClientHelpTitle` |
+| `twitchClientHelpIntro` |
+| `twitchClientHelpStep1` |
+| `twitchClientHelpStep2` |
+| `twitchClientHelpStep3` |
+| `twitchClientHelpStep4` |
+| `twitchClientHelpStep5` |
+| `twitchClientHelpSecurity` |
+| `twitchDeveloperConsole` |
+| `twitchDeveloperDocs` |
+| `telegramTestButton` |
+| `telegramTestSuccess` |
+| `telegramTestFailed` |
+| `telegramTestMissingFields` |
+| `pauseOnFocusLoss` |
+| `playFromBeginning` |
+| `seekControls` |
+| `seekControlsDescription` |
+| `seekShortInterval` |
+| `seekMediumInterval` |
+| `seekLongInterval` |
+| `seekDurationUnit` |
+| `seekUnitSeconds` |
+| `seekUnitMinutes` |
+| `seekUnitHours` |
+| `seekIntervalRangeError` |
+| `seekIntervalOrderError` |
+| `resetSeekIntervals` |
+| `seekBackwardBy` |
+| `seekForwardBy` |
+| `seekDurationSecond` |
+| `seekDurationSeconds` |
+| `seekDurationMinute` |
+| `seekDurationMinutes` |
+| `seekDurationHour` |
+| `seekDurationHours` |
+| `tagsManagement` |
+| `newTag` |
+| `selectTags` |
+| `tags` |
+| `noTagsAvailable` |
+| `addTag` |
+| `addTags` |
+| `failedToSaveTags` |
+| `renameTag` |
+| `confirmRenameTag` |
+| `tagRenamedSuccess` |
+| `tagRenameFailed` |
+| `tagConflictCaseInsensitive` |
+| `renameTagDescription` |
+| `enterNewTagName` |
+
+### Database
+
+| Key |
+| --- |
+| `database` |
+| `migrateDataDescription` |
+| `migrateDataButton` |
+| `scanFiles` |
+| `scanFilesSuccess` |
+| `scanFilesDeleted` |
+| `scanFilesFailed` |
+| `scanAlreadyRunning` |
+| `scanMountDirectoriesSuccess` |
+| `subscribePlaylistsSuccess` |
+| `subscribePlaylistsSkipped` |
+| `subscribePlaylistsErrors` |
+| `subscribePlaylistsNoNew` |
+| `playlistsWatcher` |
+| `scanFilesConfirmMessage` |
+| `scanning` |
+| `migrateConfirmation` |
+| `migrationResults` |
+| `migrationReport` |
+| `migrationSuccess` |
+| `migrationNoData` |
+| `migrationFailed` |
+| `migrationWarnings` |
+| `migrationErrors` |
+| `itemsMigrated` |
+| `fileNotFound` |
+| `noDataFilesFound` |
+| `removeLegacyData` |
+| `removeLegacyDataDescription` |
+| `removeLegacyDataConfirmTitle` |
+| `removeLegacyDataConfirmMessage` |
+| `legacyDataDeleted` |
+| `legacyDataDeleteFailed` |
+| `deleteLegacyDataButton` |
+| `cleanupTempFiles` |
+| `cleanupTempFilesDescription` |
+| `cleanupTempFilesConfirmTitle` |
+| `cleanupTempFilesConfirmMessage` |
+
+### Task Hooks
+
+| Key |
+| --- |
+| `taskHooks` |
+| `taskHooksDescription` |
+| `taskHooksWarning` |
+| `deploymentSecurityTitle` |
+| `deploymentSecurityLoading` |
+| `deploymentSecurityDetails` |
+| `deploymentSecurityDetailsTitle` |
+| `deploymentSecurityCapabilityFeature` |
+| `deploymentSecurityClose` |
+| `adminTrustLevelLabel` |
+| `adminTrustLevelApplication` |
+| `adminTrustLevelContainer` |
+| `adminTrustLevelHost` |
+| `adminTrustLevelApplicationDescription` |
+| `adminTrustLevelContainerDescription` |
+| `adminTrustLevelHostDescription` |
+| `deploymentSecurityStandardAppManagement` |
+| `deploymentSecurityTaskHooksCapability` |
+| `deploymentSecurityRawYtDlpConfigTextArea` |
+| `deploymentSecurityFullRawYtDlpFlagPassthrough` |
+| `deploymentSecurityMountDirectorySettingsPersistence` |
+| `deploymentSecurityScanMountDirectories` |
+| `deploymentSecurityFutureHostPathMaintenanceFeatures` |
+| `deploymentSecurityConfigurationTitle` |
+| `deploymentSecurityConfigurationValuesNote` |
+| `deploymentSecurityDockerConfigTitle` |
+| `deploymentSecurityDockerConfigDescription` |
+| `deploymentSecurityDockerPermissionsNote` |
+| `deploymentSecurityLocalConfigTitle` |
+| `deploymentSecurityLocalConfigDescription` |
+| `deploymentSecurityLocalEnvFileNote` |
+| `taskHooksPolicyNotice` |
+| `hookTaskBeforeStart` |
+| `hookTaskBeforeStartHelper` |
+| `hookTaskSuccess` |
+| `hookTaskSuccessHelper` |
+| `hookTaskFail` |
+| `hookTaskFailHelper` |
+| `hookTaskCancel` |
+| `hookTaskCancelHelper` |
+| `found` |
+| `notFound` |
+| `deleteHook` |
+| `confirmDeleteHook` |
+| `uploadHook` |
+| `enterPasswordToUploadHook` |
+| `riskCommandDetected` |
+| `cleanupTempFilesActiveDownloads` |
+| `itemsPerPage` |
+| `itemsPerPageHelper` |
+| `showYoutubeSearch` |
+| `showBilibiliSearch` |
+| `defaultSort` |
+| `showTagsOnThumbnail` |
+| `playSoundOnTaskComplete` |
+| `soundSuccess` |
+| `visitorModeReadOnly` |
+| `visitorModeUrlRestricted` |
+| `visitorUser` |
+| `enableVisitorUser` |
+| `visitorUserHelper` |
+| `visitorPassword` |
+| `visitorPasswordHelper` |
+| `visitorPasswordSetHelper` |
+| `visitorAccounts` |
+| `addVisitorUser` |
+| `editVisitorUser` |
+| `username` |
+| `userStatus` |
+| `userEnabled` |
+| `userDisabled` |
+| `userLastLogin` |
+| `userNeverLoggedIn` |
+| `userActions` |
+| `enableUser` |
+| `disableUser` |
+| `deleteUser` |
+| `setNewPassword` |
+| `generatePassword` |
+| `copyPassword` |
+| `passwordCopied` |
+| `userCreated` |
+| `userUpdated` |
+| `userDeleted` |
+| `userDeleteConfirm` |
+| `userDisableConfirm` |
+| `userPasswordChangeWarning` |
+| `userUsernameInvalid` |
+| `userUsernameReserved` |
+| `userUsernameTaken` |
+| `userPasswordInvalid` |
+| `userEnabledInvalid` |
+| `userNotFound` |
+| `userEmptyPatch` |
+| `noVisitorUsers` |
+| `legacySharedUserTooltip` |
+| `visitorUsersImmediateHint` |
+| `visitorLoginHint` |
+| `incorrectUsernameOrPassword` |
+| `cleanupTempFilesSuccess` |
+| `cleanupTempFilesFailed` |
+
+### Cookie Settings
+
+| Key |
+| --- |
+| `cookieSettings` |
+| `cookieUploadDescription` |
+| `uploadCookies` |
+| `onlyTxtFilesAllowed` |
+| `cookiesUploadedSuccess` |
+| `cookiesUploadFailed` |
+| `cookiesFound` |
+| `cookiesNotFound` |
+| `deleteCookies` |
+| `confirmDeleteCookies` |
+| `cookiesDeletedSuccess` |
+| `cookiesDeleteFailed` |
+| `youtubeCookiesMayHaveExpired` |
+| `youtubeCookiesRequiredForBotCheck` |
+
+### Cloud Drive
+
+| Key |
+| --- |
+| `cloudDriveSettings` |
+| `cloudDriveDescription` |
+| `enableAutoSave` |
+| `apiUrl` |
+| `apiUrlHelper` |
+| `token` |
+| `publicUrl` |
+| `publicUrlHelper` |
+| `uploadPath` |
+| `cloudDrivePathHelper` |
+| `scanPaths` |
+| `scanPathsHelper` |
+| `cloudDriveNote` |
+| `cloudScanAdded` |
+| `testing` |
+| `testConnection` |
+| `sync` |
+| `syncToCloud` |
+| `syncWarning` |
+| `syncing` |
+| `syncCompleted` |
+| `syncFailed` |
+| `syncReport` |
+| `syncErrors` |
+| `fillApiUrlToken` |
+| `connectionTestSuccess` |
+| `connectionFailedStatus` |
+| `connectionFailedUrl` |
+| `authFailed` |
+| `connectionTestFailed` |
+| `syncFailedMessage` |
+| `foundVideosToSync` |
+| `uploadingVideo` |
+| `clearThumbnailCache` |
+| `clearing` |
+| `clearThumbnailCacheSuccess` |
+| `clearThumbnailCacheError` |
+| `clearThumbnailCacheConfirmMessage` |
+
+### Manage
+
+| Key |
+| --- |
+| `manageContent` |
+| `videos` |
+| `collections` |
+| `allVideos` |
+| `delete` |
+| `backToHome` |
+| `confirmDelete` |
+| `deleteSuccess` |
+| `deleteFailed` |
+| `noVideos` |
+| `noCollectionsFound` |
+| `noCollections` |
+| `searchVideos` |
+| `thumbnail` |
+| `title` |
+| `author` |
+| `authors` |
+| `all` |
+| `showAll` |
+| `allAuthors` |
+| `allTags` |
+| `showMoreTags` |
+| `showLessTags` |
+| `filteredByTags` |
+| `created` |
+| `name` |
+| `size` |
+| `actions` |
+| `deleteCollection` |
+| `cleanup` |
+| `cleanupEmptyCollectionsTitle` |
+| `cleanupEmptyCollectionsMessage` |
+| `cleanupEmptyCollectionsSuccess` |
+| `cleanupEmptyCollectionsFailed` |
+| `deleteVideo` |
+| `redownloadVideo` |
+| `redownloadThumbnail` |
+| `noSourceUrlAvailable` |
+| `downloadAlreadyInProgress` |
+| `refreshFileSizesSuccess` |
+| `refreshFileSizesFailed` |
+| `refreshFileSizesSkipped` |
+| `refreshFileSizesError` |
+| `noVideosFoundMatching` |
+| `refreshThumbnail` |
+| `confirmBulkDelete` |
+
+### Video Player
+
+| Key |
+| --- |
+| `playing` |
+| `paused` |
+| `next` |
+| `previous` |
+| `loop` |
+| `autoPlayOn` |
+| `autoPlayOff` |
+| `autoPlayNext` |
+| `videoNotFound` |
+| `videoNotFoundOrLoaded` |
+| `deleting` |
+| `addToCollection` |
+| `originalLink` |
+| `source` |
+| `addedDate` |
+| `hideComments` |
+| `showComments` |
+| `latestComments` |
+| `noComments` |
+| `upNext` |
+| `noOtherVideos` |
+| `currentlyIn` |
+| `collectionWarning` |
+| `addToExistingCollection` |
+| `selectCollection` |
+| `add` |
+| `createNewCollection` |
+| `collectionName` |
+| `selectOrCreateCollection` |
+| `createNewCollectionLabel` |
+| `create` |
+| `removeFromCollection` |
+| `confirmRemoveFromCollection` |
+| `remove` |
+| `loadingVideo` |
+
+### D Mode (canvas + WebCodecs playback, no media element)
+
+| Key |
+| --- |
+| `compatibilityMode` |
+| `compatibilityModeEnter` |
+| `compatibilityModeExit` |
+| `compatibilityModeFailed` |
+| `compatibilityModeFallbackHint` |
+| `compatibilityModeUnplayable` |
+| `compatibilityModeUnavailable` |
+| `current` |
+| `rateThisVideo` |
+| `enterFullscreen` |
+| `exitFullscreen` |
+| `enterCinemaMode` |
+| `exitCinemaMode` |
+| `share` |
+| `editTitle` |
+| `hideVideo` |
+| `showVideo` |
+| `toggleVisibility` |
+| `titleUpdated` |
+| `titleUpdateFailed` |
+| `thumbnailRefreshed` |
+| `thumbnailRefreshFailed` |
+| `videoUpdated` |
+| `videoUpdateFailed` |
+| `failedToLoadVideos` |
+| `videoRemovedSuccessfully` |
+| `failedToDeleteVideo` |
+| `pleaseEnterSearchTerm` |
+| `failedToSearch` |
+| `searchCancelled` |
+| `openInExternalPlayer` |
+| `playWith` |
+| `deleteAllFilteredVideos` |
+| `confirmDeleteFilteredVideos` |
+| `deleteFilteredVideosSuccess` |
+| `deletingVideos` |
+
+### Login
+
+| Key |
+| --- |
+| `signIn` |
+| `admin` |
+| `visitorSignIn` |
+| `orVisitor` |
+| `verifying` |
+| `incorrectPassword` |
+| `loginFailed` |
+| `defaultPasswordHint` |
+| `checkingConnection` |
+| `connectionError` |
+| `backendConnectionFailed` |
+| `retry` |
+| `resetPassword` |
+| `resetPasswordTitle` |
+| `resetPasswordMessage` |
+| `resetPasswordConfirm` |
+| `resetPasswordSuccess` |
+| `resetPasswordRecoveryMessage` |
+| `resetPasswordRecoveryGuide` |
+| `resetPasswordDisabledInfo` |
+| `resetPasswordScriptGuide` |
+| `waitTimeMessage` |
+| `tooManyAttempts` |
+
+### Passkeys
+
+| Key |
+| --- |
+| `createPasskey` |
+| `creatingPasskey` |
+| `passkeyCreated` |
+| `passkeyCreationFailed` |
+| `passkeyWebAuthnNotSupported` |
+| `passkeyRequiresHttps` |
+| `removePasskeys` |
+| `removePasskeysTitle` |
+| `removePasskeysMessage` |
+| `passkeysRemoved` |
+| `passkeysRemoveFailed` |
+| `loginWithPasskey` |
+| `authenticating` |
+| `passkeyLoginFailed` |
+| `passkeyErrorPermissionDenied` |
+| `passkeyErrorAlreadyRegistered` |
+| `linkCopied` |
+| `copyFailed` |
+| `copyUrl` |
+
+### Collection Page
+
+| Key |
+| --- |
+| `loadingCollection` |
+| `collectionNotFound` |
+| `noVideosInCollection` |
+| `back` |
+
+### Author Videos
+
+| Key |
+| --- |
+| `loadVideosError` |
+| `unknownAuthor` |
+| `noVideosForAuthor` |
+| `deleteAuthor` |
+| `deleteAuthorConfirmation` |
+| `authorDeletedSuccessfully` |
+| `failedToDeleteAuthor` |
+| `createCollectionFromAuthor` |
+| `createCollectionFromAuthorTooltip` |
+| `creatingCollection` |
+| `collectionCreatedFromAuthor` |
+| `failedToCreateCollectionFromAuthor` |
+| `collectionAlreadyExists` |
+| `createCollectionFromAuthorConfirmation` |
+| `createCollectionFromAuthorConfirmationWithMove` |
+| `addVideosToCollection` |
+| `addVideosToExistingCollectionConfirmation` |
+| `addVideosToExistingCollectionConfirmationWithMove` |
+
+### Delete Collection Modal
+
+| Key |
+| --- |
+| `deleteCollectionTitle` |
+| `deleteCollectionConfirmation` |
+| `collectionContains` |
+| `deleteCollectionOnly` |
+| `deleteCollectionAndVideos` |
+
+### Common
+
+| Key |
+| --- |
+| `loading` |
+| `error` |
+| `success` |
+| `info` |
+| `cancel` |
+| `close` |
+| `ok` |
+| `confirm` |
+| `save` |
+| `note` |
+| `on` |
+| `off` |
+| `continue` |
+| `expand` |
+| `collapse` |
+
+### Video Card
+
+| Key |
+| --- |
+| `unknownDate` |
+| `part` |
+| `collection` |
+| `new` |
+| `justNow` |
+| `hoursAgo` |
+| `today` |
+| `thisWeek` |
+| `weeksAgo` |
+
+### Upload Modal
+
+| Key |
+| --- |
+| `selectVideoFile` |
+| `selectVideoFolder` |
+| `uploadFileLimitHint` |
+| `pleaseSelectVideo` |
+| `noSupportedVideosFound` |
+| `tooManyFilesSelected` |
+| `totalUploadSizeExceeded` |
+| `uploadFailed` |
+| `failedToUpload` |
+| `uploading` |
+| `upload` |
+| `uploadSummary` |
+| `unsupportedFilesSkipped` |
+| `multipleUploadUsesFilename` |
+| `uploadThumbnail` |
+| `clickToSelectImage` |
+| `changeImage` |
+| `selectImage` |
+| `thumbnailUploaded` |
+
+### Bilibili Modal
+
+| Key |
+| --- |
+| `bilibiliCollectionDetected` |
+| `bilibiliSeriesDetected` |
+| `multiPartVideoDetected` |
+| `authorOrPlaylist` |
+| `playlistDetected` |
+| `playlistHasVideos` |
+| `downloadPlaylistAndCreateCollection` |
+| `playlistDownloadStarted` |
+| `collectionHasVideos` |
+| `seriesHasVideos` |
+| `videoHasParts` |
+| `downloadAllVideos` |
+| `downloadAllParts` |
+| `downloadThisVideoOnly` |
+| `downloadCurrentPartOnly` |
+| `processing` |
+| `wouldYouLikeToDownloadAllParts` |
+| `wouldYouLikeToDownloadAllVideos` |
+| `allPartsAddedToCollection` |
+| `allVideosAddedToCollection` |
+| `queued` |
+| `waitingInQueue` |
+
+### Downloads
+
+| Key |
+| --- |
+| `downloads` |
+| `openMenu` |
+| `activeDownloads` |
+| `manageDownloads` |
+| `queuedDownloads` |
+| `downloadHistory` |
+| `clearQueue` |
+| `clearHistory` |
+| `noActiveDownloads` |
+| `noQueuedDownloads` |
+| `noDownloadHistory` |
+| `downloadCancelled` |
+| `queueCleared` |
+| `historyCleared` |
+| `removedFromQueue` |
+| `removedFromHistory` |
+| `status` |
+| `progress` |
+| `speed` |
+| `finishedAt` |
+| `failed` |
+| `partialDownload` |
+| `pendingRetry` |
+| `cancelRetry` |
+| `retryScheduledFor` |
+| `retryAttemptProgress` |
+| `missingEpisodes` |
+| `missingVideos` |
+| `incompleteDownloadVideoGap` |
+| `incompleteDownloadAudioGap` |
+| `incompleteDownloadFragments` |
+
+### Snackbar Messages
+
+| Key |
+| --- |
+| `videoDownloading` |
+| `retryCancelled` |
+| `downloadStartedSuccessfully` |
+| `collectionCreatedSuccessfully` |
+| `videoAddedToCollection` |
+| `videosAddedToCollection` |
+| `videoRemovedFromCollection` |
+| `collectionDeletedSuccessfully` |
+| `failedToDeleteCollection` |
+| `collectionUpdatedSuccessfully` |
+| `failedToUpdateCollection` |
+| `collectionNameRequired` |
+| `collectionNameTooLong` |
+| `collectionNameInvalidChars` |
+| `collectionNameReserved` |
+| `updateCollectionFailed` |
+| `createCollectionFailed` |
+| `collectionExistsVideoAdded` |
+| `uploadSubtitle` |
+| `subtitleUploaded` |
+| `confirmDeleteSubtitle` |
+| `subtitleDeleted` |
+
+### Batch Download
+
+| Key |
+| --- |
+| `batchDownload` |
+| `batchDownloadDescription` |
+| `urls` |
+| `addToQueue` |
+| `batchTasksAdded` |
+| `addBatchTasks` |
+
+### Subscriptions
+
+| Key |
+| --- |
+| `subscribeToAuthor` |
+| `subscribeToChannel` |
+| `subscribeConfirmationMessage` |
+| `subscribeChannelChoiceMessage` |
+| `subscribeChannelChoiceDescription` |
+| `subscribeAllVideos` |
+| `subscribeAllPlaylists` |
+| `subscribeAllPlaylistsDescription` |
+| `subscribeDescription` |
+| `checkIntervalMinutes` |
+| `subscribe` |
+| `bilibiliAuthors` |
+| `authorSearchHint` |
+| `authorLookupLabel` |
+| `loadingAuthors` |
+| `noAuthorsFound` |
+| `authorSearchFailed` |
+| `authorSearchRiskControlled` |
+| `authorSubscriptionStatusFailed` |
+| `authorAlreadySubscribed` |
+| `authorSearchPage` |
+| `subscriptions` |
+| `allSubscriptions` |
+| `authorSubscriptions` |
+| `playlistSubscriptions` |
+| `subscriptionCategories` |
+| `noSubscriptions` |
+| `noAuthorSubscriptions` |
+| `noPlaylistSubscriptions` |
+| `subscriptionTasksAllCategories` |
+| `interval` |
+| `lastCheck` |
+| `nextCheck` |
+| `editInterval` |
+| `platform` |
+| `unsubscribe` |
+| `confirmUnsubscribe` |
+| `subscribedSuccessfully` |
+| `unsubscribedSuccessfully` |
+| `subscriptionUpdated` |
+| `subscriptionUpdateFailed` |
+| `subscriptionAlreadyExists` |
+| `minuteShort` |
+| `minutes` |
+| `never` |
+| `downloadAllPreviousVideos` |
+| `downloadShorts` |
+| `downloadOrder` |
+| `downloadOrderDateDesc` |
+| `downloadOrderDateAsc` |
+| `downloadOrderViewsDesc` |
+| `downloadOrderViewsAsc` |
+| `downloadOrderLargeChannelHint` |
+| `downloadOrderShortsHint` |
+| `preparingOrderMetadata` |
+| `selectedDownloadOrder` |
+| `retryOrderPreparation` |
+| `orderPreparationRetryStarted` |
+| `orderPreparationRetryFailed` |
+| `downloadAllPreviousWarning` |
+| `downloadAllPreviousVideosInPlaylists` |
+| `downloadAllPlaylistsWarning` |
+| `continuousDownloadTasks` |
+| `taskStatusActive` |
+| `taskStatusPaused` |
+| `taskStatusCompleted` |
+| `taskStatusCancelled` |
+| `downloaded` |
+| `cancelTask` |
+| `confirmCancelTask` |
+| `taskCancelled` |
+| `deleteTask` |
+| `confirmDeleteTask` |
+| `taskDeleted` |
+| `clearFinishedTasks` |
+| `tasksCleared` |
+| `confirmClearFinishedTasks` |
+| `clear` |
+
+### Subscription Retention
+
+| Key |
+| --- |
+| `retentionDays` |
+| `retentionDaysUnit` |
+| `downloadHistoryRetention` |
+| `downloadHistoryRetentionDescription` |
+| `downloadHistoryRetentionKeepForever` |
+| `retentionDaysDisabled` |
+| `editRetention` |
+| `retentionDaysHelpTitle` |
+| `retentionDaysHelpMessage` |
+| `retentionDaysUpdated` |
+| `retentionDaysUpdateFailed` |
+
+### Auto Delete (library-wide age-based cleanup)
+
+| Key |
+| --- |
+| `autoDelete` |
+| `autoDeleteDescription` |
+| `autoDeleteInterval` |
+| `autoDeleteIntervalHelp` |
+| `autoDeleteIntervalError` |
+| `autoDeleteHowItWorks` |
+| `autoDeleteHowItWorksScan` |
+| `autoDeleteHowItWorksDelete` |
+| `autoDeleteHowItWorksLock` |
+| `autoDeleteHowItWorksDisable` |
+| `autoDeleteHowItWorksDowntime` |
+| `lockVideo` |
+| `unlockVideo` |
+| `videoLocked` |
+| `videoUnlocked` |
+
+### Per-subscription yt-dlp config override (issue #345)
+
+| Key |
+| --- |
+| `editYtdlpConfigOverride` |
+| `ytdlpConfigOverrideHelp` |
+| `ytdlpConfigOverridePlaceholder` |
+| `ytdlpConfigOverrideUpdated` |
+| `ytdlpConfigOverrideUpdateFailed` |
+
+### Per-subscription filename-template override (issue #368)
+
+| Key |
+| --- |
+| `subscriptionFilenameTemplate` |
+| `subscriptionFilenameTemplateHelp` |
+| `subscriptionFilenameTemplateInherit` |
+| `subscriptionFilenameTemplatePlaceholder` |
+| `subscriptionFilenameTemplatePreview` |
+| `subscriptionFilenameTemplateFutureOnly` |
+| `editSubscriptionFilenameTemplate` |
+| `subscriptionFilenameTemplateCustom` |
+| `subscriptionFilenameTemplateUpdated` |
+| `subscriptionFilenameTemplateUpdateFailed` |
+
+### Subscription Pause/Resume
+
+| Key |
+| --- |
+| `pause` |
+| `resume` |
+| `pauseSubscription` |
+| `resumeSubscription` |
+| `pauseTask` |
+| `resumeTask` |
+| `subscriptionPaused` |
+| `subscriptionResumed` |
+| `taskPaused` |
+| `taskResumed` |
+| `viaSubscription` |
+| `viaContinuousDownload` |
+
+### Playlist Subscription
+
+| Key |
+| --- |
+| `subscribeToPlaylist` |
+| `subscribePlaylistDescription` |
+| `playlistSubscribedSuccessfully` |
+| `downloadAndSubscribe` |
+| `playlistSubscription` |
+
+### Issue #368.2 — subscribe-only / history choice
+
+| Key |
+| --- |
+| `subscribeOnlyNewPlaylistVideos` |
+| `subscribeOnlyNewPlaylistVideosHelp` |
+| `downloadExistingPlaylistVideos` |
+| `playlistSubscribedNewOnly` |
+| `playlistDownloadAndSubscriptionStarted` |
+| `playlistBaselineFailed` |
+
+### Instruction Page
+
+| Key |
+| --- |
+| `instructionSection1Title` |
+| `instructionSection1Desc` |
+| `instructionSection1Sub1` |
+| `instructionSection1Item1Label` |
+| `instructionSection1Item1Text` |
+| `instructionSection1Item2Label` |
+| `instructionSection1Item2Text` |
+| `instructionSection1Sub2` |
+| `instructionSection1Item3Label` |
+| `instructionSection1Item3Text` |
+| `instructionSection1Item4Label` |
+| `instructionSection1Item4Text` |
+| `instructionSection1Sub3` |
+| `instructionSection1Item5Label` |
+| `instructionSection1Item5Text` |
+| `instructionSection1Item6Label` |
+| `instructionSection1Item6Text` |
+| `instructionSection1Item7Label` |
+| `instructionSection1Item7Text` |
+| `instructionSection2Title` |
+| `instructionSection2Desc` |
+| `instructionSection2Sub1` |
+| `instructionSection2Text1` |
+| `instructionSection2Sub2` |
+| `instructionSection2Text2` |
+| `instructionSection3Title` |
+| `instructionSection3Desc` |
+| `instructionSection3Sub1` |
+| `instructionSection3Text1` |
+| `instructionSection3Sub2` |
+| `instructionSection3Text2` |
+| `instructionSection3Sub3` |
+| `instructionSection3Item1Label` |
+| `instructionSection3Item1Text` |
+| `instructionSection3Item2Label` |
+| `instructionSection3Item2Text` |
+| `instructionSection3Sub4` |
+| `instructionSection3Item3Label` |
+| `instructionSection3Item3Text` |
+
+### Disclaimer
+
+| Key |
+| --- |
+| `disclaimerTitle` |
+| `disclaimerText` |
+| `history` |
+
+### Existing Video Detection
+
+| Key |
+| --- |
+| `existingVideoDetected` |
+| `videoAlreadyDownloaded` |
+| `viewVideo` |
+| `previouslyDeletedVideo` |
+| `previouslyDeleted` |
+| `videoWasDeleted` |
+| `downloadAgain` |
+| `downloadedOn` |
+| `deletedOn` |
+| `existingVideo` |
+| `skipped` |
+| `videoSkippedExists` |
+| `videoSkippedDeleted` |
+| `downloading` |
+| `poweredBy` |
+| `changeSettings` |
+
+### Sorting
+
+| Key |
+| --- |
+| `select` |
+| `sort` |
+| `sortBy` |
+| `dateDesc` |
+| `dateAsc` |
+| `viewsDesc` |
+| `viewsAsc` |
+| `nameAsc` |
+| `videoDateDesc` |
+| `videoDateAsc` |
+| `random` |
+
+### yt-dlp Configuration
+
+| Key |
+| --- |
+| `ytDlpConfiguration` |
+| `ytDlpConfigurationDescription` |
+| `ytDlpConfigurationDocs` |
+| `ytDlpConfigurationDescriptionEnd` |
+| `ytDlpConfigurationPolicyNotice` |
+| `ytDlpVersion` |
+| `ytDlpVersionUnknown` |
+| `ytDlpVersionUnavailable` |
+| `ytDlpVersionCheckFailed` |
+| `ytDlpBinaryPath` |
+| `ytDlpCheckUpdate` |
+| `ytDlpUpdate` |
+| `ytDlpUpdateAvailable` |
+| `ytDlpUpToDate` |
+| `ytDlpUpdateInProgress` |
+| `ytDlpUpdateSuccess` |
+| `ytDlpUpdateNoChange` |
+| `ytDlpUpdateFailed` |
+| `ytDlpUpdateCustomPathNotice` |
+| `ytDlpUpdatePolicyNotice` |
+| `mountDirectoriesPolicyNotice` |
+| `customize` |
+| `hide` |
+| `reset` |
+| `more` |
+| `proxyOnlyApplyToYoutube` |
+| `proxyBypassHosts` |
+| `proxyBypassHostsHelp` |
+| `moveSubtitlesToVideoFolder` |
+| `moveSubtitlesToVideoFolderOn` |
+| `moveSubtitlesToVideoFolderOff` |
+| `moveSubtitlesToVideoFolderDescription` |
+| `moveThumbnailsToVideoFolder` |
+| `moveThumbnailsToVideoFolderOn` |
+| `moveThumbnailsToVideoFolderOff` |
+| `moveThumbnailsToVideoFolderDescription` |
+| `uploadFilenameMode` |
+| `uploadFilenameModeOriginal` |
+| `uploadFilenameModeGenerated` |
+| `uploadFilenameModeDescription` |
+| `saveAuthorFilesToCollection` |
+| `saveAuthorFilesToCollectionOn` |
+| `saveAuthorFilesToCollectionOff` |
+| `saveAuthorFilesToCollectionDescription` |
+| `authorOrganizationMode` |
+| `authorOrganizationModeDescription` |
+| `authorOrganizationModeRoot` |
+| `authorOrganizationModeRootDescription` |
+| `authorOrganizationModeAuthorFolderOnly` |
+| `authorOrganizationModeAuthorFolderOnlyDescription` |
+| `authorOrganizationModeAuthorCollectionLinked` |
+| `authorOrganizationModeAuthorCollectionLinkedDescription` |
+| `authorOrganizationModeRecommendation` |
+| `authorOrganizationModeTemplateNote` |
+| `cleanupAuthorCollections` |
+| `cleanupAuthorCollectionsDescription` |
+| `cleanupAuthorCollectionsButton` |
+| `cleanupAuthorCollectionsConfirmTitle` |
+| `cleanupAuthorCollectionsConfirmMessage` |
+| `cleanupAuthorCollectionsSuccess` |
+| `cleanupAuthorCollectionsNothingToDo` |
+| `cleanupAuthorCollectionsFailed` |
+
+### Cloudflare Tunnel
+
+| Key |
+| --- |
+| `cloudflaredTunnel` |
+| `enableCloudflaredTunnel` |
+| `cloudflaredToken` |
+| `cloudflaredTokenHelper` |
+| `allowedHosts` |
+| `allowedHostsHelper` |
+| `allowedHostsRequired` |
+| `waitingForUrl` |
+| `running` |
+| `stopped` |
+| `tunnelId` |
+| `accountTag` |
+| `copied` |
+| `clickToCopy` |
+| `quickTunnelWarning` |
+| `managedInDashboard` |
+
+### Database Export/Import
+
+| Key |
+| --- |
+| `exportImportDatabase` |
+| `exportImportDatabaseDescription` |
+| `exportDatabase` |
+| `importDatabase` |
+| `mergeDatabase` |
+| `onlyDbFilesAllowed` |
+| `importDatabaseWarning` |
+| `mergeDatabaseWarning` |
+| `mergeDatabaseContentsVideos` |
+| `mergeDatabaseContentsCollections` |
+| `mergeDatabaseContentsSubscriptions` |
+| `mergeDatabaseContentsHistory` |
+| `mergeDatabaseContentsTags` |
+| `mergeDatabaseKeepsCurrentData` |
+| `mergeDatabaseStatisticsNotice` |
+| `mergeDatabasePreviewScanning` |
+| `mergeDatabasePreviewResults` |
+| `mergeDatabasePreviewConfirmHint` |
+| `mergeDatabasePreviewFailed` |
+| `mergeDatabasePreviewErrorDefault` |
+| `mergeDatabaseMergedCount` |
+| `mergeDatabaseSkippedCount` |
+| `mergeDatabasePreviewVideos` |
+| `mergeDatabasePreviewCollections` |
+| `mergeDatabasePreviewCollectionLinks` |
+| `mergeDatabasePreviewSubscriptions` |
+| `mergeDatabasePreviewDownloadHistory` |
+| `mergeDatabasePreviewVideoDownloads` |
+| `mergeDatabasePreviewTags` |
+| `mergeDatabasePreviewFavoriteCollections` |
+| `mergeDatabasePreviewFavoriteAuthors` |
+| `selectDatabaseFile` |
+| `databaseExportedSuccess` |
+| `databaseExportFailed` |
+| `databaseImportedSuccess` |
+| `databaseImportFailed` |
+| `databaseMergedSuccess` |
+| `databaseMergeFailed` |
+| `cleanupBackupDatabases` |
+| `cleanupBackupDatabasesWarning` |
+| `backupDatabasesCleanedUp` |
+
+### Media Integrity Audit
+
+| Key |
+| --- |
+| `mediaIntegrityAudit` |
+| `mediaIntegrityAuditDescription` |
+| `mediaIntegrityAuditCheckTimeline` |
+| `mediaIntegrityAuditRun` |
+| `mediaIntegrityAuditRunning` |
+| `mediaIntegrityAuditTimeout` |
+| `mediaIntegrityAuditFailed` |
+| `mediaIntegrityAuditSummaryClean` |
+| `mediaIntegrityAuditSummaryProblems` |
+| `mediaIntegrityAuditTimelineNotChecked` |
+| `mediaIntegrityAuditTimelineIncomplete` |
+| `mediaIntegrityAuditActionRedownload` |
+| `mediaIntegrityAuditActionRefreshDuration` |
+| `mediaIntegrityAuditActionManualReview` |
+
+### History Filter
+
+| Key |
+| --- |
+| `filterAll` |
+| `backupDatabasesCleanupFailed` |
+| `restoreFromLastBackup` |
+| `restoreFromLastBackupWarning` |
+| `restoreFromLastBackupSuccess` |
+| `restoreFromLastBackupFailed` |
+| `lastBackupDate` |
+| `noBackupAvailable` |
+| `failedToDownloadVideo` |
+| `failedToDownload` |
+| `openFolder` |
+| `openInNewTab` |
+| `copyLink` |
+| `refresh` |
+| `showSensitiveContent` |
+| `hideSensitiveContent` |
+| `sensitiveContentWarning` |
+| `soundNone` |
+| `soundBell` |
+| `soundMessage` |
+| `soundMicrowave` |
+| `soundNotification` |
+| `soundDrop` |
+| `soundWater` |
+| `videoLoadTimeout` |
+| `failedToLoadVideo` |
+| `videoLoadingAborted` |
+| `videoLoadNetworkError` |
+| `safariWebmLimitedSupportError` |
+| `safariVideoDecodeError` |
+| `videoDecodeError` |
+| `safariVideoFormatNotSupported` |
+| `browserVideoFormatNotSupported` |
+
+### RSS Feed Settings
+
+| Key |
+| --- |
+| `rssFeedSettings` |
+| `rssFeedSettingsDescription` |
+| `rssCreateToken` |
+| `rssEditToken` |
+| `rssCopyLink` |
+| `rssLinkCopied` |
+| `rssResetLink` |
+| `rssResetLinkConfirm` |
+| `rssDisableLink` |
+| `rssEnableLink` |
+| `rssDeleteLink` |
+| `rssDeleteLinkConfirm` |
+| `rssAdminRoleWarning` |
+| `rssPublicAggregatorWarning` |
+| `rssFilterAllVideos` |
+| `rssFilterAllSources` |
+| `rssFilterChannels` |
+| `rssFilterAuthors` |
+| `rssFilterTags` |
+| `rssFilterSources` |
+| `rssFilterRecentDays` |
+| `rssFilterMaxItems` |
+| `rssLoadTokensError` |
+| `rssNoFeeds` |
+| `rssNoLabel` |
+| `rssActive` |
+| `rssDisabled` |
+| `rssAccessCount` |
+| `rssFiltersSummary` |
+| `rssAuthorsSummary` |
+| `rssChannelsSummary` |
+| `rssTagsSummary` |
+| `rssRecentDaysSummary` |
+| `rssEditAction` |
+| `rssLabel` |
+| `rssLabelPlaceholder` |
+| `rssRole` |
+| `rssRoleCannotChange` |
+| `rssRoleDescription` |
+| `rssFilters` |
+| `rssChannelsSelectedAuthorDisabled` |
+| `rssDays` |
+
+### Role-based settings middleware errors
+
+| Key |
+| --- |
+| `settingsApiKeyForbidden` |
+| `settingsVisitorAccessRestricted` |
+| `settingsVisitorWriteRestricted` |
+| `settingsVisitorWriteForbidden` |
+| `settingsAuthRequired` |
+
+### Filename template
+
+| Key |
+| --- |
+| `filenameTemplate` |
+| `filenameTemplateDescription` |
+| `filenamePresetLabel` |
+| `filenamePresetLegacy` |
+| `filenamePresetMediaCenterDateIndex` |
+| `filenamePresetChannelYearDateIndex` |
+| `filenamePresetPlaylistStaticIndex` |
+| `filenamePresetPlaylistStaticDate` |
+| `filenamePresetSourceDateFlat` |
+| `filenamePresetSourceDateId` |
+| `filenamePresetCustom` |
+| `filenameCustomTemplateLabel` |
+| `filenameCustomTemplatePlaceholder` |
+| `filenamePreviewTitle` |
+| `filenamePreviewVideo` |
+| `filenamePreviewThumbnail` |
+| `filenamePreviewSubtitle` |
+| `filenamePreviewScenarioChannel` |
+| `filenamePreviewScenarioPlaylist` |
+| `filenamePreviewScenarioSingle` |
+| `filenameWarningMediaPlaylistIndexUnavailable` |
+| `filenameWarningSourceCollectionMetadataMayBeEmpty` |
+| `filenameWarningIdSourceSemanticsV2` |
+| `filenameValidating` |
+| `filenameValidationError` |
+| `filenameBatchRenameButton` |
+| `filenameBatchRenameDescription` |
+| `filenameBatchRenameDisabledRunning` |
+| `filenameBatchRenameDisabledInvalidTemplate` |
+| `filenameBatchRenameConfirmTitle` |
+| `filenameBatchRenameConfirmBody` |
+| `filenameBatchRenameConfirm` |
+| `filenameBatchRenameRunning` |
+| `filenameBatchRenamePaused` |
+| `filenameBatchRenameComplete` |
+| `filenameBatchRenameSummary` |
+| `filenameBatchRenameError` |
+
+### Filename template reference (information panel)
+
+| Key |
+| --- |
+| `filenameRefInformationTitle` |
+| `filenameRefInfoLiquid` |
+| `filenameRefInfoYtdlp` |
+| `filenameRefInfoExtension` |
+| `filenameRefInfoFallbacks` |
+| `filenameRefSectionCoreTitle` |
+| `filenameRefSectionUploadTitle` |
+| `filenameRefSectionSourceTitle` |
+| `filenameRefSectionPlaylistTitle` |
+| `filenameRefSectionSeasonTitle` |
+| `filenameRefSectionStaticTitle` |
+| `filenameRefSectionRawMetadataTitle` |
+| `filenameRefSectionRawMetadataDescription` |
+| `filenameRefItemTitleDesc` |
+| `filenameRefItemIdDesc` |
+| `filenameRefItemSourceVideoIdDesc` |
+| `filenameRefItemLocalVideoIdDesc` |
+| `filenameRefItemDownloadDatetimeDesc` |
+| `filenameRefItemExtDesc` |
+| `filenameRefItemUploaderDesc` |
+| `filenameRefItemChannelDesc` |
+| `filenameRefItemDurationStringDesc` |
+| `filenameRefItemArtistNameDesc` |
+| `filenameRefItemUploadDateDesc` |
+| `filenameRefItemUploadYyyyMmDdDesc` |
+| `filenameRefItemUploadYearDesc` |
+| `filenameRefItemUploadMonthDesc` |
+| `filenameRefItemUploadDayDesc` |
+| `filenameRefItemSourceCustomNameDesc` |
+| `filenameRefItemSourceCollectionNameDesc` |
+| `filenameRefItemSourceCollectionIdDesc` |
+| `filenameRefItemSourceCollectionTypeDesc` |
+| `filenameRefItemMediaPlaylistIndexDesc` |
+| `filenameRefItemSeasonFromDateDesc` |
+| `filenameRefItemSeasonEpisodeFromDateDesc` |
+| `filenameRefItemSeasonEpisodeIndexFromDateDesc` |
+| `filenameRefItemSeasonByYearEpisodeByDateDesc` |
+| `filenameRefItemSeasonByYearEpisodeByDateAndIndexDesc` |
+| `filenameRefItemStaticSeasonEpisodeByIndexDesc` |
+| `filenameRefItemStaticSeasonEpisodeByDateDesc` |
+| `filenameRefItemGenericSingleWordDesc` |
+| `filenameRefItemBasicYtdlpDesc` |
+| `filenameRefItemFormattedUploadDateDesc` |
+| `filenameRefItemFormattedDurationDesc` |
+| `filenameRefItemNestedPathDesc` |
+
+### Statistics
+
+| Key |
+| --- |
+| `statisticsTitle` |
+| `statisticsSection` |
+| `statisticsHelper` |
+| `statisticsEnableLabel` |
+| `statisticsRetentionLabel` |
+| `statisticsRetention90` |
+| `statisticsRetention365` |
+| `statisticsRetentionForever` |
+| `statisticsCaptureSearchTextLabel` |
+| `statisticsTrackVisitorLabel` |
+| `statisticsKeepDataLabel` |
+| `statisticsClear` |
+| `statisticsClearConfirm` |
+| `statisticsClearSuccess` |
+| `statisticsAdminOnly` |
+| `statisticsDisabledNotice` |
+| `statisticsDisabledKeepVisibleNotice` |
+| `statisticsDisabledOpenSettings` |
+| `statisticsHealth` |
+| `statisticsLastRunAt` |
+| `statisticsWorkerNotRunYet` |
+| `statisticsDirtyDays` |
+| `statisticsSealedDays` |
+| `statisticsLastHourAccepted` |
+| `statisticsDropped` |
+| `statisticsErrors` |
+| `statisticsSealedDayDrops` |
+| `statisticsCompletedCount` |
+| `statisticsFailedCount` |
+| `statisticsNotEnoughHistoricalDataYet` |
+| `statisticsNoData` |
+| `statisticsItem` |
+| `statisticsValue` |
+| `statisticsDaysRemaining` |
+| `statisticsDiskRunwayUnavailable` |
+| `statisticsDiskRunwayInsufficientActivity` |
+| `statisticsFailureBucket_auth_required` |
+| `statisticsFailureBucket_source_unavailable` |
+| `statisticsFailureBucket_geo_or_network_blocked` |
+| `statisticsFailureBucket_extractor_changed` |
+| `statisticsFailureBucket_filesystem_error` |
+| `statisticsFailureBucket_cloud_upload_failed` |
+| `statisticsFailureBucket_unknown` |
+| `totalVideos` |
+| `totalStorage` |
+| `downloadSuccessRate` |
+| `netNewVideos` |
+| `downloadVolume` |
+| `watchTime` |
+| `diskRunway` |
+| `activeSubscriptions` |
+| `activeRssTokens` |
+| `watchTimeByDay` |
+| `completedVsFailedByDay` |
+| `libraryAdditionsByDay` |
+| `topWatchedVideos` |
+| `mostProductiveSubscriptions` |
+| `mostAccessedRssFeeds` |
+| `mostCommonFailures` |
+| `largestNeverWatched` |
+| `last7Days` |
+| `last30Days` |
+| `last90Days` |
+| `last365Days` |
+| `exportCsv` |
+| `exportJson` |
+| `recomputeStatistics` |
+| `favorite` |
+| `favoritesEmptyTitle` |
+| `favoritesEmptySubtitle` |
+| `favoriteCollection` |
+| `favoriteAuthor` |
+| `unfavorite` |
+| `favoriteCollections` |
+| `favoriteAuthors` |
+| `topRated` |
+| `topRatedSubtitle` |
+| `featured` |
+| `continueWatching` |
+| `browseCollections` |
+| `findAuthors` |
+| `favoritesUpdateFailed` |
+| `favoriteUnavailable` |
+| `favoritesLoadFailed` |
+| `stars` |
+| `play` |
+| `openCollection` |
+
+### Gesture Login (admin only)
+
+| Key |
+| --- |
+| `or` |
+| `gestureLogin` |
+| `gestureLoginHelper` |
+| `gestureLoginConvenienceWarning` |
+| `gestureLoginPasswordRequired` |
+| `gestureLoginSavePrerequisitesFirst` |
+| `gestureLoginDisablePasswordBlocked` |
+| `gestureLoginSetUpTitle` |
+| `gestureLoginChange` |
+| `gestureLoginChangeTitle` |
+| `gestureLoginSetNew` |
+| `gestureLoginRemoveTitle` |
+| `gestureLoginRemoveMessage` |
+| `gestureLoginRemoveFailed` |
+| `gestureLoginStep` |
+| `gestureLoginDrawInstruction` |
+| `gestureLoginConfirmInstruction` |
+| `gestureLoginReleaseInstruction` |
+| `gestureLoginSignInInstruction` |
+| `gestureLoginStepTwoAnnouncement` |
+| `gestureLoginMinimumDots` |
+| `gestureLoginMismatch` |
+| `gestureLoginSaveFailed` |
+| `gestureLoginLockedSettings` |
+| `gestureLoginLockedPasswordRecovery` |
+| `gestureLoginIncorrectAttemptsRemaining` |
+| `gestureLoginStateUnavailable` |
+| `gestureLoginUnavailable` |
+| `gestureLoginResetRequired` |
+| `gestureLoginStatusFailed` |
+| `gestureLoginRetryStatus` |

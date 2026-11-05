@@ -1,0 +1,150 @@
+name: Lighthouse Desktop Score Badge
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    paths-ignore:
+      - "badges/**"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: lighthouse-desktop-score-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lighthouse-score:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Use Node.js 22.23.4
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.4
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
+            backend/package-lock.json
+
+      - name: Install Dependencies
+        run: npm run install:all
+
+      - name: Build Frontend
+        run: npm --prefix frontend run build
+
+      - name: Run Lighthouse
+        run: |
+          set -euo pipefail
+
+          mkdir -p .lighthouseci badges
+          (
+            cd backend
+            npm run start
+          ) > /tmp/videleum-lighthouse-backend.log 2>&1 &
+          BACKEND_PID=$!
+
+          cleanup() {
+            kill "$BACKEND_PID" >/dev/null 2>&1 || true
+          }
+
+          trap cleanup EXIT
+
+          for _ in $(seq 1 60); do
+            if curl --silent --fail http://127.0.0.1:5551/ >/dev/null; then
+              break
+            fi
+
+            sleep 1
+          done
+
+          curl --silent --fail http://127.0.0.1:5551/ >/dev/null
+
+          CHROME_PATH="$(node -e "(async () => console.log(await require('./backend/node_modules/puppeteer').executablePath()))()")"
+
+          for run in 1 2 3; do
+            npx --yes lighthouse@12.8.2 http://127.0.0.1:5551/ \
+              --preset=desktop \
+              --only-categories=performance \
+              --chrome-path="$CHROME_PATH" \
+              --chrome-flags="--headless --no-sandbox" \
+              --quiet \
+              --output=json \
+              --output-path=".lighthouseci/lighthouse-desktop-${run}.json"
+          done
+
+      - name: Generate Badge Payload
+        run: >
+          node scripts/lighthouse/generate-badge.mjs
+          .lighthouseci/lighthouse-desktop-1.json
+          .lighthouseci/lighthouse-desktop-2.json
+          .lighthouseci/lighthouse-desktop-3.json
+          --output badges/lighthouse-performance.json
+          --label "Lighthouse desktop"
+
+      - name: Upload Lighthouse Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: lighthouse-desktop-reports
+          path: .lighthouseci/*.json
+
+      - name: Publish Badge Update
+        if: github.ref == 'refs/heads/master'
+        run: |
+          set -euo pipefail
+
+          REPO_ROOT="$PWD"
+          BADGE_FILE="badges/lighthouse-performance.json"
+
+          for attempt in 1 2 3; do
+            BADGE_WORKTREE="$(mktemp -d)"
+            set +e
+            (
+              set -euo pipefail
+              if git fetch origin gh-pages:refs/remotes/origin/gh-pages 2>/dev/null; then
+                git worktree add "$BADGE_WORKTREE" origin/gh-pages
+              else
+                git worktree add --detach "$BADGE_WORKTREE"
+                cd "$BADGE_WORKTREE"
+                git checkout --orphan gh-pages
+                git rm -rf . >/dev/null 2>&1 || true
+              fi
+
+              mkdir -p "$BADGE_WORKTREE/badges"
+              cp "$REPO_ROOT/$BADGE_FILE" "$BADGE_WORKTREE/badges/lighthouse-performance.json"
+
+              cd "$BADGE_WORKTREE"
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+              if [ -z "$(git status --porcelain -- badges/lighthouse-performance.json)" ]; then
+                exit 0
+              fi
+
+              git add badges/lighthouse-performance.json
+              git commit -m "Update Lighthouse performance badge"
+              git push origin HEAD:gh-pages
+            )
+            rc=$?
+            set -e
+            cd "$REPO_ROOT"
+            git worktree remove "$BADGE_WORKTREE" --force >/dev/null 2>&1 || true
+            rm -rf "$BADGE_WORKTREE"
+
+            if [ "$rc" -eq 0 ]; then
+              exit 0
+            fi
+            echo "Publish attempt ${attempt} failed; retrying..."
+            sleep $((attempt * 5))
+          done
+
+          echo "Failed to publish Lighthouse performance badge after retries"
+          exit 1

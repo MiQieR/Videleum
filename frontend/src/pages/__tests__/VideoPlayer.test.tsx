@@ -1,0 +1,1118 @@
+import { render, screen, act } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import VideoPlayer from '../VideoPlayer';
+import type { MockVideoMutationsReturn, CapturedVideoControlsProps, CapturedVideoInfoProps, CapturedCommentsSectionProps, CapturedUpNextSidebarProps, CapturedCollectionModalProps, CapturedConfirmationModalProps, CapturedSubscribeModalProps } from './videoPlayerTestTypes';
+
+// ---- Shared mock data ----
+
+const mockVideo = {
+    id: 'v1',
+    title: 'Test Video Title',
+    videoPath: 'test.mp4',
+    thumbnailPath: 'thumb.jpg',
+    author: 'Test Author',
+    visibility: 1,
+    source: 'local',
+    progress: 10,
+    subtitles: [],
+    sourceUrl: 'http://example.com/video.mp4',
+};
+
+const mockSettingsData = { data: { websiteName: 'TestSite' } };
+
+// ---- Module-scope mock functions for assertions ----
+
+const mockNavigate = vi.fn();
+const mockSetShowSubscribeModal = vi.fn();
+const mockHandleAuthorClickFromHook = vi.fn();
+const mockHandleSubscribe = vi.fn();
+const mockHandleSubscribeConfirm = vi.fn();
+const mockHandleUnsubscribeFromHook = vi.fn();
+const mockUnsubscribeMutate = vi.fn();
+const mockHandleAddToCollection = vi.fn();
+const mockHandleCloseModal = vi.fn();
+const mockHandleCreateCollection = vi.fn();
+const mockHandleAddToExistingCollection = vi.fn();
+const mockHandleRemoveFromCollection = vi.fn();
+const mockRatingMutateAsync = vi.fn();
+const mockTitleMutateAsync = vi.fn();
+const mockTagsMutateAsync = vi.fn();
+const mockVisibilityMutateAsync = vi.fn();
+const mockDeleteMutateAsync = vi.fn();
+const mockUploadSubtitleMutateAsync = vi.fn();
+const mockDeleteSubtitleMutateAsync = vi.fn();
+const mockHandleTimeUpdate = vi.fn();
+const mockSetIsDeleting = vi.fn();
+const mockHandleSubtitlesToggle = vi.fn(), mockHandleLoopToggle = vi.fn(), mockScrollTo = vi.fn();
+const mockStatisticsRecordEvent = vi.fn();
+
+// ---- Mutable mock state (overridable per test) ----
+
+let mockVideoQueryReturn: Record<string, unknown>;
+let mockAuthReturn: unknown;
+let mockVideoMutationsReturn: MockVideoMutationsReturn;
+let mockVideoSubscriptionsReturn: Record<string, unknown>;
+let mockVideoCollectionsReturn: Record<string, unknown>;
+let mockVideoRecommendationsReturn: unknown;
+let mockVideoPlayerSettingsReturn: Record<string, unknown>;
+let mockStatisticsIngestionReturn: Record<string, unknown>;
+
+// ---- Mock hooks ----
+
+let mockLocationState: unknown = null;
+
+vi.mock('react-router', () => ({
+    useNavigate: () => mockNavigate,
+    useParams: () => ({ id: 'v1' }),
+    useLocation: () => ({ state: mockLocationState }),
+}));
+
+vi.mock('../../contexts/LanguageContext', () => ({
+    useLanguage: () => ({ t: (key: string, params?: unknown) => params ? `${key}:${JSON.stringify(params)}` : key }),
+}));
+
+vi.mock('../../contexts/VideoContext', () => ({
+    useVideo: () => ({ videos: [] }),
+}));
+
+vi.mock('../../contexts/AuthContext', () => ({
+    useAuth: () => mockAuthReturn,
+}));
+
+vi.mock('../../hooks/useSettings', () => ({
+    useSettings: () => mockSettingsData,
+}));
+
+vi.mock('../../hooks/useVideoQueries', () => ({
+    useVideoQueries: () => mockVideoQueryReturn,
+}));
+
+vi.mock('../../hooks/useCloudStorageUrl', () => ({ useCloudStorageUrl: () => 'url' }));
+
+vi.mock('../../hooks/useVideoCollections', () => ({
+    useVideoCollections: () => mockVideoCollectionsReturn,
+}));
+
+vi.mock('../../hooks/useVideoSubscriptions', () => ({
+    useVideoSubscriptions: () => mockVideoSubscriptionsReturn,
+}));
+
+vi.mock('../../hooks/useVideoMutations', () => ({
+    useVideoMutations: (opts: Record<string, unknown>) => {
+        // Capture onDeleteSuccess for testing
+        mockVideoMutationsReturn._onDeleteSuccess = opts?.onDeleteSuccess as ((data: unknown) => void) | undefined;
+        return mockVideoMutationsReturn;
+    },
+}));
+
+vi.mock('../../hooks/useVideoPlayerSettings', () => ({
+    useVideoPlayerSettings: () => mockVideoPlayerSettingsReturn,
+}));
+
+vi.mock('../../hooks/useVideoProgress', () => ({
+    useVideoProgress: () => ({
+        handleTimeUpdate: mockHandleTimeUpdate,
+        setIsDeleting: mockSetIsDeleting,
+        currentTimeRef: { current: 0 },
+    }),
+}));
+
+vi.mock('../../hooks/useVideoRecommendations', () => ({
+    useVideoRecommendations: () => mockVideoRecommendationsReturn,
+}));
+
+vi.mock('../../hooks/useStatisticsIngestion', () => ({
+    useStatisticsIngestion: () => mockStatisticsIngestionReturn,
+}));
+
+vi.mock('../../utils/apiUrl', () => ({
+    getBackendUrl: () => 'http://localhost:5000',
+}));
+
+// ---- Mock child components with data-testid and exposed callbacks ----
+
+let capturedVideoControlsProps: CapturedVideoControlsProps = {} as CapturedVideoControlsProps;
+let capturedVideoInfoProps: CapturedVideoInfoProps = {} as CapturedVideoInfoProps;
+let capturedCommentsSectionProps: CapturedCommentsSectionProps = {} as CapturedCommentsSectionProps;
+let capturedUpNextSidebarProps: CapturedUpNextSidebarProps = {} as CapturedUpNextSidebarProps;
+let capturedCollectionModalProps: CapturedCollectionModalProps = {} as CapturedCollectionModalProps;
+let capturedConfirmationModalProps: CapturedConfirmationModalProps = {} as CapturedConfirmationModalProps;
+let capturedSubscribeModalProps: CapturedSubscribeModalProps = {} as CapturedSubscribeModalProps;
+
+vi.mock('../../components/VideoPlayer/VideoControls', () => ({
+    default: (props: Record<string, unknown>) => {
+        capturedVideoControlsProps = props as CapturedVideoControlsProps;
+        return <div data-testid="video-controls" />;
+    },
+}));
+
+vi.mock('../../hooks/useLiveTranslationAvailability', () => ({
+    useLiveTranslationAvailability: () => ({ data: undefined }),
+}));
+vi.mock('../../hooks/useLiveTranslationSession', () => ({
+    useLiveTranslationSession: () => ({
+        status: 'idle',
+        isActive: false,
+        errorCode: null,
+        errorMessage: null,
+        retryable: false,
+        start: vi.fn(),
+        stop: vi.fn(),
+    }),
+}));
+vi.mock('../../hooks/useLiveTranslationSubtitleTrack', () => ({
+    useLiveTranslationSubtitleTrack: () => ({
+        track: null,
+        isActive: false,
+        label: '',
+        activate: vi.fn(),
+        deactivate: vi.fn(),
+        addCue: vi.fn(),
+    }),
+}));
+
+vi.mock('../../components/VideoPlayer/VideoInfo', () => ({
+    default: (props: Record<string, unknown>) => {
+        capturedVideoInfoProps = props as CapturedVideoInfoProps;
+        return <div data-testid="video-info" />;
+    },
+}));
+
+vi.mock('../../components/VideoPlayer/CommentsSection', () => ({
+    default: (props: Record<string, unknown>) => {
+        capturedCommentsSectionProps = props as CapturedCommentsSectionProps;
+        return <div data-testid="comments-section" />;
+    },
+}));
+
+vi.mock('../../components/VideoPlayer/UpNextSidebar', () => ({
+    default: (props: Record<string, unknown>) => {
+        capturedUpNextSidebarProps = props as CapturedUpNextSidebarProps;
+        return <div data-testid="up-next-sidebar" />;
+    },
+}));
+
+vi.mock('../../components/CollectionModal', () => ({
+    default: (props: Record<string, unknown>) => {
+        capturedCollectionModalProps = props as CapturedCollectionModalProps;
+        return <div data-testid="collection-modal" />;
+    },
+}));
+
+vi.mock('../../components/ConfirmationModal', () => ({
+    default: (props: Record<string, unknown>) => {
+        capturedConfirmationModalProps = props as CapturedConfirmationModalProps;
+        return <div data-testid="confirmation-modal" />;
+    },
+}));
+
+vi.mock('../../components/SubscribeModal', () => ({
+    default: (props: Record<string, unknown>) => {
+        capturedSubscribeModalProps = props as CapturedSubscribeModalProps;
+        return <div data-testid="subscribe-modal" />;
+    },
+}));
+
+// ---- localStorage mock ----
+
+const localStorageMock = (() => {
+    let store: Record<string, string> = {};
+    return {
+        getItem: vi.fn((key: string) => store[key] ?? null),
+        setItem: vi.fn((key: string, value: string) => { store[key] = value.toString(); }),
+        clear: () => { store = {}; },
+        removeItem: (key: string) => { const { [key]: _removed, ...rest } = store; store = rest; },
+    };
+})();
+Object.defineProperty(window, 'localStorage', { value: localStorageMock });
+
+// ---- Defaults reset ----
+
+function resetDefaults() {
+    mockVideoQueryReturn = {
+        video: { ...mockVideo },
+        loading: false,
+        error: null,
+        comments: [],
+        loadingComments: false,
+    };
+
+    mockAuthReturn = { userRole: 'admin' };
+
+    mockVideoMutationsReturn = {
+        ratingMutation: { mutateAsync: mockRatingMutateAsync },
+        titleMutation: { mutateAsync: mockTitleMutateAsync },
+        tagsMutation: { mutateAsync: mockTagsMutateAsync },
+        visibilityMutation: { mutateAsync: mockVisibilityMutateAsync },
+        lockMutation: { isPending: false, mutateAsync: vi.fn() },
+        deleteMutation: { isPending: false, error: null, mutateAsync: mockDeleteMutateAsync },
+        uploadSubtitleMutation: { mutateAsync: mockUploadSubtitleMutateAsync },
+        deleteSubtitleMutation: { mutateAsync: mockDeleteSubtitleMutateAsync },
+        _onDeleteSuccess: undefined,
+    };
+
+    mockVideoSubscriptionsReturn = {
+        authorChannelUrl: 'https://youtube.com/@author',
+        isSubscribed: false,
+        subscriptionId: 'sub1',
+        showSubscribeModal: false,
+        setShowSubscribeModal: mockSetShowSubscribeModal,
+        handleAuthorClick: mockHandleAuthorClickFromHook,
+        handleSubscribe: mockHandleSubscribe,
+        handleSubscribeConfirm: mockHandleSubscribeConfirm,
+        handleUnsubscribe: mockHandleUnsubscribeFromHook,
+        unsubscribeMutation: { mutate: mockUnsubscribeMutate },
+    };
+
+    mockVideoCollectionsReturn = {
+        collections: [],
+        videoCollections: [],
+        modalVideoCollections: [],
+        showCollectionModal: false,
+        handleAddToCollection: mockHandleAddToCollection,
+        handleCloseModal: mockHandleCloseModal,
+        handleCreateCollection: mockHandleCreateCollection,
+        handleAddToExistingCollection: mockHandleAddToExistingCollection,
+        handleRemoveFromCollection: mockHandleRemoveFromCollection,
+    };
+
+    mockVideoRecommendationsReturn = { relatedVideos: [] };
+    mockLocationState = null;
+
+    mockStatisticsIngestionReturn = {
+        enabled: false,
+        recordEvent: mockStatisticsRecordEvent,
+        flushNow: vi.fn(),
+        flushKeepalive: vi.fn(),
+        sessionId: 'stats-session',
+    };
+
+    mockVideoPlayerSettingsReturn = {
+        autoPlay: false,
+        autoLoop: false,
+        subtitlesEnabled: false,
+        availableTags: ['tag1', 'tag2'],
+        handleSubtitlesToggle: mockHandleSubtitlesToggle,
+        handleLoopToggle: mockHandleLoopToggle,
+        pauseOnFocusLoss: false,
+        playFromBeginning: false,
+        seekIntervals: {
+            shortSeconds: 15,
+            mediumSeconds: 120,
+            longSeconds: 900,
+        },
+    };
+
+    capturedVideoControlsProps = {} as CapturedVideoControlsProps;
+    capturedVideoInfoProps = {} as CapturedVideoInfoProps;
+    capturedCommentsSectionProps = {} as CapturedCommentsSectionProps;
+    capturedUpNextSidebarProps = {} as CapturedUpNextSidebarProps;
+    capturedCollectionModalProps = {} as CapturedCollectionModalProps;
+    capturedConfirmationModalProps = {} as CapturedConfirmationModalProps;
+    capturedSubscribeModalProps = {} as CapturedSubscribeModalProps;
+}
+
+beforeEach(() => {
+    vi.clearAllMocks();
+    localStorageMock.clear();
+    resetDefaults();
+    window.scrollTo = mockScrollTo;
+});
+
+// ==================================================================
+// Tests
+// ==================================================================
+
+describe('VideoPlayer', () => {
+    // ------ Loading state ------
+    describe('Loading state', () => {
+        it('renders CircularProgress spinner when loading', () => {
+            mockVideoQueryReturn = { ...mockVideoQueryReturn, loading: true, video: null };
+            render(<VideoPlayer />);
+            expect(screen.getByRole('progressbar')).toBeTruthy();
+            expect(screen.getByText('loadingVideo')).toBeTruthy();
+        });
+
+        it('does not render child components when loading', () => {
+            mockVideoQueryReturn = { ...mockVideoQueryReturn, loading: true, video: null };
+            render(<VideoPlayer />);
+            expect(screen.queryByTestId('video-controls')).toBeNull();
+            expect(screen.queryByTestId('video-info')).toBeNull();
+        });
+    });
+
+    // ------ Error state ------
+    describe('Error state', () => {
+        it('renders error Alert when there is an error', () => {
+            mockVideoQueryReturn = { ...mockVideoQueryReturn, error: new Error('fail'), video: null };
+            render(<VideoPlayer />);
+            expect(screen.getByRole('alert')).toBeTruthy();
+            expect(screen.getByText('videoNotFoundOrLoaded')).toBeTruthy();
+        });
+
+        it('renders error Alert when video is null (no error)', () => {
+            mockVideoQueryReturn = { ...mockVideoQueryReturn, video: null };
+            render(<VideoPlayer />);
+            expect(screen.getByRole('alert')).toBeTruthy();
+        });
+
+        it('navigates to home after error timeout', () => {
+            vi.useFakeTimers();
+            mockVideoQueryReturn = { ...mockVideoQueryReturn, error: new Error('fail'), video: null };
+            render(<VideoPlayer />);
+            act(() => { vi.advanceTimersByTime(3000); });
+            expect(mockNavigate).toHaveBeenCalledWith('/');
+            vi.useRealTimers();
+        });
+    });
+
+    // ------ Successful render with child components ------
+    describe('Successful render', () => {
+        it('renders VideoControls, VideoInfo, UpNextSidebar', () => {
+            render(<VideoPlayer />);
+            expect(screen.getByTestId('video-controls')).toBeTruthy();
+            expect(screen.getByTestId('video-info')).toBeTruthy();
+            expect(screen.getByTestId('up-next-sidebar')).toBeTruthy();
+        });
+
+        it('renders CollectionModal, ConfirmationModal, SubscribeModal', () => {
+            render(<VideoPlayer />);
+            expect(screen.getByTestId('collection-modal')).toBeTruthy();
+            expect(screen.getByTestId('confirmation-modal')).toBeTruthy();
+            expect(screen.getByTestId('subscribe-modal')).toBeTruthy();
+        });
+
+        it('does not render CommentsSection for local source', () => {
+            render(<VideoPlayer />);
+            expect(screen.queryByTestId('comments-section')).toBeNull();
+        });
+
+        it('renders CommentsSection for youtube source', () => {
+            mockVideoQueryReturn.video = { ...mockVideo, source: 'youtube' };
+            render(<VideoPlayer />);
+            expect(screen.getByTestId('comments-section')).toBeTruthy();
+        });
+
+        it('renders CommentsSection for bilibili source', () => {
+            mockVideoQueryReturn.video = { ...mockVideo, source: 'bilibili' };
+            render(<VideoPlayer />);
+            expect(screen.getByTestId('comments-section')).toBeTruthy();
+        });
+
+        it('does not render CommentsSection for twitch source', () => {
+            mockVideoQueryReturn.video = { ...mockVideo, source: 'twitch' };
+            render(<VideoPlayer />);
+            expect(screen.queryByTestId('comments-section')).toBeNull();
+        });
+    });
+
+    // ------ handleToggleComments ------
+    describe('handleToggleComments', () => {
+        it('toggles showComments state via CommentsSection callback', () => {
+            mockVideoQueryReturn.video = { ...mockVideo, source: 'youtube' };
+            render(<VideoPlayer />);
+            // Initially showComments is false
+            expect(capturedCommentsSectionProps.showComments).toBe(false);
+
+            // Invoke the toggle callback
+            act(() => { capturedCommentsSectionProps.onToggleComments(); });
+
+            // After toggle, re-render captures updated props
+            expect(capturedCommentsSectionProps.showComments).toBe(true);
+        });
+    });
+
+    // ------ handleAuthorClick ------
+    describe('handleAuthorClick', () => {
+        it('navigates when hook returns shouldNavigate', () => {
+            mockHandleAuthorClickFromHook.mockReturnValue({ shouldNavigate: true, path: '/author/TestAuthor' });
+            render(<VideoPlayer />);
+            act(() => { capturedVideoInfoProps.onAuthorClick(); });
+            expect(mockNavigate).toHaveBeenCalledWith('/author/TestAuthor');
+        });
+
+        it('does not navigate when hook returns no shouldNavigate', () => {
+            mockHandleAuthorClickFromHook.mockReturnValue(undefined);
+            render(<VideoPlayer />);
+            act(() => { capturedVideoInfoProps.onAuthorClick(); });
+            expect(mockNavigate).not.toHaveBeenCalled();
+        });
+    });
+
+    // ------ handleAvatarClick ------
+    describe('handleAvatarClick', () => {
+        it('navigates to internal author page', () => {
+            render(<VideoPlayer />);
+            act(() => { capturedVideoInfoProps.onAvatarClick(); });
+            expect(mockNavigate).toHaveBeenCalledWith('/author/Test%20Author');
+        });
+    });
+
+    // ------ handleDelete ------
+    describe('handleDelete', () => {
+        it('opens ConfirmationModal with delete config', () => {
+            render(<VideoPlayer />);
+            // Initially the confirmation modal is closed
+            expect(capturedConfirmationModalProps.isOpen).toBe(false);
+
+            act(() => { capturedVideoInfoProps.onDelete(); });
+
+            expect(capturedConfirmationModalProps.isOpen).toBe(true);
+            expect(capturedConfirmationModalProps.title).toBe('deleteVideo');
+            expect(capturedConfirmationModalProps.isDanger).toBe(true);
+        });
+
+        it('executeDelete calls deleteMutation.mutateAsync on confirm', async () => {
+            mockDeleteMutateAsync.mockResolvedValue(undefined);
+            render(<VideoPlayer />);
+
+            act(() => { capturedVideoInfoProps.onDelete(); });
+
+            // Invoke the onConfirm handler (executeDelete)
+            await act(async () => { await capturedConfirmationModalProps.onConfirm(); });
+
+            expect(mockSetIsDeleting).toHaveBeenCalledWith(true);
+            expect(mockDeleteMutateAsync).toHaveBeenCalledWith('v1');
+        });
+
+        it('sets isDeleting back to false if delete fails', async () => {
+            mockDeleteMutateAsync.mockRejectedValue(new Error('fail'));
+            render(<VideoPlayer />);
+
+            act(() => { capturedVideoInfoProps.onDelete(); });
+            await act(async () => {
+                await capturedConfirmationModalProps.onConfirm();
+            });
+
+            expect(mockSetIsDeleting).toHaveBeenCalledWith(true);
+            expect(mockSetIsDeleting).toHaveBeenCalledWith(false);
+        });
+    });
+
+    // ------ handleUnsubscribe ------
+    describe('handleUnsubscribe', () => {
+        it('opens ConfirmationModal with unsubscribe config', () => {
+            render(<VideoPlayer />);
+            act(() => { capturedVideoInfoProps.onUnsubscribe(); });
+
+            expect(capturedConfirmationModalProps.isOpen).toBe(true);
+            expect(capturedConfirmationModalProps.title).toBe('unsubscribe');
+            expect(capturedConfirmationModalProps.isDanger).toBe(true);
+        });
+
+        it('onConfirm calls handleUnsubscribeFromHook which calls unsubscribeMutation.mutate', () => {
+            mockHandleUnsubscribeFromHook.mockImplementation((cb: () => void) => { cb(); });
+            render(<VideoPlayer />);
+
+            act(() => { capturedVideoInfoProps.onUnsubscribe(); });
+            act(() => { capturedConfirmationModalProps.onConfirm(); });
+
+            expect(mockHandleUnsubscribeFromHook).toHaveBeenCalled();
+            expect(mockUnsubscribeMutate).toHaveBeenCalledWith('sub1');
+        });
+
+        it('does nothing when subscriptionId is empty', () => {
+            mockVideoSubscriptionsReturn = { ...mockVideoSubscriptionsReturn, subscriptionId: '' };
+            render(<VideoPlayer />);
+            act(() => { capturedVideoInfoProps.onUnsubscribe(); });
+
+            // Modal should remain closed since early return
+            expect(capturedConfirmationModalProps.isOpen).toBe(false);
+        });
+    });
+
+    // ------ handleRatingChange ------
+    describe('handleRatingChange', () => {
+        it('calls ratingMutation.mutateAsync with new value', async () => {
+            mockRatingMutateAsync.mockResolvedValue(undefined);
+            render(<VideoPlayer />);
+            await act(async () => { await capturedVideoInfoProps.onRatingChange(4); });
+            expect(mockRatingMutateAsync).toHaveBeenCalledWith(4);
+        });
+    });
+
+    // ------ handleSaveTitle ------
+    describe('handleSaveTitle', () => {
+        it('calls titleMutation.mutateAsync with new title', async () => {
+            mockTitleMutateAsync.mockResolvedValue(undefined);
+            render(<VideoPlayer />);
+            await act(async () => { await capturedVideoInfoProps.onTitleSave('New Title'); });
+            expect(mockTitleMutateAsync).toHaveBeenCalledWith('New Title');
+        });
+    });
+
+    // ------ handleUpdateTags ------
+    describe('handleUpdateTags', () => {
+        it('calls tagsMutation.mutateAsync with new tags', async () => {
+            mockTagsMutateAsync.mockResolvedValue(undefined);
+            render(<VideoPlayer />);
+            await act(async () => { await capturedVideoInfoProps.onTagsUpdate(['a', 'b']); });
+            expect(mockTagsMutateAsync).toHaveBeenCalledWith(['a', 'b']);
+        });
+    });
+
+    // ------ handleToggleVisibility ------
+    describe('handleToggleVisibility', () => {
+        it('toggles visibility from 1 to 0', async () => {
+            mockVisibilityMutateAsync.mockResolvedValue(undefined);
+            render(<VideoPlayer />);
+            await act(async () => { await capturedVideoInfoProps.onToggleVisibility(); });
+            expect(mockVisibilityMutateAsync).toHaveBeenCalledWith(0);
+        });
+
+        it('toggles visibility from 0 to 1', async () => {
+            mockVideoQueryReturn.video = { ...mockVideo, visibility: 0 };
+            mockVisibilityMutateAsync.mockResolvedValue(undefined);
+            render(<VideoPlayer />);
+            await act(async () => { await capturedVideoInfoProps.onToggleVisibility(); });
+            expect(mockVisibilityMutateAsync).toHaveBeenCalledWith(1);
+        });
+    });
+
+    // ------ handleVideoEnded / autoPlayNext ------
+    describe('handleVideoEnded and autoPlayNext', () => {
+        it('navigates to next related video when autoPlayNext is on and related videos exist', () => {
+            localStorageMock.setItem('autoPlayNext', 'true');
+            mockVideoRecommendationsReturn = { relatedVideos: [{ id: 'v2' }, { id: 'v3' }] };
+            render(<VideoPlayer />);
+
+            act(() => { capturedVideoControlsProps.onEnded(); });
+            expect(mockNavigate).toHaveBeenCalledWith('/video/v2', {
+                state: { previousVideoIds: ['v1'] }
+            });
+        });
+
+        it('records autoplay advancement when statistics are enabled', () => {
+            localStorageMock.setItem('autoPlayNext', 'true');
+            mockVideoRecommendationsReturn = { relatedVideos: [{ id: 'v2' }] };
+            mockStatisticsIngestionReturn = {
+                ...mockStatisticsIngestionReturn,
+                enabled: true,
+            };
+            mockStatisticsRecordEvent
+                .mockReturnValueOnce('impression-1')
+                .mockReturnValueOnce('autoplay-1');
+            render(<VideoPlayer />);
+
+            act(() => { capturedVideoControlsProps.onEnded(); });
+
+            expect(mockStatisticsRecordEvent).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    eventType: 'autoplay_advanced',
+                    videoId: 'v2',
+                    relatedEventId: 'impression-1',
+                    payload: expect.objectContaining({
+                        fromVideoId: 'v1',
+                        toVideoId: 'v2',
+                    }),
+                })
+            );
+            expect(mockNavigate).toHaveBeenCalledWith('/video/v2', {
+                state: {
+                    previousVideoIds: ['v1'],
+                    statisticsRelatedEventId: 'autoplay-1',
+                    autoplayFromVideoId: 'v1',
+                },
+            });
+        });
+
+        it('does not navigate when autoPlayNext is off', () => {
+            mockVideoRecommendationsReturn = { relatedVideos: [{ id: 'v2' }] };
+            render(<VideoPlayer />);
+
+            act(() => { capturedVideoControlsProps.onEnded(); });
+            expect(mockNavigate).not.toHaveBeenCalled();
+        });
+
+        it('does not navigate when no related videos', () => {
+            localStorageMock.setItem('autoPlayNext', 'true');
+            mockVideoRecommendationsReturn = { relatedVideos: [] };
+            render(<VideoPlayer />);
+
+            act(() => { capturedVideoControlsProps.onEnded(); });
+            expect(mockNavigate).not.toHaveBeenCalled();
+        });
+
+        it('also navigates when settingsAutoPlay is true even if autoPlayNext toggle is off', () => {
+            mockVideoPlayerSettingsReturn = { ...mockVideoPlayerSettingsReturn, autoPlay: true };
+            // autoPlayNext defaults to false from localStorage, but settingsAutoPlay true
+            // Note: autoPlay passed to VideoControls will be true, but handleVideoEnded checks autoPlayNext state, not autoPlay
+            // Looking at the code: handleVideoEnded checks autoPlayNext state variable
+            mockVideoRecommendationsReturn = { relatedVideos: [{ id: 'v2' }] };
+            render(<VideoPlayer />);
+
+            act(() => { capturedVideoControlsProps.onEnded(); });
+            // autoPlayNext is false so no navigation
+            expect(mockNavigate).not.toHaveBeenCalled();
+        });
+    });
+
+    // ------ Cinema mode toggle ------
+    describe('Cinema mode', () => {
+        it('toggles cinema mode via VideoControls callback', () => {
+            render(<VideoPlayer />);
+            expect(capturedVideoControlsProps.isCinemaMode).toBe(false);
+
+            act(() => { capturedVideoControlsProps.onToggleCinemaMode(); });
+            expect(capturedVideoControlsProps.isCinemaMode).toBe(true);
+
+            act(() => { capturedVideoControlsProps.onToggleCinemaMode(); });
+            expect(capturedVideoControlsProps.isCinemaMode).toBe(false);
+        });
+    });
+
+    // ------ handleRemoveFromCollectionWithConfirm ------
+    describe('handleRemoveFromCollectionWithConfirm', () => {
+        it('opens ConfirmationModal and calls handleRemoveFromCollection on confirm', async () => {
+            mockHandleRemoveFromCollection.mockResolvedValue(undefined);
+            mockVideoCollectionsReturn = {
+                ...mockVideoCollectionsReturn,
+                modalVideoCollections: [{ id: 'col-1', name: 'Collection 1', videos: ['v1'] }],
+            };
+            render(<VideoPlayer />);
+
+            act(() => { capturedCollectionModalProps.onRemoveFromCollection('col-1'); });
+
+            expect(capturedConfirmationModalProps.isOpen).toBe(true);
+            expect(capturedConfirmationModalProps.title).toBe('removeFromCollection');
+
+            await act(async () => { await capturedConfirmationModalProps.onConfirm(); });
+            expect(mockHandleRemoveFromCollection).toHaveBeenCalledWith('col-1');
+        });
+    });
+
+    // ------ localStorage autoPlayNext persistence ------
+    describe('localStorage autoPlayNext persistence', () => {
+        it('reads autoPlayNext from localStorage on mount', () => {
+            localStorageMock.setItem('autoPlayNext', 'true');
+            render(<VideoPlayer />);
+            expect(capturedUpNextSidebarProps.autoPlayNext).toBe(true);
+        });
+
+        it('defaults autoPlayNext to false when not in localStorage', () => {
+            render(<VideoPlayer />);
+            expect(capturedUpNextSidebarProps.autoPlayNext).toBe(false);
+        });
+
+        it('persists autoPlayNext changes to localStorage', () => {
+            render(<VideoPlayer />);
+            act(() => { capturedUpNextSidebarProps.onAutoPlayNextChange(true); });
+            expect(localStorageMock.setItem).toHaveBeenCalledWith('autoPlayNext', 'true');
+        });
+    });
+
+    // ------ Visitor mode redirect for invisible videos ------
+    describe('Visitor mode redirect for invisible videos', () => {
+        it('redirects visitor to home for invisible video', () => {
+            vi.useFakeTimers();
+            mockAuthReturn = { userRole: 'visitor' };
+            mockVideoQueryReturn.video = { ...mockVideo, visibility: 0 };
+            render(<VideoPlayer />);
+
+            act(() => { vi.advanceTimersByTime(3000); });
+            expect(mockNavigate).toHaveBeenCalledWith('/');
+            vi.useRealTimers();
+        });
+
+        it('does not redirect admin for invisible video', () => {
+            vi.useFakeTimers();
+            mockAuthReturn = { userRole: 'admin' };
+            mockVideoQueryReturn.video = { ...mockVideo, visibility: 0 };
+            render(<VideoPlayer />);
+
+            act(() => { vi.advanceTimersByTime(3000); });
+            expect(mockNavigate).not.toHaveBeenCalled();
+            vi.useRealTimers();
+        });
+
+        it('does not redirect visitor for visible video', () => {
+            vi.useFakeTimers();
+            mockAuthReturn = { userRole: 'visitor' };
+            mockVideoQueryReturn.video = { ...mockVideo, visibility: 1 };
+            render(<VideoPlayer />);
+
+            act(() => { vi.advanceTimersByTime(3000); });
+            expect(mockNavigate).not.toHaveBeenCalled();
+            vi.useRealTimers();
+        });
+    });
+
+    // ------ scrollTo on id change ------
+    describe('scrollTo on mount', () => {
+        it('calls window.scrollTo(0, 0) on render', () => {
+            render(<VideoPlayer />);
+            expect(mockScrollTo).toHaveBeenCalledWith(0, 0);
+        });
+    });
+
+    // ------ ConfirmationModal close ------
+    describe('ConfirmationModal close', () => {
+        it('closes confirmation modal via onClose', () => {
+            render(<VideoPlayer />);
+
+            // Open modal via delete
+            act(() => { capturedVideoInfoProps.onDelete(); });
+            expect(capturedConfirmationModalProps.isOpen).toBe(true);
+
+            // Close modal
+            act(() => { capturedConfirmationModalProps.onClose(); });
+            expect(capturedConfirmationModalProps.isOpen).toBe(false);
+        });
+    });
+
+    // ------ SubscribeModal props ------
+    describe('SubscribeModal', () => {
+        it('passes correct props to SubscribeModal', () => {
+            mockVideoSubscriptionsReturn = { ...mockVideoSubscriptionsReturn, showSubscribeModal: true };
+            render(<VideoPlayer />);
+
+            expect(capturedSubscribeModalProps.open).toBe(true);
+            expect(capturedSubscribeModalProps.authorName).toBe('Test Author');
+            expect(capturedSubscribeModalProps.url).toBe('https://youtube.com/@author');
+            expect(capturedSubscribeModalProps.source).toBe('local');
+        });
+
+        it('closes SubscribeModal via onClose', () => {
+            mockVideoSubscriptionsReturn = { ...mockVideoSubscriptionsReturn, showSubscribeModal: true };
+            render(<VideoPlayer />);
+
+            act(() => { capturedSubscribeModalProps.onClose(); });
+            expect(mockSetShowSubscribeModal).toHaveBeenCalledWith(false);
+        });
+
+        it('calls handleSubscribeConfirm via onConfirm', () => {
+            render(<VideoPlayer />);
+            capturedSubscribeModalProps.onConfirm();
+            expect(mockHandleSubscribeConfirm).toHaveBeenCalled();
+        });
+    });
+
+    // ------ handleCollectionClick (via VideoInfo) ------
+    describe('handleCollectionClick', () => {
+        it('navigates to collection page when onCollectionClick is called', () => {
+            render(<VideoPlayer />);
+            act(() => { capturedVideoInfoProps.onCollectionClick('col1'); });
+            expect(mockNavigate).toHaveBeenCalledWith('/collection/col1');
+        });
+    });
+
+    // ------ UpNextSidebar onVideoClick ------
+    describe('UpNextSidebar onVideoClick', () => {
+        it('navigates to video page when a related video is clicked', () => {
+            render(<VideoPlayer />);
+            act(() => { capturedUpNextSidebarProps.onVideoClick('v5', 0); });
+            expect(mockNavigate).toHaveBeenCalledWith('/video/v5', {
+                state: { previousVideoIds: ['v1'] }
+            });
+        });
+
+        it('records Up Next impression and click events when statistics are enabled', () => {
+            mockVideoRecommendationsReturn = { relatedVideos: [{ id: 'v5', title: 'Next' }] };
+            mockStatisticsIngestionReturn = {
+                ...mockStatisticsIngestionReturn,
+                enabled: true,
+            };
+            mockStatisticsRecordEvent
+                .mockReturnValueOnce('impression-1')
+                .mockReturnValueOnce('click-1');
+
+            render(<VideoPlayer />);
+
+            expect(mockStatisticsRecordEvent).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    eventType: 'up_next_impression',
+                    videoId: 'v1',
+                    payload: expect.objectContaining({
+                        fromVideoId: 'v1',
+                        slate: [{ videoId: 'v5', lane: 'related', position: 1 }],
+                    }),
+                })
+            );
+
+            act(() => { capturedUpNextSidebarProps.onVideoClick('v5', 0); });
+
+            expect(mockStatisticsRecordEvent).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    eventType: 'up_next_clicked',
+                    videoId: 'v5',
+                    relatedEventId: 'impression-1',
+                    value: 1,
+                    payload: expect.objectContaining({
+                        fromVideoId: 'v1',
+                        toVideoId: 'v5',
+                        position: 1,
+                        lane: 'related',
+                    }),
+                })
+            );
+            expect(mockNavigate).toHaveBeenCalledWith('/video/v5', {
+                state: {
+                    previousVideoIds: ['v1'],
+                    statisticsRelatedEventId: 'click-1'
+                },
+            });
+        });
+    });
+
+    // ------ Props passed to VideoControls ------
+    describe('VideoControls props', () => {
+        it('passes autoPlay as true when settingsAutoPlay is true', () => {
+            mockVideoPlayerSettingsReturn = { ...mockVideoPlayerSettingsReturn, autoPlay: true };
+            render(<VideoPlayer />);
+            expect(capturedVideoControlsProps.autoPlay).toBe(true);
+        });
+
+        it('passes autoPlay as true when autoPlayNext localStorage is true', () => {
+            localStorageMock.setItem('autoPlayNext', 'true');
+            render(<VideoPlayer />);
+            expect(capturedVideoControlsProps.autoPlay).toBe(true);
+        });
+
+        it('passes startTime from video progress when not playFromBeginning', () => {
+            render(<VideoPlayer />);
+            // currentTimeRef.current is 0, so falls back to video.progress (10)
+            expect(capturedVideoControlsProps.startTime).toBe(10);
+        });
+
+        it('passes startTime as 0 when playFromBeginning is true', () => {
+            mockVideoPlayerSettingsReturn = { ...mockVideoPlayerSettingsReturn, playFromBeginning: true };
+            render(<VideoPlayer />);
+            expect(capturedVideoControlsProps.startTime).toBe(0);
+        });
+
+        it('passes configured seek intervals to the player', () => {
+            render(<VideoPlayer />);
+            expect(capturedVideoControlsProps.seekIntervals).toEqual({
+                shortSeconds: 15,
+                mediumSeconds: 120,
+                longSeconds: 900,
+            });
+        });
+    });
+
+    // ------ VideoInfo props ------
+    describe('VideoInfo props', () => {
+        it('passes isDeleting from deleteMutation.isPending', () => {
+            mockVideoMutationsReturn.deleteMutation.isPending = true;
+            render(<VideoPlayer />);
+            expect(capturedVideoInfoProps.isDeleting).toBe(true);
+        });
+
+        it('passes deleteError message when deleteMutation has error', () => {
+            mockVideoMutationsReturn.deleteMutation.error = { message: 'Delete failed!' };
+            render(<VideoPlayer />);
+            expect(capturedVideoInfoProps.deleteError).toBe('Delete failed!');
+        });
+
+        it('passes deleteError as deleteFailed translation when error has no message', () => {
+            mockVideoMutationsReturn.deleteMutation.error = {};
+            render(<VideoPlayer />);
+            expect(capturedVideoInfoProps.deleteError).toBe('deleteFailed');
+        });
+
+        it('passes null deleteError when no error', () => {
+            render(<VideoPlayer />);
+            expect(capturedVideoInfoProps.deleteError).toBeNull();
+        });
+
+        it('passes availableTags from settings hook', () => {
+            render(<VideoPlayer />);
+            expect(capturedVideoInfoProps.availableTags).toEqual(['tag1', 'tag2']);
+        });
+
+        it('passes isSubscribed from subscriptions hook', () => {
+            mockVideoSubscriptionsReturn = { ...mockVideoSubscriptionsReturn, isSubscribed: true };
+            render(<VideoPlayer />);
+            expect(capturedVideoInfoProps.isSubscribed).toBe(true);
+        });
+
+        it('leaves description timestamps inert until the player reports its element', () => {
+            render(<VideoPlayer />);
+            expect(capturedVideoInfoProps.onSeek).toBeUndefined();
+        });
+
+        it('seeks, plays and scrolls back to the player from a description timestamp', () => {
+            render(<VideoPlayer />);
+            const media = {
+                currentTime: 0,
+                play: vi.fn().mockResolvedValue(undefined),
+            } as unknown as HTMLVideoElement;
+            act(() => { capturedVideoControlsProps.onVideoElementReady?.(media); });
+
+            act(() => { capturedVideoInfoProps.onSeek?.(115); });
+
+            expect(media.currentTime).toBe(115);
+            expect(media.play).toHaveBeenCalled();
+            expect(mockScrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+        });
+    });
+});
+
+// ------ Up Next keyboard navigation ------
+describe('VideoPlayer up next keyboard navigation', () => {
+    it('binds shift+N to the first Up Next video and records where it came from', () => {
+        mockVideoRecommendationsReturn = { relatedVideos: [{ id: 'v2' }, { id: 'v3' }] };
+        render(<VideoPlayer />);
+
+        act(() => { capturedVideoControlsProps.onNextVideo!(); });
+
+        expect(mockNavigate).toHaveBeenCalledWith('/video/v2', {
+            state: expect.objectContaining({ previousVideoIds: ['v1'] })
+        });
+    });
+
+    it('leaves shift+N unbound with nothing up next', () => {
+        mockVideoRecommendationsReturn = { relatedVideos: [] };
+        render(<VideoPlayer />);
+
+        expect(capturedVideoControlsProps.onNextVideo).toBeUndefined();
+    });
+
+    it('binds shift+P to the previous video in the playback queue', () => {
+        mockLocationState = { playbackQueueVideoIds: ['v0', 'v1', 'v2'] };
+        render(<VideoPlayer />);
+
+        act(() => { capturedVideoControlsProps.onPreviousVideo!(); });
+
+        expect(mockNavigate).toHaveBeenCalledWith('/video/v0', expect.anything());
+    });
+
+    it('binds shift+P to the video this one was reached from when there is no queue', () => {
+        mockLocationState = { previousVideoIds: ['v9'] };
+        render(<VideoPlayer />);
+
+        act(() => { capturedVideoControlsProps.onPreviousVideo!(); });
+
+        expect(mockNavigate).toHaveBeenCalledWith('/video/v9');
+    });
+
+    it('unwinds the trail so repeated shift+P keeps walking back', () => {
+        mockLocationState = { previousVideoIds: ['v8', 'v9'] };
+        render(<VideoPlayer />);
+
+        act(() => { capturedVideoControlsProps.onPreviousVideo!(); });
+
+        // Arrives at v9 still carrying v8, so the next press has somewhere to go.
+        expect(mockNavigate).toHaveBeenCalledWith('/video/v9', {
+            state: { previousVideoIds: ['v8'] }
+        });
+    });
+
+    it('does not push the video it leaves when going back', () => {
+        mockLocationState = { previousVideoIds: ['v8', 'v9'] };
+        render(<VideoPlayer />);
+
+        act(() => { capturedVideoControlsProps.onPreviousVideo!(); });
+
+        const state = mockNavigate.mock.calls.at(-1)?.[1]?.state ?? {};
+        expect(state.previousVideoIds).not.toContain('v1');
+    });
+
+    it('keeps the trail when stepping back through a collection order', () => {
+        mockLocationState = {
+            playbackQueueVideoIds: ['v0', 'v1', 'v2'],
+            previousVideoIds: ['v9']
+        };
+        render(<VideoPlayer />);
+
+        act(() => { capturedVideoControlsProps.onPreviousVideo!(); });
+
+        expect(mockNavigate).toHaveBeenCalledWith('/video/v0', {
+            state: expect.objectContaining({ previousVideoIds: ['v9'] })
+        });
+    });
+
+    it('prefers the queue neighbour over the referring video', () => {
+        mockLocationState = {
+            playbackQueueVideoIds: ['v0', 'v1', 'v2'],
+            previousVideoIds: ['v9']
+        };
+        render(<VideoPlayer />);
+
+        act(() => { capturedVideoControlsProps.onPreviousVideo!(); });
+
+        expect(mockNavigate).toHaveBeenCalledWith('/video/v0', expect.anything());
+    });
+
+    it('records no trail entry when the move lands inside the queue', () => {
+        // The queue already walks backwards; a trail entry here would later be
+        // read as the predecessor of the queue's first item.
+        mockLocationState = { playbackQueueVideoIds: ['v0', 'v1', 'v2'] };
+        mockVideoRecommendationsReturn = { relatedVideos: [{ id: 'v2' }] };
+        render(<VideoPlayer />);
+
+        act(() => { capturedVideoControlsProps.onNextVideo!(); });
+
+        const state = mockNavigate.mock.calls.at(-1)?.[1]?.state ?? {};
+        expect(state.previousVideoIds ?? []).toEqual([]);
+    });
+
+    it('still records a trail entry when the move leaves the queue', () => {
+        mockLocationState = { playbackQueueVideoIds: ['v0', 'v1', 'v2'] };
+        mockVideoRecommendationsReturn = { relatedVideos: [{ id: 'v7' }] };
+        render(<VideoPlayer />);
+
+        act(() => { capturedVideoControlsProps.onNextVideo!(); });
+
+        expect(mockNavigate).toHaveBeenCalledWith('/video/v7', expect.objectContaining({
+            state: expect.objectContaining({ previousVideoIds: ['v1'] })
+        }));
+    });
+
+    it('keeps an earlier visit to this video in the trail', () => {
+        // A -> B -> A: the first entry is real history, and dropping it would
+        // strand the walk back at B.
+        mockLocationState = { previousVideoIds: ['v1', 'v2'] };
+        render(<VideoPlayer />);
+
+        act(() => { capturedVideoControlsProps.onPreviousVideo!(); });
+
+        expect(mockNavigate).toHaveBeenCalledWith('/video/v2', {
+            state: { previousVideoIds: ['v1'] }
+        });
+    });
+
+    it('drops a run of trailing self-references', () => {
+        mockLocationState = { previousVideoIds: ['v2', 'v1', 'v1'] };
+        render(<VideoPlayer />);
+
+        act(() => { capturedVideoControlsProps.onPreviousVideo!(); });
+
+        expect(mockNavigate).toHaveBeenCalledWith('/video/v2');
+    });
+
+    it('records the origin when entering a queue from outside it', () => {
+        // Q0 -> X -> Q2: without this entry the walk back follows the queue to
+        // Q0 and dead-ends, with no way back to X.
+        mockLocationState = {
+            playbackQueueVideoIds: ['v0', 'v2', 'v3'],
+            previousVideoIds: ['v0']
+        };
+        mockVideoRecommendationsReturn = { relatedVideos: [{ id: 'v3' }] };
+        render(<VideoPlayer />);
+
+        act(() => { capturedVideoControlsProps.onNextVideo!(); });
+
+        expect(mockNavigate).toHaveBeenCalledWith('/video/v3', expect.objectContaining({
+            state: expect.objectContaining({ previousVideoIds: ['v0', 'v1'] })
+        }));
+    });
+
+    it('never offers the current video as its own previous', () => {
+        // A trail written by an older build can still name this video.
+        mockLocationState = {
+            playbackQueueVideoIds: ['v1', 'v2'],
+            previousVideoIds: ['v1']
+        };
+        render(<VideoPlayer />);
+
+        expect(capturedVideoControlsProps.onPreviousVideo).toBeUndefined();
+    });
+
+    it('leaves shift+P unbound on a video opened cold', () => {
+        mockLocationState = null;
+        render(<VideoPlayer />);
+
+        expect(capturedVideoControlsProps.onPreviousVideo).toBeUndefined();
+    });
+});

@@ -1,0 +1,203 @@
+import { Box, Menu, MenuItem } from '@mui/material';
+import React from 'react';
+import { useCollection } from '../../contexts/CollectionContext';
+import { useLanguage } from '../../contexts/LanguageContext';
+import { useSnackbar } from '../../contexts/SnackbarContext';
+import { useVideoActions, useVideoTags } from '../../contexts/VideoContext';
+import { useShareVideo } from '../../hooks/useShareVideo';
+import { Video } from '../../types';
+import { neutral, overlay } from '../../theme/colors';
+import CollectionModal from '../CollectionModal';
+import ConfirmationModal from '../ConfirmationModal';
+import TagsModal from '../TagsModal';
+import VideoKebabMenuButtons from '../VideoPlayer/VideoInfo/VideoKebabMenuButtons';
+
+interface VideoCardActionsProps {
+    video: Video;
+    playerMenuAnchor: HTMLElement | null;
+    setPlayerMenuAnchor: (anchor: HTMLElement | null) => void;
+    handlePlayerSelect: (player: string) => void;
+    getAvailablePlayers: () => Array<{ id: string; name: string }>;
+    showDeleteModal: boolean;
+    setShowDeleteModal: (show: boolean) => void;
+    confirmDelete: () => void;
+    isDeleting: boolean;
+    handleToggleVisibility: () => void;
+    isTogglingVisibility?: boolean;
+    canDelete: boolean;
+    isMobile: boolean;
+    isTouch: boolean;
+    isHovered: boolean;
+}
+
+export const VideoCardActions: React.FC<VideoCardActionsProps> = ({
+    video,
+    playerMenuAnchor,
+    setPlayerMenuAnchor,
+    handlePlayerSelect,
+    getAvailablePlayers,
+    showDeleteModal,
+    setShowDeleteModal,
+    confirmDelete,
+    isDeleting,
+    handleToggleVisibility,
+    isTogglingVisibility = false,
+    canDelete,
+    isMobile,
+    isTouch,
+    isHovered
+}) => {
+    const { t } = useLanguage();
+    const { collections: allCollections, addToCollection, createCollection, removeFromCollection } = useCollection();
+    const { updateVideo } = useVideoActions();
+    const { availableTags } = useVideoTags();
+    const { handleShare } = useShareVideo(video);
+    const { showSnackbar } = useSnackbar();
+    const [showCollectionModal, setShowCollectionModal] = React.useState(false);
+    const [showTagsModal, setShowTagsModal] = React.useState(false);
+    const [isTogglingLock, setIsTogglingLock] = React.useState(false);
+
+    const isLocked = video.autoDeleteLocked === 1;
+
+    const handleToggleLock = async () => {
+        if (!video.id || isTogglingLock) return;
+        const nextLocked = isLocked ? null : 1;
+        setIsTogglingLock(true);
+        try {
+            const result = await updateVideo(video.id, { autoDeleteLocked: nextLocked });
+            if (!result.success) {
+                showSnackbar(result.error || t('error'), 'error');
+            }
+        } finally {
+            setIsTogglingLock(false);
+        }
+    };
+
+    // Calculate collections that contain THIS video
+    const currentVideoCollections = allCollections.filter(c => c.videos.includes(video.id));
+
+    const handleAddToCollection = async (collectionId: string) => {
+        if (!video.id) return;
+        await addToCollection(collectionId, video.id);
+    };
+
+    const handleCreateCollection = async (name: string) => {
+        if (!video.id) return;
+        await createCollection(name, video.id);
+    };
+
+    const handleRemoveFromCollection = async (collectionId: string) => {
+        if (!video.id) return;
+        await removeFromCollection(collectionId, video.id);
+    };
+
+    const handleSaveTags = async (tags: string[]) => {
+        if (!video.id) return;
+        const normalizedTags = Array.from(
+            new Set(tags.map((tag) => tag.trim()).filter(Boolean))
+        );
+        await updateVideo(video.id, { tags: normalizedTags });
+    };
+
+    const handlePlayerMenuClose = () => {
+        setPlayerMenuAnchor(null);
+    };
+
+    return (
+        <>
+            <Box
+                sx={{
+                    position: 'absolute',
+                    top: 8,
+                    right: 8,
+                    zIndex: 10,
+                    opacity: (!isMobile && !isTouch && !isHovered) ? 0 : 1,
+                    transition: 'opacity 0.2s',
+                }}
+                onClick={(e) => {
+                    e.stopPropagation();
+                }}
+            >
+                <VideoKebabMenuButtons
+                    onPlayWith={(anchor) => setPlayerMenuAnchor(anchor)}
+                    onShare={handleShare}
+                    onAddToCollection={() => setShowCollectionModal(true)}
+                    onDelete={canDelete ? () => setShowDeleteModal(true) : undefined}
+                    isDeleting={isDeleting}
+                    isTogglingVisibility={isTogglingVisibility}
+                    onToggleVisibility={handleToggleVisibility}
+                    isTogglingLock={isTogglingLock}
+                    onToggleLock={handleToggleLock}
+                    isLocked={isLocked}
+                    onAddTag={() => setShowTagsModal(true)}
+                    video={video}
+                    sx={{
+                        color: neutral.white,
+                        bgcolor: overlay.black60,
+                        '&:hover': {
+                            bgcolor: overlay.black80,
+                            color: 'primary.main'
+                        }
+                    }}
+                />
+            </Box>
+
+            <Menu
+                anchorEl={playerMenuAnchor}
+                open={Boolean(playerMenuAnchor)}
+                onClose={handlePlayerMenuClose}
+                anchorOrigin={{
+                    vertical: 'bottom',
+                    horizontal: 'right',
+                }}
+                transformOrigin={{
+                    vertical: 'top',
+                    horizontal: 'right',
+                }}
+            >
+                {getAvailablePlayers().map((player) => (
+                    <MenuItem key={player.id} onClick={() => handlePlayerSelect(player.id)}>
+                        {player.name}
+                    </MenuItem>
+                ))}
+                <MenuItem onClick={() => handlePlayerSelect('copy')}>{t('copyUrl')}</MenuItem>
+            </Menu>
+
+            {showDeleteModal && (
+                <ConfirmationModal
+                    isOpen={showDeleteModal}
+                    onClose={() => setShowDeleteModal(false)}
+                    onConfirm={confirmDelete}
+                    title={t('deleteVideo')}
+                    message={`${t('confirmDelete')} "${video.title}"?`}
+                    confirmText={t('delete')}
+                    cancelText={t('cancel')}
+                    isDanger={true}
+                />
+            )}
+
+            {showCollectionModal && (
+                <CollectionModal
+                    open={showCollectionModal}
+                    onClose={() => setShowCollectionModal(false)}
+                    videoCollections={currentVideoCollections}
+                    collections={allCollections}
+                    onAddToCollection={handleAddToCollection}
+                    onCreateCollection={handleCreateCollection}
+                    onRemoveFromCollection={handleRemoveFromCollection}
+                />
+            )}
+
+            {showTagsModal && (
+                <TagsModal
+                    open={showTagsModal}
+                    onClose={() => setShowTagsModal(false)}
+                    identityKey={video.id}
+                    videoTags={video.tags || []}
+                    availableTags={availableTags}
+                    onSave={handleSaveTags}
+                />
+            )}
+        </>
+    );
+};

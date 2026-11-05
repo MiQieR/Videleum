@@ -1,0 +1,797 @@
+import { createTheme, ThemeProvider } from '@mui/material/styles';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import SubscriptionsPage from '../SubscriptionsPage';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router';
+
+// ── Mutable mock data (overridden per test) ──────────────────────────────────
+
+let mockSubscriptions: unknown[] = [];
+let mockTasks: unknown[] = [];
+const mockRefetchSubscriptions = vi.fn();
+const mockRefetchTasks = vi.fn();
+const mockShowSnackbar = vi.fn();
+let mockUserRole = 'admin';
+
+// ── Mocks ────────────────────────────────────────────────────────────────────
+
+vi.mock('@tanstack/react-query', () => ({
+    useQuery: ({ queryKey }: { queryKey: string[] }) => {
+        if (queryKey[0] === 'subscriptions') {
+            return { data: mockSubscriptions, refetch: mockRefetchSubscriptions };
+        }
+        if (queryKey[0] === 'subscriptionTasks') {
+            return { data: mockTasks, refetch: mockRefetchTasks };
+        }
+        return { data: [], refetch: vi.fn() };
+    },
+}));
+
+vi.mock('../../utils/apiClient', () => ({
+    api: {
+        get: vi.fn(() => Promise.resolve({ data: [] })),
+        delete: vi.fn(() => Promise.resolve({ data: {} })),
+        put: vi.fn(() => Promise.resolve({ data: {} })),
+    },
+}));
+
+vi.mock('../../contexts/LanguageContext', () => ({
+    useLanguage: () => ({
+        t: (key: string, params?: Record<string, string>) => {
+            if (params) {
+                return Object.entries(params).reduce(
+                    (acc, [k, v]) => acc.replace(`{${k}}`, v),
+                    key,
+                );
+            }
+            return key;
+        },
+    }),
+}));
+
+vi.mock('../../contexts/AuthContext', () => ({
+    useAuth: () => ({ userRole: mockUserRole }),
+}));
+
+vi.mock('../../contexts/SnackbarContext', () => ({
+    useSnackbar: () => ({ showSnackbar: mockShowSnackbar }),
+}));
+
+// NOTE: ConfirmationModal is NOT mocked — we render the real component
+// and interact with the real MUI Dialog.
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+const theme = createTheme();
+
+const NavigationControls = () => {
+    const location = useLocation();
+    const navigate = useNavigate();
+    return <>
+        <output data-testid="location">{location.pathname}{location.search}</output>
+        <button onClick={() => navigate(-1)}>Back</button>
+        <button onClick={() => navigate(1)}>Forward</button>
+    </>;
+};
+
+const renderPage = (url = '/subscriptions') =>
+    render(
+        <MemoryRouter initialEntries={[url]}>
+        <ThemeProvider theme={theme}>
+            <SubscriptionsPage />
+            <NavigationControls />
+        </ThemeProvider>
+        </MemoryRouter>
+    );
+
+const mockViewport = (isMobile: boolean) => {
+    vi.mocked(window.matchMedia).mockImplementation((query: string) => ({
+        matches: isMobile && query.includes('max-width'),
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+    }));
+};
+
+const makeSub = (overrides: Record<string, unknown> = {}) => ({
+    id: 'sub-1',
+    author: 'TestAuthor',
+    authorUrl: 'https://example.com/@TestAuthor',
+    interval: 30,
+    lastCheck: 1700000000000,
+    downloadCount: 42,
+    createdAt: 1690000000000,
+    platform: 'youtube',
+    paused: 0,
+    ...overrides,
+});
+
+const makeTask = (overrides: Record<string, unknown> = {}) => ({
+    id: 'task-1',
+    subscriptionId: 'sub-1',
+    authorUrl: 'https://example.com/@Author',
+    author: 'TaskAuthor',
+    platform: 'youtube',
+    status: 'active' as const,
+    totalVideos: 50,
+    downloadedCount: 10,
+    skippedCount: 2,
+    failedCount: 1,
+    currentVideoIndex: 20,
+    createdAt: 1700000000000,
+    ...overrides,
+});
+
+// ── Import api mock for assertions ──────────────────────────────────────────
+
+import { api } from '../../utils/apiClient';
+
+// ── Tests ───────────────────────────────────────────────────────────────────
+
+describe('SubscriptionsPage', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mockViewport(false);
+        mockSubscriptions = [];
+        mockTasks = [];
+        mockUserRole = 'admin';
+    });
+
+    // ── 1. Page title ────────────────────────────────────────────────────
+
+    it('renders the page title "subscriptions"', () => {
+        renderPage();
+        expect(screen.getByText('subscriptions')).toBeInTheDocument();
+    });
+
+    // ── 2. Empty subscriptions ───────────────────────────────────────────
+
+    it('shows a subscription-specific message when subscriptions list is empty', () => {
+        renderPage();
+        expect(screen.getByText('noSubscriptions')).toBeInTheDocument();
+    });
+
+    it('filters authors and playlists from direct links, retaining unknown types in the overview', () => {
+        mockSubscriptions = [
+            makeSub({ id: 'legacy', author: 'Legacy Author' }),
+            makeSub({ id: 'author', author: 'Explicit Author', subscriptionType: 'author' }),
+            makeSub({ id: 'playlist', author: 'Single Playlist', subscriptionType: 'playlist' }),
+            makeSub({ id: 'watcher', author: 'Playlist Watcher', subscriptionType: 'channel_playlists' }),
+            makeSub({ id: 'future', author: 'Future Type', subscriptionType: 'future' }),
+        ];
+        renderPage('/subscriptions?type=playlist&keep=value');
+        expect(screen.getByRole('heading', { level: 1, name: 'playlistSubscriptions' })).toBeInTheDocument();
+        expect(screen.getByRole('tab', { name: 'allSubscriptions (5)' })).toBeInTheDocument();
+        expect(screen.getByRole('tab', { name: 'authorSubscriptions (2)' })).toBeInTheDocument();
+        expect(screen.getByRole('tab', { name: 'playlistSubscriptions (2)' })).toHaveAttribute('aria-selected', 'true');
+        expect(screen.getByText('Single Playlist')).toBeInTheDocument();
+        expect(screen.getByText('Playlist Watcher (playlistsWatcher)')).toBeInTheDocument();
+        expect(screen.queryByText('Legacy Author')).not.toBeInTheDocument();
+        expect(screen.queryByText('Future Type')).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('tab', { name: 'authorSubscriptions (2)' }));
+        expect(screen.getByTestId('location')).toHaveTextContent('/subscriptions?type=author&keep=value');
+        expect(screen.getByText('Legacy Author')).toBeInTheDocument();
+        expect(screen.getByText('Explicit Author')).toBeInTheDocument();
+        expect(screen.queryByText('Single Playlist')).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('tab', { name: 'allSubscriptions (5)' }));
+        expect(screen.getByTestId('location')).toHaveTextContent('/subscriptions?keep=value');
+        expect(screen.getByText('Future Type')).toBeInTheDocument();
+        expect(api.put).not.toHaveBeenCalled();
+        expect(api.delete).not.toHaveBeenCalled();
+    });
+
+    it('restores the category on browser back and forward navigation', async () => {
+        mockSubscriptions = [makeSub({ author: 'Alice' })];
+        renderPage();
+        fireEvent.click(screen.getByRole('tab', { name: 'authorSubscriptions (1)' }));
+        fireEvent.click(screen.getByRole('tab', { name: 'playlistSubscriptions (0)' }));
+        expect(screen.getByText('noPlaylistSubscriptions')).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+        await waitFor(() => expect(screen.getByRole('tab', { name: 'authorSubscriptions (1)' })).toHaveAttribute('aria-selected', 'true'));
+        expect(screen.getByText('Alice')).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Forward' }));
+        await waitFor(() => expect(screen.getByText('noPlaylistSubscriptions')).toBeInTheDocument());
+    });
+
+    it('filters before paginating and resets the page when the category changes', () => {
+        mockSubscriptions = [
+            ...Array.from({ length: 12 }, (_, i) => makeSub({ id: `author-${i}`, author: `Author ${i}` })),
+            makeSub({ id: 'playlist', author: 'Only Playlist', subscriptionType: 'playlist' }),
+        ];
+        renderPage();
+        fireEvent.click(screen.getByRole('button', { name: 'Go to next page' }));
+        expect(screen.getByText('Author 10')).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('tab', { name: 'playlistSubscriptions (1)' }));
+        expect(screen.getByText('Only Playlist')).toBeInTheDocument();
+        expect(screen.queryByText('Author 10')).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Go to next page' })).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole('tab', { name: 'authorSubscriptions (12)' }));
+        expect(screen.getByText('Author 0')).toBeInTheDocument();
+        expect(screen.queryByText('Author 10')).not.toBeInTheDocument();
+        expect(screen.getByText('1–10 of 12')).toBeInTheDocument();
+    });
+
+    it('keeps backfill tasks independent of the subscription category and preserves filtered actions', async () => {
+        mockSubscriptions = [makeSub({ id: 'playlist', author: 'List', subscriptionType: 'playlist' })];
+        mockTasks = [makeTask({ author: 'Author Backfill' })];
+        renderPage('/subscriptions?type=playlist');
+        expect(screen.getByText('Author Backfill')).toBeInTheDocument();
+        expect(screen.getByText('subscriptionTasksAllCategories')).toBeInTheDocument();
+        fireEvent.click(screen.getByTitle('pauseSubscription'));
+        await waitFor(() => expect(api.put).toHaveBeenCalledWith('/subscriptions/playlist/pause'));
+    });
+
+    it('uses the overview for an unknown category and keeps visitor actions hidden', () => {
+        mockUserRole = 'visitor';
+        mockSubscriptions = [makeSub({ author: 'Unknown Type', subscriptionType: 'future' })];
+        renderPage('/subscriptions?type=future');
+        expect(screen.getByRole('tab', { name: 'allSubscriptions (1)' })).toHaveAttribute('aria-selected', 'true');
+        expect(screen.getByText('Unknown Type')).toBeInTheDocument();
+        expect(screen.queryByTitle('pauseSubscription')).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'unsubscribe' })).not.toBeInTheDocument();
+    });
+
+    // ── 3. Renders subscriptions table with data ─────────────────────────
+
+    it('renders subscription rows with author, platform, interval, lastCheck, and downloads', () => {
+        mockSubscriptions = [
+            makeSub({ id: 'sub-1', author: 'Alice', platform: 'youtube', interval: 60, downloadCount: 5 }),
+            makeSub({ id: 'sub-2', author: 'Bob', platform: 'rumble', interval: 120, downloadCount: 99 }),
+        ];
+        renderPage();
+
+        // Authors rendered as links
+        expect(screen.getByText('Alice')).toBeInTheDocument();
+        expect(screen.getByText('Bob')).toBeInTheDocument();
+
+        // Platforms
+        expect(screen.getByText('youtube')).toBeInTheDocument();
+        expect(screen.getByText('rumble')).toBeInTheDocument();
+
+        // Intervals (with translated "minutes" suffix)
+        expect(screen.getByText('60 minutes')).toBeInTheDocument();
+        expect(screen.getByText('120 minutes')).toBeInTheDocument();
+
+        // Download counts
+        expect(screen.getByText('5')).toBeInTheDocument();
+        expect(screen.getByText('99')).toBeInTheDocument();
+    });
+
+    it('renders a two-line check header', () => {
+        renderPage();
+
+        expect(screen.getByText('lastCheck /')).toBeInTheDocument();
+        expect(screen.getByText('nextCheck')).toBeInTheDocument();
+    });
+
+    it('formats lastCheck and nextCheck as YYYY-MM-DD HH:mm', () => {
+        const lastCheck = new Date('2025-03-05T12:34:56Z').getTime();
+        const nextCheck = lastCheck + (60 * 60 * 1000);
+        const formatDateTimeMinutes = (value: number) => {
+            const date = new Date(value);
+            return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+        };
+
+        mockSubscriptions = [makeSub({ lastCheck, interval: 60 })];
+        renderPage();
+
+        expect(screen.getByText(formatDateTimeMinutes(lastCheck))).toBeInTheDocument();
+        expect(screen.getByText(formatDateTimeMinutes(nextCheck))).toBeInTheDocument();
+    });
+
+    // ── 4. Unsubscribe flow (real ConfirmationModal) ──────────────────────
+
+    it('opens real modal and calls api.delete on confirm unsubscribe', async () => {
+        mockSubscriptions = [makeSub({ id: 'sub-99', author: 'RemoveMe' })];
+        renderPage();
+
+        // Click the delete icon button (has title="unsubscribe")
+        fireEvent.click(screen.getByTitle('unsubscribe'));
+
+        // Real ConfirmationModal should open as a dialog
+        const dialog = screen.getByRole('dialog');
+        expect(within(dialog).getByText('confirmUnsubscribe')).toBeInTheDocument();
+
+        // Confirm — use getByRole('button') to distinguish from title text
+        // (title="unsubscribe" and confirmText="unsubscribe" are the same)
+        await act(async () => {
+            fireEvent.click(within(dialog).getByRole('button', { name: 'unsubscribe' }));
+        });
+
+        expect(api.delete).toHaveBeenCalledWith('/subscriptions/sub-99');
+        expect(mockShowSnackbar).toHaveBeenCalledWith('unsubscribedSuccessfully');
+        expect(mockRefetchSubscriptions).toHaveBeenCalled();
+    });
+
+    // ── 5. Pause subscription ────────────────────────────────────────────
+
+    it('calls api.put to pause a subscription', async () => {
+        mockSubscriptions = [makeSub({ id: 'sub-5', paused: 0 })];
+        renderPage();
+
+        const pauseBtn = screen.getByTitle('pauseSubscription');
+        await act(async () => {
+            fireEvent.click(pauseBtn);
+        });
+
+        expect(api.put).toHaveBeenCalledWith('/subscriptions/sub-5/pause');
+        expect(mockShowSnackbar).toHaveBeenCalledWith('subscriptionPaused');
+        expect(mockRefetchSubscriptions).toHaveBeenCalled();
+    });
+
+    // ── 6. Resume subscription ───────────────────────────────────────────
+
+    it('calls api.put to resume a paused subscription', async () => {
+        mockSubscriptions = [makeSub({ id: 'sub-6', paused: 1 })];
+        renderPage();
+
+        const resumeBtn = screen.getByTitle('resumeSubscription');
+        await act(async () => {
+            fireEvent.click(resumeBtn);
+        });
+
+        expect(api.put).toHaveBeenCalledWith('/subscriptions/sub-6/resume');
+        expect(mockShowSnackbar).toHaveBeenCalledWith('subscriptionResumed');
+        expect(mockRefetchSubscriptions).toHaveBeenCalled();
+    });
+
+    it('switches a subscription interval cell into edit mode', () => {
+        mockSubscriptions = [makeSub({ id: 'sub-edit', interval: 45 })];
+        renderPage();
+
+        fireEvent.click(screen.getByTitle('editInterval'));
+
+        expect(screen.getByLabelText('checkIntervalMinutes')).toBeInTheDocument();
+        expect(screen.getByTitle('save')).toBeInTheDocument();
+        expect(screen.getByTitle('cancel')).toBeInTheDocument();
+    });
+
+    it('updates a subscription interval from the row editor', async () => {
+        mockSubscriptions = [makeSub({ id: 'sub-edit', interval: 45 })];
+        renderPage();
+
+        fireEvent.click(screen.getByTitle('editInterval'));
+        fireEvent.change(screen.getByLabelText('checkIntervalMinutes'), { target: { value: '90' } });
+
+        await act(async () => {
+            fireEvent.click(screen.getByTitle('save'));
+        });
+
+        expect(api.put).toHaveBeenCalledWith('/subscriptions/sub-edit', { interval: 90 });
+        expect(mockShowSnackbar).toHaveBeenCalledWith('subscriptionUpdated');
+        expect(mockRefetchSubscriptions).toHaveBeenCalled();
+    });
+
+    it('cancels subscription interval editing with Escape', () => {
+        mockSubscriptions = [makeSub({ id: 'sub-edit', interval: 45 })];
+        renderPage();
+
+        fireEvent.click(screen.getByTitle('editInterval'));
+        fireEvent.keyDown(screen.getByLabelText('checkIntervalMinutes'), { key: 'Escape' });
+
+        expect(screen.queryByLabelText('checkIntervalMinutes')).not.toBeInTheDocument();
+        expect(screen.getByText('45 minutes')).toBeInTheDocument();
+    });
+
+    it('handles api error during subscription interval update gracefully', async () => {
+        (api.put as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('fail'));
+        mockSubscriptions = [makeSub({ id: 'sub-edit', interval: 45 })];
+        renderPage();
+
+        fireEvent.click(screen.getByTitle('editInterval'));
+        fireEvent.change(screen.getByLabelText('checkIntervalMinutes'), { target: { value: '90' } });
+
+        await act(async () => {
+            fireEvent.click(screen.getByTitle('save'));
+        });
+
+        expect(mockShowSnackbar).toHaveBeenCalledWith('subscriptionUpdateFailed');
+        expect(screen.getByLabelText('checkIntervalMinutes')).toBeInTheDocument();
+    });
+
+    it('does not submit invalid subscription interval strings', async () => {
+        mockSubscriptions = [makeSub({ id: 'sub-edit', interval: 45 })];
+        renderPage();
+
+        fireEvent.click(screen.getByTitle('editInterval'));
+        fireEvent.change(screen.getByLabelText('checkIntervalMinutes'), { target: { value: '1.5' } });
+
+        await act(async () => {
+            fireEvent.click(screen.getByTitle('save'));
+        });
+
+        expect(api.put).not.toHaveBeenCalled();
+        expect(screen.getByTitle('save')).toBeDisabled();
+    });
+
+    it('renders subscription retention status', () => {
+        mockSubscriptions = [
+            makeSub({ id: 'sub-retention-on', author: 'Alice', retentionDays: 14 }),
+            makeSub({ id: 'sub-retention-off', author: 'Bob', retentionDays: null }),
+        ];
+        renderPage();
+
+        expect(screen.getByText('14 retentionDaysUnit')).toBeInTheDocument();
+        expect(screen.getByText('retentionDaysDisabled')).toBeInTheDocument();
+    });
+
+    it('opens subscription retention help from the table header', () => {
+        mockSubscriptions = [makeSub({ id: 'sub-retention', retentionDays: 14 })];
+        renderPage();
+
+        fireEvent.click(screen.getByLabelText('retentionDaysHelpTitle'));
+
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+        expect(screen.getByText('retentionDaysHelpTitle')).toBeInTheDocument();
+        expect(screen.getByText('retentionDaysHelpMessage')).toBeInTheDocument();
+    });
+
+    it('updates a subscription retention policy from the row editor', async () => {
+        mockSubscriptions = [makeSub({ id: 'sub-retention', retentionDays: null })];
+        renderPage();
+
+        fireEvent.click(screen.getByTitle('editRetention'));
+        fireEvent.change(screen.getByLabelText('retentionDays'), { target: { value: '21' } });
+
+        await act(async () => {
+            fireEvent.click(screen.getByTitle('save'));
+        });
+
+        expect(api.put).toHaveBeenCalledWith('/subscriptions/sub-retention', { retentionDays: 21 });
+        expect(mockShowSnackbar).toHaveBeenCalledWith('retentionDaysUpdated');
+        expect(mockRefetchSubscriptions).toHaveBeenCalled();
+    });
+
+    it('disables a subscription retention policy with an empty value', async () => {
+        mockSubscriptions = [makeSub({ id: 'sub-retention', retentionDays: 21 })];
+        renderPage();
+
+        fireEvent.click(screen.getByTitle('editRetention'));
+        fireEvent.change(screen.getByLabelText('retentionDays'), { target: { value: '' } });
+
+        await act(async () => {
+            fireEvent.click(screen.getByTitle('save'));
+        });
+
+        expect(api.put).toHaveBeenCalledWith('/subscriptions/sub-retention', { retentionDays: null });
+    });
+
+    it('does not submit invalid subscription retention strings', async () => {
+        mockSubscriptions = [makeSub({ id: 'sub-retention', retentionDays: null })];
+        renderPage();
+
+        fireEvent.click(screen.getByTitle('editRetention'));
+        fireEvent.change(screen.getByLabelText('retentionDays'), { target: { value: '1.5' } });
+
+        await act(async () => {
+            fireEvent.click(screen.getByTitle('save'));
+        });
+
+        expect(api.put).not.toHaveBeenCalled();
+        expect(screen.getByTitle('save')).toBeDisabled();
+    });
+
+    it('shows interval details and allows interval editing on mobile layout', () => {
+        mockViewport(true);
+        mockSubscriptions = [makeSub({ id: 'sub-edit', interval: 45 })];
+        renderPage();
+
+        expect(screen.getByText('interval: 45 minutes')).toBeInTheDocument();
+
+        fireEvent.click(screen.getByTitle('editInterval'));
+
+        expect(screen.getByLabelText('checkIntervalMinutes')).toBeInTheDocument();
+        expect(screen.queryByText('interval: 45 minutes')).not.toBeInTheDocument();
+    });
+
+    // ── 7. Tasks section hidden when no tasks ────────────────────────────
+
+    it('does not render tasks section when tasks array is empty', () => {
+        mockTasks = [];
+        renderPage();
+
+        expect(screen.queryByText('continuousDownloadTasks')).not.toBeInTheDocument();
+    });
+
+    // ── 8. Tasks section visible with progress bars ──────────────────────
+
+    it('renders tasks section with progress info when tasks exist', () => {
+        mockTasks = [makeTask({ id: 'task-1', author: 'Streamer', currentVideoIndex: 10, totalVideos: 20 })];
+        renderPage();
+
+        expect(screen.getByText('continuousDownloadTasks')).toBeInTheDocument();
+        expect(screen.getByText('Streamer')).toBeInTheDocument();
+        // Progress text "10 / 20"
+        expect(screen.getByText('10 / 20')).toBeInTheDocument();
+        // LinearProgress rendered (role="progressbar")
+        expect(screen.getByRole('progressbar')).toBeInTheDocument();
+    });
+
+    // ── 9. Task progress calculation ─────────────────────────────────────
+
+    it('calculates task progress correctly (currentVideoIndex / totalVideos * 100)', () => {
+        mockTasks = [makeTask({ currentVideoIndex: 25, totalVideos: 50 })];
+        renderPage();
+
+        const progressBar = screen.getByRole('progressbar');
+        // MUI LinearProgress sets aria-valuenow
+        expect(progressBar).toHaveAttribute('aria-valuenow', '50');
+    });
+
+    it('shows 0 progress when totalVideos is 0', () => {
+        mockTasks = [makeTask({ currentVideoIndex: 0, totalVideos: 0 })];
+        renderPage();
+
+        const progressBar = screen.getByRole('progressbar');
+        expect(progressBar).toHaveAttribute('aria-valuenow', '0');
+    });
+
+    // ── 10. Cancel task flow (real ConfirmationModal) ─────────────────────
+
+    it('opens real cancel modal and calls api.delete on confirm', async () => {
+        mockTasks = [makeTask({ id: 'task-cancel', status: 'active' })];
+        renderPage();
+
+        fireEvent.click(screen.getByTitle('cancelTask'));
+
+        const dialog = screen.getByRole('dialog');
+        expect(within(dialog).getByText('confirmCancelTask')).toBeInTheDocument();
+
+        await act(async () => {
+            fireEvent.click(within(dialog).getByRole('button', { name: 'cancelTask' }));
+        });
+
+        expect(api.delete).toHaveBeenCalledWith('/subscriptions/tasks/task-cancel');
+        expect(mockShowSnackbar).toHaveBeenCalledWith('taskCancelled');
+        expect(mockRefetchTasks).toHaveBeenCalled();
+    });
+
+    // ── 11. Delete task flow (real ConfirmationModal) ─────────────────────
+
+    it('opens real delete modal and calls api.delete for a completed task', async () => {
+        mockTasks = [makeTask({ id: 'task-del', status: 'completed' })];
+        renderPage();
+
+        fireEvent.click(screen.getByTitle('deleteTask'));
+
+        const dialog = screen.getByRole('dialog');
+        expect(within(dialog).getByText('confirmDeleteTask')).toBeInTheDocument();
+
+        await act(async () => {
+            fireEvent.click(within(dialog).getByRole('button', { name: 'deleteTask' }));
+        });
+
+        expect(api.delete).toHaveBeenCalledWith('/subscriptions/tasks/task-del/delete');
+        expect(mockShowSnackbar).toHaveBeenCalledWith('taskDeleted');
+        expect(mockRefetchTasks).toHaveBeenCalled();
+    });
+
+    it('opens real delete modal for a cancelled task', async () => {
+        mockTasks = [makeTask({ id: 'task-del-cancelled', status: 'cancelled' })];
+        renderPage();
+
+        fireEvent.click(screen.getByTitle('deleteTask'));
+
+        const dialog = screen.getByRole('dialog');
+        await act(async () => {
+            fireEvent.click(within(dialog).getByRole('button', { name: 'deleteTask' }));
+        });
+
+        expect(api.delete).toHaveBeenCalledWith('/subscriptions/tasks/task-del-cancelled/delete');
+    });
+
+    // ── 12. Clear finished tasks flow (real ConfirmationModal) ────────────
+
+    it('clears finished tasks via real modal confirm', async () => {
+        mockTasks = [makeTask({ id: 'task-done', status: 'completed' })];
+        renderPage();
+
+        fireEvent.click(screen.getByText('clearFinishedTasks'));
+
+        const dialog = screen.getByRole('dialog');
+        expect(within(dialog).getByText('confirmClearFinishedTasks')).toBeInTheDocument();
+
+        // clearFinishedTasks modal has confirmText="clear" (different from title)
+        await act(async () => {
+            fireEvent.click(within(dialog).getByRole('button', { name: 'clear' }));
+        });
+
+        expect(api.delete).toHaveBeenCalledWith('/subscriptions/tasks/clear-finished');
+        expect(mockShowSnackbar).toHaveBeenCalledWith('tasksCleared');
+        expect(mockRefetchTasks).toHaveBeenCalled();
+    });
+
+    // ── 13. Pause / resume task buttons ──────────────────────────────────
+
+    it('calls api.put to pause an active task', async () => {
+        mockTasks = [makeTask({ id: 'task-p', status: 'active' })];
+        renderPage();
+
+        const pauseBtn = screen.getByTitle('pauseTask');
+        await act(async () => {
+            fireEvent.click(pauseBtn);
+        });
+
+        expect(api.put).toHaveBeenCalledWith('/subscriptions/tasks/task-p/pause');
+        expect(mockShowSnackbar).toHaveBeenCalledWith('taskPaused');
+        expect(mockRefetchTasks).toHaveBeenCalled();
+    });
+
+    it('calls api.put to resume a paused task', async () => {
+        mockTasks = [makeTask({ id: 'task-r', status: 'paused' })];
+        renderPage();
+
+        const resumeBtn = screen.getByTitle('resumeTask');
+        await act(async () => {
+            fireEvent.click(resumeBtn);
+        });
+
+        expect(api.put).toHaveBeenCalledWith('/subscriptions/tasks/task-r/resume');
+        expect(mockShowSnackbar).toHaveBeenCalledWith('taskResumed');
+        expect(mockRefetchTasks).toHaveBeenCalled();
+    });
+
+    // ── 14. Visitor mode: action columns hidden ──────────────────────────
+
+    it('hides action columns and buttons for visitor role', () => {
+        mockUserRole = 'visitor';
+        mockSubscriptions = [makeSub({ id: 'sub-v' })];
+        mockTasks = [makeTask({ id: 'task-v', status: 'active' })];
+        renderPage();
+
+        // No unsubscribe / pause buttons for subscriptions
+        expect(screen.queryByTitle('unsubscribe')).not.toBeInTheDocument();
+        expect(screen.queryByTitle('pauseSubscription')).not.toBeInTheDocument();
+        expect(screen.queryByTitle('editInterval')).not.toBeInTheDocument();
+
+        // No task action buttons
+        expect(screen.queryByTitle('cancelTask')).not.toBeInTheDocument();
+        expect(screen.queryByTitle('pauseTask')).not.toBeInTheDocument();
+
+        // No "Clear finished tasks" button
+        expect(screen.queryByText('clearFinishedTasks')).not.toBeInTheDocument();
+
+        // The "actions" column header should not appear
+        expect(screen.queryByText('actions')).not.toBeInTheDocument();
+    });
+
+    // ── 15. Playlist subscription type shows suffix ──────────────────────
+
+    it('shows "(playlistsWatcher)" suffix for channel_playlists subscription type', () => {
+        mockSubscriptions = [
+            makeSub({
+                id: 'sub-pl',
+                author: 'PlaylistGuy',
+                subscriptionType: 'channel_playlists',
+            }),
+        ];
+        renderPage();
+
+        expect(screen.getByText('PlaylistGuy (playlistsWatcher)')).toBeInTheDocument();
+    });
+
+    // ── Additional edge-case tests ───────────────────────────────────────
+
+    it('shows "never" for subscriptions with no lastCheck', () => {
+        mockSubscriptions = [makeSub({ lastCheck: undefined })];
+        renderPage();
+
+        expect(screen.getAllByText('never')).toHaveLength(2);
+    });
+
+    it('closes unsubscribe modal when cancel button is clicked', async () => {
+        mockSubscriptions = [makeSub()];
+        renderPage();
+
+        fireEvent.click(screen.getByTitle('unsubscribe'));
+        const dialog = screen.getByRole('dialog');
+        expect(dialog).toBeInTheDocument();
+
+        // Click the cancel button in the real ConfirmationModal
+        fireEvent.click(within(dialog).getByRole('button', { name: 'cancel' }));
+
+        await waitFor(() => {
+            expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        });
+    });
+
+    it('closes unsubscribe modal when close icon is clicked', async () => {
+        mockSubscriptions = [makeSub()];
+        renderPage();
+
+        fireEvent.click(screen.getByTitle('unsubscribe'));
+        const dialog = screen.getByRole('dialog');
+        expect(dialog).toBeInTheDocument();
+
+        // Click the close icon button (aria-label="Close")
+        fireEvent.click(within(dialog).getByLabelText('Close'));
+
+        await waitFor(() => {
+            expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        });
+    });
+
+    it('displays task playlistName instead of author when available', () => {
+        mockTasks = [makeTask({ author: 'SomeAuthor', playlistName: 'MyPlaylist' })];
+        renderPage();
+
+        expect(screen.getByText('MyPlaylist')).toBeInTheDocument();
+        // "SomeAuthor" should not appear in the tasks table (it appears for subscriptions only if present)
+        // We have no subscriptions, so SomeAuthor should not be in the document
+        expect(screen.queryByText('SomeAuthor')).not.toBeInTheDocument();
+    });
+
+    it('shows "?" for totalVideos when it is 0', () => {
+        mockTasks = [makeTask({ currentVideoIndex: 3, totalVideos: 0 })];
+        renderPage();
+
+        expect(screen.getByText('3 / ?')).toBeInTheDocument();
+    });
+
+    it('handles api error during unsubscribe gracefully', async () => {
+        (api.delete as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('Network error'));
+        mockSubscriptions = [makeSub({ id: 'sub-err' })];
+        renderPage();
+
+        fireEvent.click(screen.getByTitle('unsubscribe'));
+        const dialog = screen.getByRole('dialog');
+
+        await act(async () => {
+            fireEvent.click(within(dialog).getByRole('button', { name: 'unsubscribe' }));
+        });
+
+        expect(mockShowSnackbar).toHaveBeenCalledWith('error');
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+    });
+
+    it('handles api error during pause subscription gracefully', async () => {
+        (api.put as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('fail'));
+        mockSubscriptions = [makeSub({ id: 'sub-pause-err', paused: 0 })];
+        renderPage();
+
+        await act(async () => {
+            fireEvent.click(screen.getByTitle('pauseSubscription'));
+        });
+
+        expect(mockShowSnackbar).toHaveBeenCalledWith('error');
+    });
+
+    it('handles api error during cancel task gracefully', async () => {
+        (api.delete as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('fail'));
+        mockTasks = [makeTask({ id: 'task-err', status: 'active' })];
+        renderPage();
+
+        fireEvent.click(screen.getByTitle('cancelTask'));
+        const dialog = screen.getByRole('dialog');
+
+        await act(async () => {
+            fireEvent.click(within(dialog).getByRole('button', { name: 'cancelTask' }));
+        });
+
+        expect(mockShowSnackbar).toHaveBeenCalledWith('error');
+    });
+
+    it('opens unsubscribe modal for playlist subscription', () => {
+        mockSubscriptions = [
+            makeSub({
+                id: 'sub-plm',
+                author: 'PLAuthor',
+                subscriptionType: 'channel_playlists',
+            }),
+        ];
+        renderPage();
+
+        fireEvent.click(screen.getByTitle('unsubscribe'));
+
+        const dialog = screen.getByRole('dialog');
+        // Modal opens with correct structure (title + message + confirm/cancel)
+        expect(within(dialog).getByText('confirmUnsubscribe')).toBeInTheDocument();
+        expect(within(dialog).getByRole('button', { name: 'unsubscribe' })).toBeInTheDocument();
+    });
+});

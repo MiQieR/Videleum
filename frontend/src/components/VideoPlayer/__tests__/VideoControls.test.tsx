@@ -1,0 +1,242 @@
+import { render, screen } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import VideoControls from '../VideoControls/index';
+
+const mockUseKeyboardShortcuts = vi.hoisted(() => vi.fn());
+
+// Mock child components
+vi.mock('../VideoControls/VideoElement', () => ({
+    default: ({ onClick }: any) => <div data-testid="video-element" onClick={onClick}>Video Element</div>
+}));
+
+vi.mock('../VideoControls/ControlsOverlay', () => ({
+    default: ({ onToggleLoop, onPlayPause }: any) => (
+        <div data-testid="controls-overlay">
+            <button onClick={onToggleLoop}>Toggle Loop</button>
+            <button onClick={onPlayPause}>Play Pause</button>
+        </div>
+    )
+}));
+
+// Mock hooks
+const mockVideoPlayer = {
+    videoRef: { current: document.createElement('video') },
+    isPlaying: false,
+    currentTime: 0,
+    duration: 100,
+    isDragging: false,
+    handlePlayPause: vi.fn(),
+    handleSeek: vi.fn(),
+    handleProgressChange: vi.fn(),
+    handleProgressChangeCommitted: vi.fn(),
+    handleProgressMouseDown: vi.fn(),
+    handleLoadedMetadata: vi.fn(),
+    handlePlay: vi.fn(),
+    handlePause: vi.fn(),
+    handleTimeUpdate: vi.fn(),
+    isLooping: false,
+    handleToggleLoop: vi.fn(),
+};
+
+vi.mock('../VideoControls/hooks/useVideoPlayer', () => ({
+    useVideoPlayer: () => mockVideoPlayer
+}));
+
+const mockFullscreen = {
+    videoContainerRef: { current: null },
+    isFullscreen: false,
+    controlsVisible: true,
+    handleToggleFullscreen: vi.fn(),
+    handleControlsMouseEnter: vi.fn(),
+};
+
+vi.mock('../VideoControls/hooks/useFullscreen', () => ({
+    useFullscreen: () => mockFullscreen
+}));
+
+const mockLoading = {
+    isLoading: false,
+    loadError: null,
+    startLoading: vi.fn(),
+    stopLoading: vi.fn(),
+    setError: vi.fn(),
+    handleVideoError: vi.fn(),
+};
+
+vi.mock('../VideoControls/hooks/useVideoLoading', () => ({
+    useVideoLoading: () => mockLoading
+}));
+
+const mockVolume = {
+    volume: 1,
+    showVolumeSlider: false,
+    volumeSliderRef: { current: null },
+    handleVolumeChange: vi.fn(),
+    handleVolumeClick: vi.fn(),
+    handleVolumeMouseEnter: vi.fn(),
+    handleVolumeMouseLeave: vi.fn(),
+    handleSliderMouseEnter: vi.fn(),
+    handleSliderMouseLeave: vi.fn(),
+};
+
+vi.mock('../VideoControls/hooks/useVolume', () => ({
+    useVolume: () => mockVolume
+}));
+
+const mockSubtitles = {
+    subtitlesEnabled: true,
+    subtitleMenuAnchor: null,
+    handleSubtitleClick: vi.fn(),
+    handleCloseSubtitleMenu: vi.fn(),
+    handleSelectSubtitle: vi.fn(),
+    initializeSubtitles: vi.fn(),
+};
+
+vi.mock('../VideoControls/hooks/useSubtitles', () => ({
+    useSubtitles: () => mockSubtitles
+}));
+
+vi.mock('../VideoControls/hooks/useKeyboardShortcuts', () => ({
+    useKeyboardShortcuts: mockUseKeyboardShortcuts
+}));
+
+vi.mock('../../../hooks/useStatisticsWatchTracker', () => ({
+    useStatisticsWatchTracker: vi.fn(),
+}));
+
+// Mock language context if needed (hooks might use it, but here we mock hooks so likely not needed unless component uses it directly)
+vi.mock('../../../contexts/LanguageContext', () => ({
+    useLanguage: () => ({ t: (key: string) => key }),
+}));
+
+describe('VideoControls', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+    });
+
+    const defaultProps = {
+        src: 'video.mp4',
+    };
+
+    it('should render video element and controls overlay', () => {
+        render(<VideoControls {...defaultProps} />);
+        expect(screen.getByTestId('video-element')).toBeInTheDocument();
+        expect(screen.getByTestId('controls-overlay')).toBeInTheDocument();
+    });
+
+    it('should propagate onLoopToggle event', async () => {
+        const { userEvent } = require('@testing-library/user-event');
+        const user = userEvent.setup();
+        const onLoopToggle = vi.fn();
+        mockVideoPlayer.handleToggleLoop.mockReturnValue(true);
+
+        render(<VideoControls {...defaultProps} onLoopToggle={onLoopToggle} />);
+
+        await user.click(screen.getByText('Toggle Loop'));
+
+        expect(mockVideoPlayer.handleToggleLoop).toHaveBeenCalled();
+        expect(onLoopToggle).toHaveBeenCalledWith(true);
+    });
+
+    it('should handle play/pause via overlay', async () => {
+        const { userEvent } = require('@testing-library/user-event');
+        const user = userEvent.setup();
+
+        render(<VideoControls {...defaultProps} />);
+
+        await user.click(screen.getByText('Play Pause'));
+        expect(mockVideoPlayer.handlePlayPause).toHaveBeenCalled();
+    });
+
+    it('keeps the video element ready callback stable across src changes', () => {
+        const onVideoElementReady = vi.fn();
+        const { rerender, unmount } = render(
+            <VideoControls {...defaultProps} onVideoElementReady={onVideoElementReady} />
+        );
+
+        expect(onVideoElementReady).toHaveBeenCalledWith(mockVideoPlayer.videoRef.current);
+        onVideoElementReady.mockClear();
+
+        rerender(
+            <VideoControls
+                {...defaultProps}
+                src="next-video.mp4"
+                onVideoElementReady={onVideoElementReady}
+            />
+        );
+
+        expect(onVideoElementReady).not.toHaveBeenCalled();
+
+        unmount();
+        expect(onVideoElementReady).toHaveBeenCalledWith(null);
+    });
+
+    it('binds the cinema shortcut when a cinema toggle is supplied', () => {
+        const onToggleCinemaMode = vi.fn();
+        render(<VideoControls {...defaultProps} onToggleCinemaMode={onToggleCinemaMode} />);
+
+        const handlers = mockUseKeyboardShortcuts.mock.calls.at(-1)![0];
+        handlers.onToggleCinemaMode();
+
+        expect(onToggleCinemaMode).toHaveBeenCalled();
+    });
+
+    it('leaves the cinema shortcut unbound in audio mode', () => {
+        // Audio mode hides the cinema control; binding the key anyway would
+        // flip state nothing can show, surfacing on the next video.
+        const onToggleCinemaMode = vi.fn();
+        render(
+            <VideoControls
+                {...defaultProps}
+                audioMode
+                onToggleCinemaMode={onToggleCinemaMode}
+            />
+        );
+
+        const handlers = mockUseKeyboardShortcuts.mock.calls.at(-1)![0];
+
+        expect(handlers.onToggleCinemaMode).toBeUndefined();
+    });
+
+    it('uses the configured short interval for keyboard seeking', () => {
+        const { rerender } = render(
+            <VideoControls
+                {...defaultProps}
+                seekIntervals={{
+                    shortSeconds: 15,
+                    mediumSeconds: 120,
+                    longSeconds: 900,
+                }}
+            />
+        );
+
+        const firstShortcuts = mockUseKeyboardShortcuts.mock.calls.at(-1)?.[0];
+        firstShortcuts.onSeekLeft();
+        firstShortcuts.onSeekRight();
+
+        expect(mockVideoPlayer.handleSeek).toHaveBeenNthCalledWith(1, -15);
+        expect(mockVideoPlayer.handleSeek).toHaveBeenNthCalledWith(2, 15);
+
+        rerender(
+            <VideoControls
+                {...defaultProps}
+                seekIntervals={{
+                    shortSeconds: 30,
+                    mediumSeconds: 120,
+                    longSeconds: 900,
+                }}
+            />
+        );
+
+        const updatedShortcuts = mockUseKeyboardShortcuts.mock.calls.at(-1)?.[0];
+        updatedShortcuts.onSeekRight();
+        expect(mockVideoPlayer.handleSeek).toHaveBeenLastCalledWith(30);
+    });
+});
+
+// Re-defining mocks for interactive tests if needed, or simple render check is enough?
+// The user asked for "Implement Missing Tests".
+// I should probably add basic interactive tests. 
+// Let's improve the ControlOverlay mock inline or make it more flexible.
+
+// Actually, I can update the mock above to expose buttons for interactions.

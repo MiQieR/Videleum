@@ -1,0 +1,1660 @@
+import crypto from "crypto";
+import fs from "fs-extra";
+import os from "os";
+import path from "path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+type AllocatorModule = typeof import("../../../services/filenameTemplate/outputPathAllocator");
+
+const tempRoots: string[] = [];
+
+type PathConfig = {
+  DATA_DIR: string;
+  VIDEOS_DIR: string;
+  IMAGES_DIR: string;
+  IMAGES_SMALL_DIR: string;
+  SUBTITLES_DIR: string;
+};
+
+function buildPathConfig(root: string): PathConfig {
+  return {
+    DATA_DIR: path.join(root, "data"),
+    VIDEOS_DIR: path.join(root, "videos"),
+    IMAGES_DIR: path.join(root, "images"),
+    IMAGES_SMALL_DIR: path.join(root, "images-small"),
+    SUBTITLES_DIR: path.join(root, "subtitles"),
+  };
+}
+
+async function loadAllocatorWithPaths(
+  paths: PathConfig,
+  videos: any[] = []
+): Promise<AllocatorModule> {
+  vi.resetModules();
+  vi.doMock("../../../config/paths", () => paths);
+  vi.doMock("../../../services/storageService/videoQueries", () => ({
+    getVideos: vi.fn(() => videos),
+  }));
+  vi.doMock("../../../services/storageService/videos", () => ({
+    getVideos: vi.fn(() => videos),
+  }));
+  const allocator = await import("../../../services/filenameTemplate/outputPathAllocator");
+  allocator.setOutputPathAllocatorVideoProviderForTests(() => videos);
+  return allocator;
+}
+
+async function loadAllocator(
+  root: string,
+  videos: any[] = []
+): Promise<AllocatorModule> {
+  return loadAllocatorWithPaths(buildPathConfig(root), videos);
+}
+
+function makeTempRoot(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "videleum-allocator-"));
+  tempRoots.push(root);
+  fs.ensureDirSync(path.join(root, "videos"));
+  fs.ensureDirSync(path.join(root, "images"));
+  fs.ensureDirSync(path.join(root, "images-small"));
+  fs.ensureDirSync(path.join(root, "subtitles"));
+  fs.ensureDirSync(path.join(root, "data"));
+  return root;
+}
+
+describe("outputPathAllocator", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    vi.resetModules();
+    vi.clearAllMocks();
+    for (const root of tempRoots.splice(0)) {
+      fs.removeSync(root);
+    }
+  });
+
+  it("uses an identity suffix for concurrent same-stem reservations", async () => {
+    const root = makeTempRoot();
+    const allocator = await loadAllocator(root);
+
+    const first = allocator.allocateOutputFamilySync({
+      videoRelativePath: "Author/Episode.mp4",
+      thumbnailRelativePath: "Author/Episode.jpg",
+      subtitleBaseRelativePath: "Author/Episode",
+      thumbnailBaseDir: path.join(root, "images"),
+      identity: {
+        platform: "bilibili",
+        sourceVideoId: "BV111",
+        mediaType: "video",
+      },
+    });
+    const second = allocator.allocateOutputFamilySync({
+      videoRelativePath: "Author/Episode.mp4",
+      thumbnailRelativePath: "Author/Episode.jpg",
+      subtitleBaseRelativePath: "Author/Episode",
+      thumbnailBaseDir: path.join(root, "images"),
+      identity: {
+        platform: "bilibili",
+        sourceVideoId: "BV222",
+        mediaType: "video",
+      },
+    });
+
+    expect(first.videoRelativePath).toBe("Author/Episode.mp4");
+    expect(second.videoRelativePath).toBe("Author/Episode [BV222].mp4");
+    expect(second.thumbnailRelativePath).toBe("Author/Episode [BV222].jpg");
+    expect(second.subtitleBaseRelativePath).toBe("Author/Episode [BV222]");
+
+    first.release();
+    second.release();
+    expect(
+      fs.readdirSync(path.join(root, "data", "output-path-reservations"))
+    ).toEqual([]);
+  });
+
+  it("honors app-data lock files across isolated module instances", async () => {
+    const root = makeTempRoot();
+    const firstAllocator = await loadAllocator(root);
+    const first = firstAllocator.allocateOutputFamilySync({
+      videoRelativePath: "Episode.mp4",
+      thumbnailRelativePath: "Episode.jpg",
+      subtitleBaseRelativePath: "Episode",
+      thumbnailBaseDir: path.join(root, "images"),
+      identity: {
+        platform: "youtube",
+        sourceVideoId: "abc",
+        mediaType: "video",
+      },
+    });
+
+    const secondAllocator = await loadAllocator(root);
+    const second = secondAllocator.allocateOutputFamilySync({
+      videoRelativePath: "Episode.mp4",
+      thumbnailRelativePath: "Episode.jpg",
+      subtitleBaseRelativePath: "Episode",
+      thumbnailBaseDir: path.join(root, "images"),
+      identity: {
+        platform: "youtube",
+        sourceVideoId: "def",
+        mediaType: "video",
+      },
+    });
+
+    expect(first.videoRelativePath).toBe("Episode.mp4");
+    expect(second.videoRelativePath).toBe("Episode [def].mp4");
+
+    first.release();
+    second.release();
+  });
+
+  it("reclaims same-host reservation locks left by dead processes", async () => {
+    const root = makeTempRoot();
+    const reservationDir = path.join(root, "data", "output-path-reservations");
+    fs.ensureDirSync(reservationDir);
+    const digest = crypto.createHash("sha256").update("episode").digest("hex");
+    const staleLockPath = path.join(reservationDir, `${digest}.lock`);
+    fs.writeJsonSync(staleLockPath, {
+      version: 1,
+      allocationId: "stale",
+      canonicalFamilyStem: "episode",
+      identityKey: "youtube:old:video:0",
+      hostname: os.hostname(),
+      processId: 123456789,
+      createdAtMs: Date.now() - 60_000,
+      heartbeatAtMs: Date.now() - 60_000,
+    });
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(((
+      processId: number,
+      signal?: NodeJS.Signals | 0
+    ) => {
+      if (processId === 123456789 && signal === 0) {
+        throw Object.assign(new Error("dead process"), { code: "ESRCH" });
+      }
+      return true;
+    }) as typeof process.kill);
+    const allocator = await loadAllocator(root);
+
+    const reservation = allocator.allocateOutputFamilySync({
+      videoRelativePath: "Episode.mp4",
+      thumbnailRelativePath: "Episode.jpg",
+      subtitleBaseRelativePath: "Episode",
+      thumbnailBaseDir: path.join(root, "images"),
+      identity: {
+        platform: "youtube",
+        sourceVideoId: "new",
+        mediaType: "video",
+      },
+    });
+
+    expect(reservation.videoRelativePath).toBe("Episode.mp4");
+    const lockPayload = fs.readJsonSync(staleLockPath);
+    expect(lockPayload.identityKey).toBe("youtube:new:video:0");
+
+    reservation.release();
+    killSpy.mockRestore();
+  });
+
+  it("reclaims an expired reservation left by a previous container", async () => {
+    const root = makeTempRoot();
+    const reservationDir = path.join(root, "data", "output-path-reservations");
+    fs.ensureDirSync(reservationDir);
+    const digest = crypto.createHash("sha256").update("episode").digest("hex");
+    const staleLockPath = path.join(reservationDir, `${digest}.lock`);
+    fs.writeJsonSync(staleLockPath, {
+      version: 1,
+      allocationId: "previous-container",
+      canonicalFamilyStem: "episode",
+      identityKey: "youtube:old:video:0",
+      hostname: "retired-container-hostname",
+      processId: 99,
+      createdAtMs: Date.now() - 10 * 60_000,
+      heartbeatAtMs: Date.now() - 10 * 60_000,
+    });
+    const allocator = await loadAllocator(root);
+
+    const reservation = allocator.allocateOutputFamilySync({
+      videoRelativePath: "Episode.mp4",
+      thumbnailRelativePath: "Episode.jpg",
+      subtitleBaseRelativePath: "Episode",
+      thumbnailBaseDir: path.join(root, "images"),
+      identity: {
+        platform: "youtube",
+        sourceVideoId: "new",
+        mediaType: "video",
+      },
+    });
+
+    expect(reservation.videoRelativePath).toBe("Episode.mp4");
+    expect(fs.readJsonSync(staleLockPath).hostname).toBe(os.hostname());
+    reservation.release();
+  });
+
+  it("reserves central subtitle stems owned by another row", async () => {
+    const root = makeTempRoot();
+    // The other row owns only a central subtitle. Its video uses a different
+    // container and it has no thumbnail, so the preferred video and thumbnail
+    // paths stay free and the subtitle stem is the only thing in the way.
+    const allocator = await loadAllocator(root, [
+      {
+        id: "other",
+        videoPath: "/videos/Episode.mp4",
+        subtitles: [
+          { language: "en", filename: "Episode.en.vtt", path: "/subtitles/Episode.en.vtt" },
+        ],
+      },
+    ]);
+
+    const reservation = allocator.allocateOutputFamilySync({
+      videoRelativePath: "Episode.mkv",
+      thumbnailRelativePath: "Episode.jpg",
+      subtitleBaseRelativePath: "Episode",
+      thumbnailBaseDir: path.join(root, "images"),
+      subtitleBaseDir: path.join(root, "subtitles"),
+      identity: {
+        platform: "youtube",
+        sourceVideoId: "new",
+        mediaType: "video",
+      },
+      thumbnailRequired: true,
+      subtitleRequired: true,
+    });
+
+    expect(reservation.videoRelativePath).toBe("Episode [new].mkv");
+    expect(reservation.subtitleBaseRelativePath).toBe("Episode [new]");
+    reservation.release();
+  });
+
+  it("keeps the preferred stem when the owning row is the redownload target", async () => {
+    const root = makeTempRoot();
+    const allocator = await loadAllocator(root, [
+      {
+        id: "self",
+        videoPath: "/videos/Episode.mp4",
+        subtitles: [
+          { language: "en", filename: "Episode.en.vtt", path: "/subtitles/Episode.en.vtt" },
+        ],
+      },
+    ]);
+
+    const reservation = allocator.allocateOutputFamilySync({
+      videoRelativePath: "Episode.mkv",
+      thumbnailRelativePath: "Episode.jpg",
+      subtitleBaseRelativePath: "Episode",
+      thumbnailBaseDir: path.join(root, "images"),
+      subtitleBaseDir: path.join(root, "subtitles"),
+      identity: {
+        platform: "youtube",
+        sourceVideoId: "self",
+        mediaType: "video",
+        localVideoId: "self",
+      },
+      existingLocalVideoId: "self",
+      thumbnailRequired: true,
+      subtitleRequired: true,
+    });
+
+    expect(reservation.videoRelativePath).toBe("Episode.mkv");
+    expect(reservation.subtitleBaseRelativePath).toBe("Episode");
+    reservation.release();
+  });
+
+  it("reclaims an expired lock left by a restart onto the same pid", async () => {
+    const root = makeTempRoot();
+    const reservationDir = path.join(root, "data", "output-path-reservations");
+    fs.ensureDirSync(reservationDir);
+    const digest = crypto.createHash("sha256").update("episode").digest("hex");
+    const staleLockPath = path.join(reservationDir, `${digest}.lock`);
+    // A stable-hostname container that crashed and restarted onto the same pid:
+    // the owner is gone, but a naive `processId === process.pid` guard would
+    // read it as a live owner and reserve the family forever.
+    fs.writeJsonSync(staleLockPath, {
+      version: 2,
+      allocationId: "previous-instance-same-pid",
+      canonicalFamilyStem: "episode",
+      identityKey: "youtube:old:video:0",
+      hostname: os.hostname(),
+      processId: process.pid,
+      createdAtMs: Date.now() - 10 * 60_000,
+      heartbeatAtMs: Date.now() - 10 * 60_000,
+    });
+    const allocator = await loadAllocator(root);
+
+    const reservation = allocator.allocateOutputFamilySync({
+      videoRelativePath: "Episode.mp4",
+      thumbnailRelativePath: "Episode.jpg",
+      subtitleBaseRelativePath: "Episode",
+      thumbnailBaseDir: path.join(root, "images"),
+      identity: {
+        platform: "youtube",
+        sourceVideoId: "new",
+        mediaType: "video",
+      },
+    });
+
+    expect(reservation.videoRelativePath).toBe("Episode.mp4");
+    expect(fs.readJsonSync(staleLockPath).allocationId).not.toBe(
+      "previous-instance-same-pid"
+    );
+    reservation.release();
+  });
+
+  it("keeps a fresh same-host lock held by this pid", async () => {
+    const root = makeTempRoot();
+    const reservationDir = path.join(root, "data", "output-path-reservations");
+    fs.ensureDirSync(reservationDir);
+    const digest = crypto.createHash("sha256").update("episode").digest("hex");
+    const liveLockPath = path.join(reservationDir, `${digest}.lock`);
+    // Same pid, but the lease is being renewed, so it must not be stolen.
+    fs.writeJsonSync(liveLockPath, {
+      version: 2,
+      allocationId: "self-owned-live",
+      canonicalFamilyStem: "episode",
+      identityKey: "youtube:old:video:0",
+      hostname: os.hostname(),
+      processId: process.pid,
+      createdAtMs: Date.now() - 60_000,
+      heartbeatAtMs: Date.now() - 5_000,
+    });
+    const allocator = await loadAllocator(root);
+
+    const reservation = allocator.allocateOutputFamilySync({
+      videoRelativePath: "Episode.mp4",
+      thumbnailRelativePath: "Episode.jpg",
+      subtitleBaseRelativePath: "Episode",
+      thumbnailBaseDir: path.join(root, "images"),
+      identity: {
+        platform: "youtube",
+        sourceVideoId: "new",
+        mediaType: "video",
+      },
+    });
+
+    expect(reservation.videoRelativePath).toBe("Episode [new].mp4");
+    expect(fs.readJsonSync(liveLockPath).allocationId).toBe("self-owned-live");
+    reservation.release();
+  });
+
+  it("keeps an old same-host lock while its owner process is live", async () => {
+    const root = makeTempRoot();
+    const reservationDir = path.join(root, "data", "output-path-reservations");
+    fs.ensureDirSync(reservationDir);
+    const digest = crypto.createHash("sha256").update("episode").digest("hex");
+    const liveLockPath = path.join(reservationDir, `${digest}.lock`);
+    fs.writeJsonSync(liveLockPath, {
+      version: 1,
+      allocationId: "live-owner",
+      canonicalFamilyStem: "episode",
+      identityKey: "youtube:old:video:0",
+      hostname: os.hostname(),
+      processId: 987654321,
+      createdAtMs: Date.now() - 24 * 60 * 60_000,
+      heartbeatAtMs: Date.now() - 24 * 60 * 60_000,
+    });
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(((
+      processId: number,
+      signal?: NodeJS.Signals | 0
+    ) => {
+      if (processId === 987654321 && signal === 0) {
+        return true;
+      }
+      return true;
+    }) as typeof process.kill);
+    const allocator = await loadAllocator(root);
+
+    const reservation = allocator.allocateOutputFamilySync({
+      videoRelativePath: "Episode.mp4",
+      thumbnailRelativePath: "Episode.jpg",
+      subtitleBaseRelativePath: "Episode",
+      thumbnailBaseDir: path.join(root, "images"),
+      identity: {
+        platform: "youtube",
+        sourceVideoId: "new",
+        mediaType: "video",
+      },
+    });
+
+    expect(reservation.videoRelativePath).toBe("Episode [new].mp4");
+    expect(fs.readJsonSync(liveLockPath).allocationId).toBe("live-owner");
+    expect(killSpy).toHaveBeenCalledWith(987654321, 0);
+    reservation.release();
+  });
+
+  it("renews a cross-host lease throughout a long reservation", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-30T12:00:00.000Z"));
+    const root = makeTempRoot();
+    const firstAllocator = await loadAllocator(root);
+    const first = firstAllocator.allocateOutputFamilySync({
+      videoRelativePath: "Episode.mp4",
+      thumbnailRelativePath: "Episode.jpg",
+      subtitleBaseRelativePath: "Episode",
+      thumbnailBaseDir: path.join(root, "images"),
+      identity: {
+        platform: "youtube",
+        sourceVideoId: "first",
+        mediaType: "video",
+      },
+    });
+    const reservationDir = path.join(root, "data", "output-path-reservations");
+    const lockName = fs
+      .readdirSync(reservationDir)
+      .find((entry) => entry.endsWith(".lock"));
+    expect(lockName).toBeDefined();
+    const lockPath = path.join(reservationDir, lockName!);
+    const lockPayload = fs.readJsonSync(lockPath);
+    lockPayload.hostname = "active-other-container";
+    fs.writeJsonSync(lockPath, lockPayload);
+
+    vi.advanceTimersByTime(10 * 60_000);
+
+    const heartbeatName = fs
+      .readdirSync(reservationDir)
+      .find((entry) => entry.endsWith(".heartbeat"));
+    expect(heartbeatName).toBeDefined();
+    const heartbeat = fs.readJsonSync(
+      path.join(reservationDir, heartbeatName!)
+    );
+    expect(heartbeat.allocationId).toBe(lockPayload.allocationId);
+    expect(heartbeat.heartbeatAtMs).toBe(Date.now());
+
+    const secondAllocator = await loadAllocator(root);
+    const second = secondAllocator.allocateOutputFamilySync({
+      videoRelativePath: "Episode.mp4",
+      thumbnailRelativePath: "Episode.jpg",
+      subtitleBaseRelativePath: "Episode",
+      thumbnailBaseDir: path.join(root, "images"),
+      identity: {
+        platform: "youtube",
+        sourceVideoId: "second",
+        mediaType: "video",
+      },
+    });
+
+    expect(second.videoRelativePath).toBe("Episode [second].mp4");
+    first.release();
+    second.release();
+  });
+
+  it("skips an existing preferred file before reserving", async () => {
+    const root = makeTempRoot();
+    fs.outputFileSync(path.join(root, "videos", "Episode.mp4"), "existing");
+    const allocator = await loadAllocator(root);
+
+    const reservation = allocator.allocateOutputFamilySync({
+      videoRelativePath: "Episode.mp4",
+      thumbnailRelativePath: "Episode.jpg",
+      subtitleBaseRelativePath: "Episode",
+      thumbnailBaseDir: path.join(root, "images"),
+      identity: {
+        platform: "youtube",
+        sourceVideoId: "abc",
+        mediaType: "video",
+      },
+    });
+
+    expect(reservation.videoRelativePath).toBe("Episode [abc].mp4");
+    expect(reservation.collisionStrategy).toBe("source_id");
+    reservation.release();
+  });
+
+  it.each(["images", "videos"])("reserves a small thumbnail owned by another row in /%s", async (thumbnailRoot) => {
+    const root = makeTempRoot();
+    fs.outputFileSync(path.join(root, "images-small", "Episode.jpg"), "other-small-thumb");
+    const allocator = await loadAllocator(root, [
+      {
+        id: "other",
+        videoPath: "/videos/Other.mp4",
+        thumbnailPath: `/${thumbnailRoot}/Episode.jpg`,
+        subtitles: [],
+      },
+    ]);
+
+    const reservation = allocator.allocateOutputFamilySync({
+      videoRelativePath: "Episode.mp4",
+      thumbnailRelativePath: "Episode.jpg",
+      subtitleBaseRelativePath: "Episode",
+      thumbnailBaseDir: path.join(root, thumbnailRoot === "images" ? "videos" : "images"),
+      identity: { platform: "youtube", sourceVideoId: "abc", mediaType: "video" },
+      thumbnailRequired: true,
+    });
+
+    expect(reservation.videoRelativePath).toBe("Episode [abc].mp4");
+    expect(fs.readFileSync(path.join(root, "images-small", "Episode.jpg"), "utf8")).toBe(
+      "other-small-thumb"
+    );
+    reservation.release();
+  });
+
+  it.each(["images", "videos"])("allows a small thumbnail owned by the current row in /%s", async (thumbnailRoot) => {
+    const root = makeTempRoot();
+    fs.outputFileSync(path.join(root, "images-small", "Episode.jpg"), "owned-small-thumb");
+    const allocator = await loadAllocator(root, [
+      {
+        id: "local-1",
+        videoPath: "/videos/Episode.mp4",
+        thumbnailPath: `/${thumbnailRoot}/Episode.jpg`,
+        subtitles: [],
+      },
+    ]);
+
+    const reservation = allocator.allocateOutputFamilySync({
+      videoRelativePath: "Episode.mp4",
+      thumbnailRelativePath: "Episode.jpg",
+      subtitleBaseRelativePath: "Episode",
+      thumbnailBaseDir: path.join(root, thumbnailRoot === "images" ? "videos" : "images"),
+      identity: { platform: "youtube", sourceVideoId: "abc", mediaType: "video" },
+      existingLocalVideoId: "local-1",
+      thumbnailRequired: true,
+    });
+
+    expect(reservation.videoRelativePath).toBe("Episode.mp4");
+    reservation.release();
+  });
+
+  it("keeps the existing owned path for a same-row redownload", async () => {
+    const root = makeTempRoot();
+    fs.outputFileSync(path.join(root, "videos", "Episode.mp4"), "old-video");
+    fs.outputFileSync(path.join(root, "images", "Episode.jpg"), "old-thumb");
+    const allocator = await loadAllocator(root, [
+      {
+        id: "local-1",
+        videoPath: "/videos/Episode.mp4",
+        thumbnailPath: "/images/Episode.jpg",
+        subtitles: [],
+      },
+    ]);
+
+    const reservation = allocator.allocateOutputFamilySync({
+      videoRelativePath: "Episode.mp4",
+      thumbnailRelativePath: "Episode.jpg",
+      subtitleBaseRelativePath: "Episode",
+      thumbnailBaseDir: path.join(root, "images"),
+      identity: {
+        platform: "youtube",
+        sourceVideoId: "abc",
+        mediaType: "video",
+        localVideoId: "local-1",
+      },
+      existingLocalVideoId: "local-1",
+      thumbnailRequired: true,
+    });
+
+    expect(reservation.videoRelativePath).toBe("Episode.mp4");
+    expect(reservation.thumbnailRelativePath).toBe("Episode.jpg");
+    expect(reservation.collisionStrategy).toBe("none");
+    reservation.release();
+  });
+
+  it("replaces an owned file with rollback if the replacement cannot be promoted", async () => {
+    const root = makeTempRoot();
+    const destPath = path.join(root, "videos", "Episode.mp4");
+    const sourcePath = path.join(root, "videos", "new-download.mp4");
+    fs.outputFileSync(destPath, "old-video");
+    fs.outputFileSync(sourcePath, "new-video");
+    const allocator = await loadAllocator(root, [
+      {
+        id: "local-1",
+        videoPath: "/videos/Episode.mp4",
+        thumbnailPath: null,
+        subtitles: [],
+      },
+    ]);
+
+    allocator.replaceOwnedFileWithBackupSync(
+      sourcePath,
+      path.join(root, "videos"),
+      destPath,
+      path.join(root, "videos"),
+      "local-1"
+    );
+    expect(fs.readFileSync(destPath, "utf8")).toBe("new-video");
+    expect(fs.existsSync(sourcePath)).toBe(false);
+
+    const failingSource = path.join(root, "videos", "missing-download.mp4");
+    expect(() =>
+      allocator.replaceOwnedFileWithBackupSync(
+        failingSource,
+        path.join(root, "videos"),
+        destPath,
+        path.join(root, "videos"),
+        "local-1"
+      )
+    ).toThrow();
+    expect(fs.readFileSync(destPath, "utf8")).toBe("new-video");
+    expect(
+      fs.existsSync(path.join(root, "data", "output-family-journals"))
+        ? fs.readdirSync(path.join(root, "data", "output-family-journals"))
+        : []
+    ).toEqual([]);
+  });
+
+  it("plans owned replacement staging beside nested managed destinations", async () => {
+    const root = makeTempRoot();
+    const destPath = path.join(root, "videos", "Series", "Episode.mp4");
+    fs.outputFileSync(destPath, "old-video");
+    const allocator = await loadAllocator(root, [
+      {
+        id: "local-1",
+        videoPath: "/videos/Series/Episode.mp4",
+        thumbnailPath: null,
+        subtitles: [],
+      },
+    ]);
+
+    const staging = allocator.planOwnedReplacementStagingPathSync(
+      destPath,
+      path.join(root, "videos"),
+      "local-1"
+    );
+
+    expect(staging).not.toBeNull();
+    expect(staging?.finalPath).toBe(destPath);
+    expect(path.dirname(staging?.stagingPath || "")).toBe(
+      path.join(root, "videos", "Series")
+    );
+    expect(path.basename(staging?.stagingPath || "")).toMatch(
+      /^\.videleum-redownload-[\w-]+\.mp4$/
+    );
+  });
+
+  it("does not treat a same-named file under another root as owned", async () => {
+    const root = makeTempRoot();
+    // The row's thumbnail still lives under /videos after a storage-settings
+    // change. A redownload now targets /images/Show/poster.jpg, a distinct file
+    // owned by nobody here — planning an owned replacement for it would let
+    // replaceOwnedFileWithBackupSync overwrite it.
+    const otherRootPath = path.join(root, "images", "Show", "poster.jpg");
+    fs.outputFileSync(otherRootPath, "someone-elses-thumbnail");
+    const allocator = await loadAllocator(root, [
+      {
+        id: "local-1",
+        videoPath: "/videos/Show/Episode.mp4",
+        thumbnailPath: "/videos/Show/poster.jpg",
+        subtitles: [],
+      },
+    ]);
+
+    expect(
+      allocator.planOwnedReplacementStagingPathSync(
+        otherRootPath,
+        path.join(root, "images"),
+        "local-1"
+      )
+    ).toBeNull();
+    expect(fs.readFileSync(otherRootPath, "utf8")).toBe("someone-elses-thumbnail");
+  });
+
+  it("still treats the same-root thumbnail as owned by the selected row", async () => {
+    const root = makeTempRoot();
+    const ownedPath = path.join(root, "images", "Show", "poster.jpg");
+    fs.outputFileSync(ownedPath, "own-thumbnail");
+    const allocator = await loadAllocator(root, [
+      {
+        id: "local-1",
+        videoPath: "/videos/Show/Episode.mp4",
+        thumbnailPath: "/images/Show/poster.jpg",
+        subtitles: [],
+      },
+    ]);
+
+    const staging = allocator.planOwnedReplacementStagingPathSync(
+      ownedPath,
+      path.join(root, "images"),
+      "local-1"
+    );
+
+    expect(staging).not.toBeNull();
+    expect(staging?.finalPath).toBe(ownedPath);
+  });
+
+  it("rejects traversal while planning owned replacement staging", async () => {
+    const root = makeTempRoot();
+    const allocator = await loadAllocator(root);
+    const escapedDestination = `${path.join(root, "videos")}${path.sep}..${
+      path.sep
+    }escape.mp4`;
+
+    expect(() =>
+      allocator.planOwnedReplacementStagingPathSync(
+        escapedDestination,
+        path.join(root, "videos"),
+        "local-1"
+      )
+    ).toThrow("outside");
+  });
+
+  it("publishes new files through destination-local staging, claimed placeholder, and journal cleanup", async () => {
+    const root = makeTempRoot();
+    const scratchRoot = path.join(root, "scratch");
+    fs.ensureDirSync(scratchRoot);
+    const sourcePath = path.join(scratchRoot, "incoming.mp4");
+    const destPath = path.join(root, "videos", "Episode.mp4");
+    fs.writeFileSync(sourcePath, "new-video");
+    const allocator = await loadAllocator(root);
+
+    allocator.promoteFileNoOverwriteSync(
+      sourcePath,
+      scratchRoot,
+      destPath,
+      path.join(root, "videos")
+    );
+
+    expect(fs.readFileSync(destPath, "utf8")).toBe("new-video");
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(
+      fs.existsSync(path.join(root, "data", "output-family-journals"))
+        ? fs.readdirSync(path.join(root, "data", "output-family-journals"))
+        : []
+    ).toEqual([]);
+    expect(
+      fs.existsSync(path.join(root, "videos", ".videleum-staging", ".ignore"))
+    ).toBe(true);
+    expect(
+      fs.readFileSync(
+        path.join(root, "videos", ".videleum-staging", ".embyignore"),
+        "utf8"
+      )
+    ).toBe("*\n");
+  });
+
+  it("falls back to claimed rename publication when the hard-link probe reports EXDEV", async () => {
+    const root = makeTempRoot();
+    const scratchRoot = path.join(root, "scratch");
+    fs.ensureDirSync(scratchRoot);
+    const sourcePath = path.join(scratchRoot, "incoming.mp4");
+    const destPath = path.join(root, "videos", "Episode.mp4");
+    fs.writeFileSync(sourcePath, "new-video");
+    const allocator = await loadAllocator(root);
+    const linkSpy = vi
+      .spyOn(fs, "linkSync")
+      .mockImplementation(() => {
+        throw Object.assign(new Error("cross-device hard link"), {
+          code: "EXDEV",
+        });
+      });
+    const renameSpy = vi.spyOn(fs, "renameSync");
+
+    allocator.promoteFileNoOverwriteSync(
+      sourcePath,
+      scratchRoot,
+      destPath,
+      path.join(root, "videos")
+    );
+
+    expect(linkSpy).toHaveBeenCalled();
+    expect(renameSpy).toHaveBeenCalledWith(
+      expect.stringContaining(".videleum-staging"),
+      destPath
+    );
+    expect(fs.readFileSync(destPath, "utf8")).toBe("new-video");
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(
+      fs.existsSync(path.join(root, "data", "output-family-journals"))
+        ? fs.readdirSync(path.join(root, "data", "output-family-journals"))
+        : []
+    ).toEqual([]);
+  });
+
+  it("falls back to claimed rename publication when hard-link publish reports EXDEV after a successful probe", async () => {
+    const root = makeTempRoot();
+    const scratchRoot = path.join(root, "scratch");
+    fs.ensureDirSync(scratchRoot);
+    const sourcePath = path.join(scratchRoot, "incoming.mp4");
+    const destPath = path.join(root, "videos", "Episode.mp4");
+    fs.writeFileSync(sourcePath, "new-video");
+    const allocator = await loadAllocator(root);
+    const actualLinkSync = fs.linkSync.bind(fs);
+    const linkSpy = vi
+      .spyOn(fs, "linkSync")
+      .mockImplementation((source, target) => {
+        if (String(source).includes(".hardlink-probe")) {
+          actualLinkSync(source, target);
+          return;
+        }
+        throw Object.assign(new Error("cross-device publish"), {
+          code: "EXDEV",
+        });
+      });
+    const renameSpy = vi.spyOn(fs, "renameSync");
+
+    allocator.promoteFileNoOverwriteSync(
+      sourcePath,
+      scratchRoot,
+      destPath,
+      path.join(root, "videos")
+    );
+
+    expect(linkSpy).toHaveBeenCalledWith(
+      expect.stringContaining(".videleum-staging"),
+      destPath
+    );
+    expect(renameSpy).toHaveBeenCalledWith(
+      expect.stringContaining(".videleum-staging"),
+      destPath
+    );
+    expect(fs.readFileSync(destPath, "utf8")).toBe("new-video");
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(
+      fs.existsSync(path.join(root, "data", "output-family-journals"))
+        ? fs.readdirSync(path.join(root, "data", "output-family-journals"))
+        : []
+    ).toEqual([]);
+  });
+
+  it("preserves existing final files when the exclusive claim loses", async () => {
+    const root = makeTempRoot();
+    const sourcePath = path.join(root, "videos", "incoming.mp4");
+    const destPath = path.join(root, "videos", "Episode.mp4");
+    fs.writeFileSync(sourcePath, "new-video");
+    fs.writeFileSync(destPath, "foreign-video");
+    const allocator = await loadAllocator(root);
+
+    expect(() =>
+      allocator.promoteFileNoOverwriteSync(
+        sourcePath,
+        path.join(root, "videos"),
+        destPath,
+        path.join(root, "videos")
+      )
+    ).toThrow();
+
+    expect(fs.readFileSync(destPath, "utf8")).toBe("foreign-video");
+    expect(fs.readFileSync(sourcePath, "utf8")).toBe("new-video");
+    expect(
+      fs.readdirSync(path.join(root, "videos", ".videleum-staging")).filter(
+        (entry) => !entry.startsWith(".")
+      )
+    ).toEqual([]);
+    expect(
+      fs.existsSync(path.join(root, "data", "output-family-journals"))
+        ? fs.readdirSync(path.join(root, "data", "output-family-journals"))
+        : []
+    ).toEqual([]);
+  });
+
+  it("rolls back journaled family moves when a later move fails", async () => {
+    const root = makeTempRoot();
+    const sourcePath = path.join(root, "videos", "Episode.mp4");
+    const movedPath = path.join(root, "videos", "Series", "Episode.mp4");
+    const missingPath = path.join(root, "images", "missing.jpg");
+    const imageTarget = path.join(root, "images", "Series", "Episode.jpg");
+    fs.outputFileSync(sourcePath, "video");
+    const allocator = await loadAllocator(root);
+
+    expect(() =>
+      allocator.moveOutputFamilyWithJournalSync([
+        {
+          from: sourcePath,
+          fromBase: path.join(root, "videos"),
+          to: movedPath,
+          toBase: path.join(root, "videos"),
+          kind: "video",
+        },
+        {
+          from: missingPath,
+          fromBase: path.join(root, "images"),
+          to: imageTarget,
+          toBase: path.join(root, "images"),
+          kind: "thumbnail",
+        },
+      ])
+    ).toThrow();
+
+    expect(fs.readFileSync(sourcePath, "utf8")).toBe("video");
+    expect(fs.existsSync(movedPath)).toBe(false);
+    expect(
+      fs.existsSync(path.join(root, "data", "output-family-journals"))
+        ? fs.readdirSync(path.join(root, "data", "output-family-journals"))
+        : []
+    ).toEqual([]);
+  });
+
+  it("reports success when hard-link publication journaling fails afterwards", async () => {
+    const root = makeTempRoot();
+    const sourcePath = path.join(root, "videos", "incoming.mp4");
+    const destPath = path.join(root, "videos", "Episode.mp4");
+    fs.writeFileSync(sourcePath, "new-video");
+    const allocator = await loadAllocator(root);
+
+    // By this journal step the destination is published and verified and the
+    // source has been unlinked. Throwing here would make callers skip
+    // persistence and orphan a complete file that cannot be rebuilt.
+    const realWriteFileSync = fs.writeFileSync;
+    vi.spyOn(fs, "writeFileSync").mockImplementation(((
+      file: any,
+      data: any,
+      options: any
+    ) => {
+      if (
+        typeof data === "string" &&
+        data.includes('"step": "committed"') &&
+        data.includes('"purpose": "publication"')
+      ) {
+        throw new Error("journal disk full");
+      }
+      return (realWriteFileSync as any)(file, data, options);
+    }) as typeof fs.writeFileSync);
+
+    expect(() =>
+      allocator.promoteFileNoOverwriteSync(
+        sourcePath,
+        path.join(root, "videos"),
+        destPath,
+        path.join(root, "videos")
+      )
+    ).not.toThrow();
+
+    vi.restoreAllMocks();
+    expect(fs.readFileSync(destPath, "utf8")).toBe("new-video");
+    expect(fs.existsSync(sourcePath)).toBe(false);
+  });
+
+  it("reports success when rename-fallback publication journaling fails afterwards", async () => {
+    const root = makeTempRoot();
+    const sourcePath = path.join(root, "videos", "incoming.mp4");
+    const destPath = path.join(root, "videos", "Episode.mp4");
+    fs.writeFileSync(sourcePath, "new-video");
+    const allocator = await loadAllocator(root);
+
+    // Failing linkSync makes the hard-link probe report no support, so the
+    // claim-marker + rename fallback runs instead.
+    vi.spyOn(fs, "linkSync").mockImplementation(() => {
+      throw Object.assign(new Error("EXDEV: cross-device link"), {
+        code: "EXDEV",
+      });
+    });
+    const renameSpy = vi.spyOn(fs, "renameSync");
+    const realWriteFileSync = fs.writeFileSync;
+    vi.spyOn(fs, "writeFileSync").mockImplementation(((
+      file: any,
+      data: any,
+      options: any
+    ) => {
+      if (
+        typeof data === "string" &&
+        data.includes('"step": "committed"') &&
+        data.includes('"purpose": "publication"')
+      ) {
+        throw new Error("journal disk full");
+      }
+      return (realWriteFileSync as any)(file, data, options);
+    }) as typeof fs.writeFileSync);
+
+    expect(() =>
+      allocator.promoteFileNoOverwriteSync(
+        sourcePath,
+        path.join(root, "videos"),
+        destPath,
+        path.join(root, "videos")
+      )
+    ).not.toThrow();
+
+    // Proves the fallback ran: the hard-link branch publishes via linkSync, so
+    // only the rename branch renames the staging file onto the destination.
+    expect(renameSpy).toHaveBeenCalledWith(
+      expect.stringContaining(".videleum-staging"),
+      destPath
+    );
+    vi.restoreAllMocks();
+    expect(fs.readFileSync(destPath, "utf8")).toBe("new-video");
+    expect(fs.existsSync(sourcePath)).toBe(false);
+  });
+
+  it("restores the destination when backup journaling fails", async () => {
+    const root = makeTempRoot();
+    const sourcePath = path.join(root, "videos", "incoming.mp4");
+    const destPath = path.join(root, "videos", "Episode.mp4");
+    fs.writeFileSync(sourcePath, "new-video");
+    fs.writeFileSync(destPath, "owned-original");
+    const allocator = await loadAllocator(root, [
+      {
+        id: "local-1",
+        videoPath: "/videos/Episode.mp4",
+        thumbnailPath: null,
+        subtitles: [],
+      },
+    ]);
+
+    // Fail the journal write that immediately follows the backup rename. The
+    // destination has been moved aside at that point, so without a rollback the
+    // row would reference a path with no file.
+    const realWriteFileSync = fs.writeFileSync;
+    vi.spyOn(fs, "writeFileSync").mockImplementation(((
+      file: any,
+      data: any,
+      options: any
+    ) => {
+      if (typeof data === "string" && data.includes('"step": "backed_up"')) {
+        throw new Error("journal disk full");
+      }
+      return (realWriteFileSync as any)(file, data, options);
+    }) as typeof fs.writeFileSync);
+
+    expect(() =>
+      allocator.replaceOwnedFileWithBackupSync(
+        sourcePath,
+        path.join(root, "videos"),
+        destPath,
+        path.join(root, "videos"),
+        "local-1"
+      )
+    ).toThrow();
+
+    vi.restoreAllMocks();
+    expect(fs.readFileSync(destPath, "utf8")).toBe("owned-original");
+    expect(
+      fs
+        .readdirSync(path.join(root, "videos"))
+        .filter((entry) => entry.includes("videleum-replace-backup"))
+    ).toEqual([]);
+    expect(
+      fs.readdirSync(path.join(root, "videos", ".videleum-staging")).filter(
+        (entry) => !entry.startsWith(".")
+      )
+    ).toEqual([]);
+  });
+
+  it("keeps moved files when only the post-commit journal write fails", async () => {
+    const root = makeTempRoot();
+    const sourcePath = path.join(root, "videos", "Episode.mp4");
+    const movedPath = path.join(root, "videos", "Series", "Episode.mp4");
+    fs.outputFileSync(sourcePath, "video");
+    const allocator = await loadAllocator(root);
+
+    // The callback stands in for the batch-rename SQLite commit. Once it has
+    // returned, the database references the new path, so a journal I/O failure
+    // must not move the file back out from under it.
+    let committed = false;
+    const realWriteFileSync = fs.writeFileSync;
+    vi.spyOn(fs, "writeFileSync").mockImplementation(((
+      file: any,
+      data: any,
+      options: any
+    ) => {
+      if (typeof data === "string" && data.includes('"step": "committed"')) {
+        throw new Error("journal disk full");
+      }
+      return (realWriteFileSync as any)(file, data, options);
+    }) as typeof fs.writeFileSync);
+
+    expect(() =>
+      allocator.moveOutputFamilyWithJournalSync(
+        [
+          {
+            from: sourcePath,
+            fromBase: path.join(root, "videos"),
+            to: movedPath,
+            toBase: path.join(root, "videos"),
+            kind: "video",
+          },
+        ],
+        () => {
+          committed = true;
+        }
+      )
+    ).not.toThrow();
+
+    expect(committed).toBe(true);
+    expect(fs.readFileSync(movedPath, "utf8")).toBe("video");
+    expect(fs.existsSync(sourcePath)).toBe(false);
+  });
+
+  it("still rolls back when the commit callback itself throws", async () => {
+    const root = makeTempRoot();
+    const sourcePath = path.join(root, "videos", "Episode.mp4");
+    const movedPath = path.join(root, "videos", "Series", "Episode.mp4");
+    fs.outputFileSync(sourcePath, "video");
+    const allocator = await loadAllocator(root);
+
+    expect(() =>
+      allocator.moveOutputFamilyWithJournalSync(
+        [
+          {
+            from: sourcePath,
+            fromBase: path.join(root, "videos"),
+            to: movedPath,
+            toBase: path.join(root, "videos"),
+            kind: "video",
+          },
+        ],
+        () => {
+          throw new Error("sqlite commit failed");
+        }
+      )
+    ).toThrow("sqlite commit failed");
+
+    expect(fs.readFileSync(sourcePath, "utf8")).toBe("video");
+    expect(fs.existsSync(movedPath)).toBe(false);
+  });
+
+  it("uses media existence when isolated lease directories cannot coordinate", async () => {
+    const mediaRoot = makeTempRoot();
+    const dataOne = fs.mkdtempSync(path.join(os.tmpdir(), "videleum-allocator-data-"));
+    const dataTwo = fs.mkdtempSync(path.join(os.tmpdir(), "videleum-allocator-data-"));
+    tempRoots.push(dataOne, dataTwo);
+    const mediaPaths = buildPathConfig(mediaRoot);
+
+    const firstAllocator = await loadAllocatorWithPaths({
+      ...mediaPaths,
+      DATA_DIR: dataOne,
+    });
+    const first = firstAllocator.allocateOutputFamilySync({
+      videoRelativePath: "Episode.mp4",
+      thumbnailRelativePath: "Episode.jpg",
+      subtitleBaseRelativePath: "Episode",
+      thumbnailBaseDir: mediaPaths.IMAGES_DIR,
+      identity: {
+        platform: "youtube",
+        sourceVideoId: "abc",
+        mediaType: "video",
+      },
+    });
+    fs.outputFileSync(
+      path.join(mediaPaths.VIDEOS_DIR, first.videoRelativePath),
+      "first"
+    );
+
+    const secondAllocator = await loadAllocatorWithPaths({
+      ...mediaPaths,
+      DATA_DIR: dataTwo,
+    });
+    const second = secondAllocator.allocateOutputFamilySync({
+      videoRelativePath: "Episode.mp4",
+      thumbnailRelativePath: "Episode.jpg",
+      subtitleBaseRelativePath: "Episode",
+      thumbnailBaseDir: mediaPaths.IMAGES_DIR,
+      identity: {
+        platform: "youtube",
+        sourceVideoId: "def",
+        mediaType: "video",
+      },
+    });
+
+    expect(first.videoRelativePath).toBe("Episode.mp4");
+    expect(second.videoRelativePath).toBe("Episode [def].mp4");
+
+    first.release();
+    second.release();
+  });
+
+  it("keeps the replacement backup name inside NAME_MAX for a long destination", async () => {
+    const root = makeTempRoot();
+    // A CJK title truncated at the legacy formatter's own 200-byte cap, plus
+    // the allocator's source-id collision suffix. At 231 bytes the destination
+    // itself is fine, but ".videleum-replace-backup-<uuid>" adds 59 more, and a
+    // backup name derived from the destination used to reach 290 - past the
+    // 255-byte NAME_MAX of ext4, where the container runs. The assertion is on
+    // the name rather than on a thrown error because APFS counts characters
+    // instead of bytes, so the over-long name is accepted on macOS.
+    const legacyBase = `${"\u6f22".repeat(66)}ab`;
+    const filename = `${legacyBase} [sone-192-uncensored-leak].mp4`;
+    expect(Buffer.byteLength(legacyBase, "utf8")).toBe(200);
+    expect(Buffer.byteLength(filename, "utf8")).toBe(231);
+
+    const destPath = path.join(root, "videos", filename);
+    const sourcePath = path.join(root, "videos", "new-download.mp4");
+    fs.outputFileSync(destPath, "old-video");
+    fs.outputFileSync(sourcePath, "new-video");
+    const allocator = await loadAllocator(root, [
+      {
+        id: "local-1",
+        videoPath: `/videos/${filename}`,
+        thumbnailPath: null,
+        subtitles: [],
+      },
+    ]);
+
+    const renamedTo: string[] = [];
+    const realRenameSync = fs.renameSync;
+    vi.spyOn(fs, "renameSync").mockImplementation(((from: any, to: any) => {
+      renamedTo.push(String(to));
+      return (realRenameSync as any)(from, to);
+    }) as typeof fs.renameSync);
+
+    allocator.replaceOwnedFileWithBackupSync(
+      sourcePath,
+      path.join(root, "videos"),
+      destPath,
+      path.join(root, "videos"),
+      "local-1"
+    );
+
+    const backupTargets = renamedTo.filter((target) =>
+      target.includes("videleum-replace-backup")
+    );
+    expect(backupTargets).toHaveLength(1);
+    for (const target of backupTargets) {
+      expect(Buffer.byteLength(path.basename(target), "utf8")).toBeLessThanOrEqual(255);
+    }
+
+    expect(fs.readFileSync(destPath, "utf8")).toBe("new-video");
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(
+      fs
+        .readdirSync(path.join(root, "videos"))
+        .filter((entry) => entry.includes("videleum-replace-backup"))
+    ).toEqual([]);
+  });
+
+  it("trims the family stem so a collision suffix cannot overflow NAME_MAX", async () => {
+    const root = makeTempRoot();
+    // The legacy formatter's own 200-byte cap, as on the file in issue #446,
+    // plus a source id long enough that the collision suffix would carry the
+    // name to 262 bytes - past the 255 a filename can actually be.
+    const stem = `${"\u6f22".repeat(66)}ab`;
+    const longId = "sone-192-uncensored-leak-4k-remastered-directors-cut-v2";
+    expect(Buffer.byteLength(`${stem} [${longId}].mp4`, "utf8")).toBe(262);
+    const allocator = await loadAllocator(root);
+
+    const first = allocator.allocateOutputFamilySync({
+      videoRelativePath: `${stem}.mp4`,
+      thumbnailRelativePath: `${stem}.jpg`,
+      subtitleBaseRelativePath: stem,
+      thumbnailBaseDir: path.join(root, "images"),
+      identity: { platform: "missav", sourceVideoId: "abc", mediaType: "video" },
+    });
+    const second = allocator.allocateOutputFamilySync({
+      videoRelativePath: `${stem}.mp4`,
+      thumbnailRelativePath: `${stem}.jpg`,
+      subtitleBaseRelativePath: stem,
+      thumbnailBaseDir: path.join(root, "images"),
+      identity: { platform: "missav", sourceVideoId: longId, mediaType: "video" },
+    });
+
+    // The uncontested name is short enough to be left exactly as it came in.
+    expect(first.videoRelativePath).toBe(`${stem}.mp4`);
+    expect(second.collisionStrategy).toBe("source_id");
+    // The suffix is what disambiguates, so it survives whole; the stem gives way.
+    expect(second.videoRelativePath.endsWith(` [${longId}].mp4`)).toBe(true);
+    expect(Buffer.byteLength(second.videoRelativePath, "utf8")).toBeLessThanOrEqual(255);
+
+    // The thumbnail and subtitle base must keep the video's stem: subtitle
+    // discovery matches on it, and a thumbnail that kept the untrimmed stem
+    // would collide with the row this suffix exists to disambiguate from.
+    const secondStem = second.videoRelativePath.replace(/\.mp4$/, "");
+    expect(second.thumbnailRelativePath).toBe(`${secondStem}.jpg`);
+    expect(second.subtitleBaseRelativePath).toBe(secondStem);
+
+    // The trimmed name must still be writable on disk.
+    const written = path.join(root, "videos", second.videoRelativePath);
+    fs.outputFileSync(written, "video");
+    expect(fs.existsSync(written)).toBe(true);
+
+    first.release();
+    second.release();
+  });
+
+  it("treats a dotted subtitle base as a bare stem, not as an extension", async () => {
+    const root = makeTempRoot();
+    // The legacy formatter writes spaces as dots, so a real title arrives here
+    // full of them and the extensionless subtitle base ends in what looks like
+    // an extension. Reading it as one measured the stem short by those bytes:
+    // the base came back 196 rather than 190, putting the subtitle at 261 and
+    // leaving it out of step with the video's own stem.
+    const base = `${"a".repeat(194)}.final`;
+    const longId = "sone-192-uncensored-leak-4k-remastered-directors-cut-v2";
+    const subtitleFiles = [{ language: "en", extension: ".vtt" }];
+    expect(Buffer.byteLength(base, "utf8")).toBe(200);
+
+    const allocator = await loadAllocator(root);
+    const first = allocator.allocateOutputFamilySync({
+      videoRelativePath: `${base}.mp4`,
+      thumbnailRelativePath: `${base}.jpg`,
+      subtitleBaseRelativePath: base,
+      thumbnailBaseDir: path.join(root, "images"),
+      identity: { platform: "missav", sourceVideoId: "abc", mediaType: "video" },
+      subtitleFiles,
+    });
+    const second = allocator.allocateOutputFamilySync({
+      videoRelativePath: `${base}.mp4`,
+      thumbnailRelativePath: `${base}.jpg`,
+      subtitleBaseRelativePath: base,
+      thumbnailBaseDir: path.join(root, "images"),
+      identity: { platform: "missav", sourceVideoId: longId, mediaType: "video" },
+      subtitleFiles,
+    });
+
+    expect(second.collisionStrategy).toBe("source_id");
+    const subtitleName = `${second.subtitleBaseRelativePath}.en.vtt`;
+    expect(Buffer.byteLength(subtitleName, "utf8")).toBeLessThanOrEqual(255);
+
+    // The base must also still be the video's own stem, which the misread
+    // extension broke on its own: 196 bytes against the video's 190.
+    expect(second.videoRelativePath).toBe(`${second.subtitleBaseRelativePath}.mp4`);
+    expect(second.thumbnailRelativePath).toBe(
+      `${second.subtitleBaseRelativePath}.jpg`
+    );
+
+    const written = path.join(root, "videos", subtitleName);
+    fs.outputFileSync(written, "sub");
+    expect(fs.existsSync(written)).toBe(true);
+
+    first.release();
+    second.release();
+  });
+
+  it("budgets the discriminator a repeated subtitle language will carry", async () => {
+    const root = makeTempRoot();
+    // collectionFileManager gives the second subtitle of one language a `.2`
+    // before its extension. Budgeting the plain `.<lang><ext>` left that target
+    // two bytes over at 257, and the collection move rolled back with
+    // ENAMETOOLONG. An ASCII stem keeps the boundary exact: byte truncation of
+    // a CJK stem rounds down far enough to hide the two-byte overshoot.
+    const stem = "a".repeat(200);
+    const longId = "sone-192-uncensored-leak-4k-remastered-directors-cut-v2";
+    const subtitleFiles = [
+      { language: "zh-Hant-TW", extension: ".vtt" },
+      { language: "zh-Hant-TW", extension: ".vtt" },
+    ];
+    const allocator = await loadAllocator(root);
+
+    const first = allocator.allocateOutputFamilySync({
+      videoRelativePath: `${stem}.mp4`,
+      thumbnailRelativePath: `${stem}.jpg`,
+      subtitleBaseRelativePath: stem,
+      thumbnailBaseDir: path.join(root, "images"),
+      identity: { platform: "missav", sourceVideoId: "abc", mediaType: "video" },
+      subtitleFiles,
+    });
+    const second = allocator.allocateOutputFamilySync({
+      videoRelativePath: `${stem}.mp4`,
+      thumbnailRelativePath: `${stem}.jpg`,
+      subtitleBaseRelativePath: stem,
+      thumbnailBaseDir: path.join(root, "images"),
+      identity: { platform: "missav", sourceVideoId: longId, mediaType: "video" },
+      subtitleFiles,
+    });
+
+    expect(second.collisionStrategy).toBe("source_id");
+    const plain = `${second.subtitleBaseRelativePath}.zh-Hant-TW.vtt`;
+    const discriminated = `${second.subtitleBaseRelativePath}.zh-Hant-TW.2.vtt`;
+    expect(Buffer.byteLength(plain, "utf8")).toBeLessThanOrEqual(255);
+    expect(Buffer.byteLength(discriminated, "utf8")).toBeLessThanOrEqual(255);
+
+    const written = path.join(root, "videos", discriminated);
+    fs.outputFileSync(written, "sub");
+    expect(fs.existsSync(written)).toBe(true);
+
+    first.release();
+    second.release();
+  });
+
+  it("keeps an owned video's path even when a subtitle tail cannot fit it", async () => {
+    const root = makeTempRoot();
+    // A deliberate trade-off, not an oversight. The owned video sits close
+    // enough to NAME_MAX that a subtitle on the same stem cannot fit, and no
+    // allocation can make it fit while the family shares one stem. Trimming
+    // would move the row off a file that exists - orphaning it and writing a
+    // duplicate - to gain a subtitle. Keeping the video costs at most that one
+    // subtitle, which is what happened before any of this trimming existed.
+    const stem = `${"a".repeat(240)} [def]`;
+    const owned = `${stem}.mp4`;
+    expect(Buffer.byteLength(owned, "utf8")).toBe(250);
+    expect(
+      Buffer.byteLength(`${stem}.zh-Hant-TW.vtt`, "utf8")
+    ).toBeGreaterThan(255);
+
+    const base = "a".repeat(240);
+    // The bypass now requires the file, not just the row.
+    fs.outputFileSync(path.join(root, "videos", owned), "video");
+    const allocator = await loadAllocator(root, [
+      {
+        id: "local-2",
+        videoPath: `/videos/${base}.mp4`,
+        thumbnailPath: `/images/${base}.jpg`,
+        subtitles: [],
+      },
+      {
+        id: "local-1",
+        videoPath: `/videos/${owned}`,
+        thumbnailPath: `/images/${stem}.jpg`,
+        subtitles: [],
+      },
+    ]);
+
+    const reservation = allocator.allocateOutputFamilySync({
+      videoRelativePath: `${base}.mp4`,
+      thumbnailRelativePath: `${base}.jpg`,
+      subtitleBaseRelativePath: base,
+      thumbnailBaseDir: path.join(root, "images"),
+      identity: {
+        platform: "youtube",
+        sourceVideoId: "def",
+        mediaType: "video",
+        localVideoId: "local-1",
+      },
+      existingLocalVideoId: "local-1",
+      ownedManagedPaths: [`/videos/${owned}`],
+      subtitleRequired: true,
+    });
+
+    expect(reservation.videoRelativePath).toBe(owned);
+    expect(reservation.subtitleBaseRelativePath).toBe(stem);
+    reservation.release();
+  });
+
+  it("reserves room for the subtitle tail, not just the video extension", async () => {
+    const root = makeTempRoot();
+    // The subtitle base carries `.<lang><ext>` where the video carries ".mp4".
+    // Budgeting the family on the video's extension alone left the subtitle
+    // over NAME_MAX once processSubtitles appended its own tail.
+    const stem = `${"\u6f22".repeat(66)}ab`;
+    const longId = "sone-192-uncensored-leak-4k-remastered-directors-cut-v2";
+    const allocator = await loadAllocator(root);
+
+    const first = allocator.allocateOutputFamilySync({
+      videoRelativePath: `${stem}.mp4`,
+      thumbnailRelativePath: `${stem}.jpg`,
+      subtitleBaseRelativePath: stem,
+      thumbnailBaseDir: path.join(root, "images"),
+      identity: { platform: "missav", sourceVideoId: "abc", mediaType: "video" },
+      subtitleRequired: true,
+    });
+    const second = allocator.allocateOutputFamilySync({
+      videoRelativePath: `${stem}.mp4`,
+      thumbnailRelativePath: `${stem}.jpg`,
+      subtitleBaseRelativePath: stem,
+      thumbnailBaseDir: path.join(root, "images"),
+      identity: { platform: "missav", sourceVideoId: longId, mediaType: "video" },
+      subtitleRequired: true,
+    });
+
+    expect(second.collisionStrategy).toBe("source_id");
+    // Every member has to land within NAME_MAX once its own tail is on.
+    const subtitleName = `${second.subtitleBaseRelativePath}.zh-Hant-TW.vtt`;
+    expect(Buffer.byteLength(subtitleName, "utf8")).toBeLessThanOrEqual(255);
+    expect(
+      Buffer.byteLength(second.videoRelativePath, "utf8")
+    ).toBeLessThanOrEqual(255);
+    expect(
+      Buffer.byteLength(second.thumbnailRelativePath, "utf8")
+    ).toBeLessThanOrEqual(255);
+
+    // And the family still shares one stem.
+    const stemOf = second.subtitleBaseRelativePath;
+    expect(second.videoRelativePath).toBe(`${stemOf}.mp4`);
+    expect(second.thumbnailRelativePath).toBe(`${stemOf}.jpg`);
+
+    // The subtitle name must be writable, not merely short enough on paper.
+    const written = path.join(root, "videos", subtitleName);
+    fs.outputFileSync(written, "sub");
+    expect(fs.existsSync(written)).toBe(true);
+
+    first.release();
+    second.release();
+  });
+
+  it("falls back to a numeric suffix when the source id fills the budget", async () => {
+    const root = makeTempRoot();
+    // extractSourceVideoId hands back the whole URL for platforms it has no
+    // pattern for, so a source suffix can be wider than any name may be. There
+    // is no stem to cut down to, and reserving one anyway produced a path that
+    // failed at publication with ENAMETOOLONG.
+    const hugeId = `https://example.com/watch?v=${"a".repeat(280)}`;
+    const allocator = await loadAllocator(root);
+
+    const first = allocator.allocateOutputFamilySync({
+      videoRelativePath: "Episode.mp4",
+      thumbnailRelativePath: "Episode.jpg",
+      subtitleBaseRelativePath: "Episode",
+      thumbnailBaseDir: path.join(root, "images"),
+      identity: { platform: "other", sourceVideoId: "short", mediaType: "video" },
+    });
+    const second = allocator.allocateOutputFamilySync({
+      videoRelativePath: "Episode.mp4",
+      thumbnailRelativePath: "Episode.jpg",
+      subtitleBaseRelativePath: "Episode",
+      thumbnailBaseDir: path.join(root, "images"),
+      identity: { platform: "other", sourceVideoId: hugeId, mediaType: "video" },
+    });
+
+    expect(first.videoRelativePath).toBe("Episode.mp4");
+    // The unusable source suffix is dropped rather than carried into the
+    // numeric attempts, which would have made every one of them impossible too.
+    expect(second.collisionStrategy).toBe("numeric");
+    // The rejected source-id attempt still consumed a round, so the numbering
+    // opens at (3). Unique and creatable is what matters here; a gap in the
+    // ordinal is not worth reaching into the loop counter for.
+    expect(second.videoRelativePath).toBe("Episode (3).mp4");
+    expect(
+      Buffer.byteLength(second.videoRelativePath, "utf8")
+    ).toBeLessThanOrEqual(255);
+
+    const written = path.join(root, "videos", second.videoRelativePath);
+    fs.outputFileSync(written, "video");
+    expect(fs.existsSync(written)).toBe(true);
+
+    first.release();
+    second.release();
+  });
+
+  it("leaves an owned suffixed name alone even past the byte budget", async () => {
+    // 254 bytes: past the 238-byte stem budget the subtitle tail leaves, but
+    // still creatable on ext4, so the fixture behaves the same on CI as on
+    // APFS - where NAME_MAX counts characters and owned names run far longer.
+    const root = makeTempRoot();
+    const base = "a".repeat(240);
+    const owned = `${base} [defghij].mp4`;
+    expect(Buffer.byteLength(owned, "utf8")).toBe(254);
+
+    // The bypass rests on the file being there, so the fixture puts it there.
+    fs.outputFileSync(path.join(root, "videos", owned), "video");
+
+    const allocator = await loadAllocator(root, [
+      // Another row holds the unsuffixed base name, which is why this row got a
+      // suffix in the first place and why it collides again on reallocation.
+      {
+        id: "local-2",
+        videoPath: `/videos/${base}.mp4`,
+        thumbnailPath: `/images/${base}.jpg`,
+        subtitles: [],
+      },
+      {
+        id: "local-1",
+        videoPath: `/videos/${owned}`,
+        thumbnailPath: `/images/${base} [defghij].jpg`,
+        subtitles: [],
+      },
+    ]);
+
+    const reservation = allocator.allocateOutputFamilySync({
+      videoRelativePath: `${base}.mp4`,
+      thumbnailRelativePath: `${base}.jpg`,
+      subtitleBaseRelativePath: base,
+      thumbnailBaseDir: path.join(root, "images"),
+      identity: {
+        platform: "youtube",
+        sourceVideoId: "defghij",
+        mediaType: "video",
+        localVideoId: "local-1",
+      },
+      existingLocalVideoId: "local-1",
+      ownedManagedPaths: [`/videos/${owned}`],
+      subtitleFiles: [{ language: "en", extension: ".vtt" }],
+    });
+
+    // Reallocating for the same row must land back on the file it already has.
+    expect(reservation.videoRelativePath).toBe(owned);
+    reservation.release();
+  });
+
+  it("trims an owned name when no file backs the claim", async () => {
+    // ownedPaths is built from stored path strings alone. A database written on
+    // APFS and restored onto ext4 carries names that volume cannot hold, and a
+    // row whose file has gone missing carries no proof either. Bypassing the
+    // budget for those hands back a destination nothing can create.
+    const root = makeTempRoot();
+    const base = "a".repeat(240);
+    const owned = `${base} [defghij].mp4`;
+
+    // Same rows as above, and deliberately no file on disk for the owned path.
+    const allocator = await loadAllocator(root, [
+      {
+        id: "local-2",
+        videoPath: `/videos/${base}.mp4`,
+        thumbnailPath: `/images/${base}.jpg`,
+        subtitles: [],
+      },
+      {
+        id: "local-1",
+        videoPath: `/videos/${owned}`,
+        thumbnailPath: `/images/${base} [defghij].jpg`,
+        subtitles: [],
+      },
+    ]);
+
+    const reservation = allocator.allocateOutputFamilySync({
+      videoRelativePath: `${base}.mp4`,
+      thumbnailRelativePath: `${base}.jpg`,
+      subtitleBaseRelativePath: base,
+      thumbnailBaseDir: path.join(root, "images"),
+      identity: {
+        platform: "youtube",
+        sourceVideoId: "defghij",
+        mediaType: "video",
+        localVideoId: "local-1",
+      },
+      existingLocalVideoId: "local-1",
+      ownedManagedPaths: [`/videos/${owned}`],
+      subtitleFiles: [{ language: "en", extension: ".vtt" }],
+    });
+
+    expect(reservation.videoRelativePath).not.toBe(owned);
+    expect(reservation.videoRelativePath).toBe(
+      `${"a".repeat(238)} [defghij].mp4`
+    );
+    reservation.release();
+  });
+
+  it("leaves a suffixed name that already fits exactly as it is", async () => {
+    const root = makeTempRoot();
+    // 244 bytes with the suffix: under NAME_MAX, so a file this size can and
+    // does exist on disk today. Trimming it would compute a path no existing
+    // file has, orphaning it and writing a duplicate alongside on redownload.
+    const stem = "\u6f22".repeat(78);
+    expect(Buffer.byteLength(`${stem} [def].mp4`, "utf8")).toBe(244);
+    const allocator = await loadAllocator(root);
+
+    const first = allocator.allocateOutputFamilySync({
+      videoRelativePath: `${stem}.mp4`,
+      thumbnailRelativePath: `${stem}.jpg`,
+      subtitleBaseRelativePath: stem,
+      thumbnailBaseDir: path.join(root, "images"),
+      identity: { platform: "youtube", sourceVideoId: "abc", mediaType: "video" },
+    });
+    const second = allocator.allocateOutputFamilySync({
+      videoRelativePath: `${stem}.mp4`,
+      thumbnailRelativePath: `${stem}.jpg`,
+      subtitleBaseRelativePath: stem,
+      thumbnailBaseDir: path.join(root, "images"),
+      identity: { platform: "youtube", sourceVideoId: "def", mediaType: "video" },
+    });
+
+    expect(second.collisionStrategy).toBe("source_id");
+    expect(second.videoRelativePath).toBe(`${stem} [def].mp4`);
+    expect(second.thumbnailRelativePath).toBe(`${stem} [def].jpg`);
+    expect(second.subtitleBaseRelativePath).toBe(`${stem} [def]`);
+
+    first.release();
+    second.release();
+  });
+});

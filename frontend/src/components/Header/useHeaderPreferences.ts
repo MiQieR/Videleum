@@ -1,0 +1,83 @@
+import { useEffect, useMemo, useState } from 'react';
+
+import { api } from '../../utils/apiClient';
+
+interface HeaderSettings {
+    websiteName?: string;
+    infiniteScroll?: boolean;
+    showThemeButton?: boolean;
+    showAudioDownloadButton?: boolean;
+}
+
+interface HeaderPreferences {
+    websiteName: string;
+    infiniteScroll: boolean;
+    showThemeButton: boolean;
+    showAudioDownloadButton: boolean;
+}
+
+export const useHeaderPreferences = (
+    isAuthenticated: boolean,
+    settingsData?: HeaderSettings
+): HeaderPreferences => {
+    const [websiteNameState, setWebsiteNameState] = useState('Videleum');
+    const [infiniteScrollState, setInfiniteScrollState] = useState(false);
+    const [showThemeButtonState, setShowThemeButtonState] = useState(true);
+    const [showAudioDownloadButtonState, setShowAudioDownloadButtonState] = useState(true);
+
+    useEffect(() => {
+        if (isAuthenticated) {
+            return;
+        }
+
+        const fetchSettings = async () => {
+            try {
+                const response = await api.get('/settings');
+                const data = response.data;
+                if (!data) {
+                    return;
+                }
+                if (data.websiteName) {
+                    setWebsiteNameState(data.websiteName);
+                }
+                if (typeof data.infiniteScroll !== 'undefined') {
+                    setInfiniteScrollState(Boolean(data.infiniteScroll));
+                }
+                if (typeof data.showThemeButton !== 'undefined') {
+                    setShowThemeButtonState(Boolean(data.showThemeButton));
+                }
+                if (typeof data.showAudioDownloadButton !== 'undefined') {
+                    setShowAudioDownloadButtonState(Boolean(data.showAudioDownloadButton));
+                }
+            } catch (error) {
+                console.error('Failed to fetch settings for header:', error);
+            }
+        };
+
+        void fetchSettings();
+    }, [isAuthenticated]);
+
+    return useMemo(() => {
+        if (settingsData) {
+            return {
+                websiteName: settingsData.websiteName?.trim() || 'Videleum',
+                infiniteScroll: settingsData.infiniteScroll ?? false,
+                showThemeButton: settingsData.showThemeButton !== false,
+                showAudioDownloadButton: settingsData.showAudioDownloadButton !== false,
+            };
+        }
+
+        return {
+            websiteName: websiteNameState.trim() || 'Videleum',
+            infiniteScroll: infiniteScrollState,
+            showThemeButton: showThemeButtonState,
+            showAudioDownloadButton: showAudioDownloadButtonState,
+        };
+    }, [
+        settingsData,
+        websiteNameState,
+        infiniteScrollState,
+        showThemeButtonState,
+        showAudioDownloadButtonState,
+    ]);
+};

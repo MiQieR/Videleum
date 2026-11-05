@@ -1,0 +1,9 @@
+/* App.css */
+/* Most styles have been moved to MUI components and theme.ts */
+/* Keep this file for any global custom styles that don't fit in the theme */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh / var(--automotive-zoom, 1));
+}

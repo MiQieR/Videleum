@@ -1,0 +1,415 @@
+name: Build and Release Desktop Packages (macOS & Windows)
+
+on:
+  release:
+    types: [published]
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version tag (e.g., v0.1.0)'
+        required: false
+        default: 'v0.1.0'
+        type: string
+      publish_release:
+        description: 'Create/Update GitHub Release when running via workflow_dispatch'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  NODE_VERSION: '22.23.4'
+  SKIP_FFMPEG_AUTO_INSTALL: '1'
+  SKIP_PROVIDER_BUILD: '1'
+  PUPPETEER_SKIP_DOWNLOAD: '1'
+  PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: '1'
+
+jobs:
+  # ============================================================================
+  # 1. macOS Native GPUI Desktop Packages (.dmg & .tar.gz with Ad-Hoc Signing)
+  # ============================================================================
+  build-macos:
+    name: Build macOS GPUI Desktop (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            node_arch: arm64
+            rust_target: aarch64-apple-darwin
+            runner: macos-14
+          - arch: x64
+            node_arch: x64
+            rust_target: x86_64-apple-darwin
+            runner: macos-14
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "release" && -n "${{ github.event.release.tag_name }}" ]]; then
+            TAG="${{ github.event.release.tag_name }}"
+          elif [[ "${{ github.event_name }}" == "push" && "${{ github.ref_name }}" == v* ]]; then
+            TAG="${{ github.ref_name }}"
+          elif [[ -n "${{ github.event.inputs.version }}" ]]; then
+            TAG="${{ github.event.inputs.version }}"
+          else
+            PKG_VER=$(node -p "require('./package.json').version")
+            TAG="v${PKG_VER}"
+          fi
+          RAW_VER="${TAG#v}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "raw=${RAW_VER}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }} (${{ matrix.node_arch }})
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          architecture: ${{ matrix.node_arch }}
+          cache: 'npm'
+
+      - name: Setup Rust Toolchain (${{ matrix.rust_target }})
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Build Native GPUI Desktop App
+        working-directory: desktop
+        run: |
+          cargo build --release --target ${{ matrix.rust_target }}
+
+      - name: Build Frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          VITE_API_URL=/api VITE_BACKEND_URL= npm run build
+
+      - name: Build Backend & Native Modules for ${{ matrix.arch }}
+        working-directory: backend
+        run: |
+          npm ci
+          if [ -d "bgutil-ytdlp-pot-provider/server" ]; then
+            pushd bgutil-ytdlp-pot-provider/server
+            CXXFLAGS="-include cstdint" npm install
+            npx tsc
+            npm prune --omit=dev
+            popd
+          fi
+          npm run build
+          npm prune --omit=dev
+
+      - name: Assemble Ad-Hoc Signed Videleum.app & DMG Installer
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.version.outputs.tag }}"
+          RAW_VER="${{ steps.version.outputs.raw }}"
+          ARCH="${{ matrix.arch }}"
+          NODE_ARCH="${{ matrix.node_arch }}"
+          RUST_TARGET="${{ matrix.rust_target }}"
+
+          WORK_DIR="$RUNNER_TEMP/macos-${ARCH}"
+          APP_BUNDLE="$WORK_DIR/Videleum.app"
+          APP_RESOURCES="$APP_BUNDLE/Contents/Resources/app"
+          mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources" "$APP_RESOURCES"/{runtime,frontend}
+
+          # Copy native GPUI binary and AppIcon.icns
+          cp "desktop/target/${RUST_TARGET}/release/Videleum" "$APP_BUNDLE/Contents/MacOS/Videleum"
+          chmod +x "$APP_BUNDLE/Contents/MacOS/Videleum"
+          cp "desktop/assets/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
+
+          # Download standalone macOS Node.js runtime for target architecture
+          curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-darwin-${NODE_ARCH}.tar.gz" \
+            | tar -xz --strip-components=1 -C "$APP_RESOURCES/runtime"
+
+          # Copy backend & frontend artifacts into Videleum.app/Contents/Resources/app
+          cp -R backend/dist "$APP_RESOURCES/dist"
+          cp -R backend/node_modules "$APP_RESOURCES/node_modules"
+          cp -R backend/drizzle "$APP_RESOURCES/drizzle"
+          cp -R backend/scripts "$APP_RESOURCES/scripts"
+          cp -R backend/vendor "$APP_RESOURCES/vendor"
+          cp backend/package.json "$APP_RESOURCES/package.json"
+          if [ -d "backend/bgutil-ytdlp-pot-provider" ]; then
+            mkdir -p "$APP_RESOURCES/bgutil-ytdlp-pot-provider/server"
+            cp -R backend/bgutil-ytdlp-pot-provider/server/build "$APP_RESOURCES/bgutil-ytdlp-pot-provider/server/build"
+            cp -R backend/bgutil-ytdlp-pot-provider/server/node_modules "$APP_RESOURCES/bgutil-ytdlp-pot-provider/server/node_modules"
+            cp backend/bgutil-ytdlp-pot-provider/server/package.json "$APP_RESOURCES/bgutil-ytdlp-pot-provider/server/package.json"
+            cp -R backend/bgutil-ytdlp-pot-provider/plugin "$APP_RESOURCES/bgutil-ytdlp-pot-provider/plugin"
+          fi
+          cp -R frontend/dist "$APP_RESOURCES/frontend/dist"
+          cp LICENSE README.md README-zh.md "$APP_RESOURCES/"
+
+          # Write Info.plist with CFBundleIconFile
+          cat > "$APP_BUNDLE/Contents/Info.plist" << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key>
+            <string>Videleum</string>
+            <key>CFBundleDisplayName</key>
+            <string>Videleum</string>
+            <key>CFBundleIdentifier</key>
+            <string>io.github.miqier.videleum</string>
+            <key>CFBundleVersion</key>
+            <string>${RAW_VER}</string>
+            <key>CFBundleShortVersionString</key>
+            <string>${RAW_VER}</string>
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+            <key>CFBundleExecutable</key>
+            <string>Videleum</string>
+            <key>CFBundleIconFile</key>
+            <string>AppIcon</string>
+            <key>LSMinimumSystemVersion</key>
+            <string>12.0</string>
+            <key>NSHighResolutionCapable</key>
+            <true/>
+          </dict>
+          </plist>
+          EOF
+
+          # Ad-hoc sign all native addons (.node), bundled Node runtime, GPUI binary, and the .app bundle
+          find "$APP_BUNDLE" -name "*.node" -exec codesign --force --sign - {} \;
+          codesign --force --sign - "$APP_RESOURCES/runtime/bin/node"
+          codesign --force --sign - "$APP_BUNDLE/Contents/MacOS/Videleum"
+          codesign --force --deep --sign - "$APP_BUNDLE"
+          codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+
+          mkdir -p dist-release
+          tar -czf "dist-release/Videleum-${TAG}-macos-${ARCH}-adhoc.tar.gz" -C "$WORK_DIR" "Videleum.app"
+
+          # Create DMG with Applications symlink
+          DMG_STAGE="$WORK_DIR/dmg-stage"
+          mkdir -p "$DMG_STAGE"
+          cp -R "$APP_BUNDLE" "$DMG_STAGE/Videleum.app"
+          ln -s /Applications "$DMG_STAGE/Applications"
+          hdiutil create -volname "Videleum ${TAG}" \
+            -srcfolder "$DMG_STAGE" \
+            -ov -format UDZO \
+            "dist-release/Videleum-${TAG}-macos-${ARCH}-adhoc.dmg"
+
+      - name: Upload macOS Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-macos-${{ matrix.arch }}
+          path: dist-release/*
+
+  # ============================================================================
+  # 2. Windows Native GPUI Desktop Packages (.exe Inno Setup Installer & .zip)
+  # ============================================================================
+  build-windows:
+    name: Build Windows GPUI Desktop (x64)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "release" && -n "${{ github.event.release.tag_name }}" ]]; then
+            TAG="${{ github.event.release.tag_name }}"
+          elif [[ "${{ github.event_name }}" == "push" && "${{ github.ref_name }}" == v* ]]; then
+            TAG="${{ github.ref_name }}"
+          elif [[ -n "${{ github.event.inputs.version }}" ]]; then
+            TAG="${{ github.event.inputs.version }}"
+          else
+            PKG_VER=$(node -p "require('./package.json').version")
+            TAG="v${PKG_VER}"
+          fi
+          RAW_VER="${TAG#v}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "raw=${RAW_VER}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Native GPUI Desktop App (Windows x64)
+        working-directory: desktop
+        run: |
+          cargo build --release
+
+      - name: Build Frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+        env:
+          VITE_API_URL: /api
+          VITE_BACKEND_URL: ''
+
+      - name: Build Backend & POT Provider
+        working-directory: backend
+        shell: bash
+        run: |
+          npm ci
+          if [ -d "bgutil-ytdlp-pot-provider/server" ]; then
+            pushd bgutil-ytdlp-pot-provider/server
+            npm install
+            npx tsc
+            npm prune --omit=dev
+            popd
+          fi
+          npm run build
+          npm prune --omit=dev
+
+      - name: Assemble Windows GPUI Desktop Bundle & Build .exe Installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $Tag = "${{ steps.version.outputs.tag }}"
+          $RawVer = "${{ steps.version.outputs.raw }}"
+          $NodeVer = "${{ env.NODE_VERSION }}"
+
+          $StageDir = Join-Path $env:RUNNER_TEMP "Videleum-$Tag-windows-x64"
+          New-Item -ItemType Directory -Force -Path "$StageDir\runtime", "$StageDir\frontend", "$StageDir\assets" | Out-Null
+
+          # Copy native GPUI executable and icon
+          Copy-Item -Path "desktop\target\release\Videleum.exe" -Destination "$StageDir\Videleum.exe" -Force
+          Copy-Item -Path "desktop\assets\app.ico" -Destination "$StageDir\assets\app.ico" -Force
+
+          # Download standalone Windows Node.js runtime
+          $NodeZip = Join-Path $env:RUNNER_TEMP "node-win-x64.zip"
+          Invoke-WebRequest -Uri "https://nodejs.org/dist/v$NodeVer/node-v$NodeVer-win-x64.zip" -OutFile $NodeZip
+          Expand-Archive -Path $NodeZip -DestinationPath $env:RUNNER_TEMP -Force
+          Copy-Item -Path (Join-Path $env:RUNNER_TEMP "node-v$NodeVer-win-x64\*") -Destination "$StageDir\runtime" -Recurse -Force
+
+          # Copy backend & frontend artifacts
+          Copy-Item -Path "backend\dist" -Destination "$StageDir\dist" -Recurse -Force
+          Copy-Item -Path "backend\node_modules" -Destination "$StageDir\node_modules" -Recurse -Force
+          Copy-Item -Path "backend\drizzle" -Destination "$StageDir\drizzle" -Recurse -Force
+          Copy-Item -Path "backend\scripts" -Destination "$StageDir\scripts" -Recurse -Force
+          Copy-Item -Path "backend\vendor" -Destination "$StageDir\vendor" -Recurse -Force
+          Copy-Item -Path "backend\package.json" -Destination "$StageDir\package.json" -Force
+          if (Test-Path "backend\bgutil-ytdlp-pot-provider") {
+            New-Item -ItemType Directory -Force -Path "$StageDir\bgutil-ytdlp-pot-provider\server" | Out-Null
+            Copy-Item -Path "backend\bgutil-ytdlp-pot-provider\server\build" -Destination "$StageDir\bgutil-ytdlp-pot-provider\server\build" -Recurse -Force
+            Copy-Item -Path "backend\bgutil-ytdlp-pot-provider\server\node_modules" -Destination "$StageDir\bgutil-ytdlp-pot-provider\server\node_modules" -Recurse -Force
+            Copy-Item -Path "backend\bgutil-ytdlp-pot-provider\server\package.json" -Destination "$StageDir\bgutil-ytdlp-pot-provider\server\package.json" -Force
+            Copy-Item -Path "backend\bgutil-ytdlp-pot-provider\plugin" -Destination "$StageDir\bgutil-ytdlp-pot-provider\plugin" -Recurse -Force
+          }
+          Copy-Item -Path "frontend\dist" -Destination "$StageDir\frontend\dist" -Recurse -Force
+          Copy-Item -Path "LICENSE", "README.md", "README-zh.md" -Destination $StageDir -Force
+
+          New-Item -ItemType Directory -Force -Path "dist-release" | Out-Null
+          Compress-Archive -Path $StageDir -DestinationPath "dist-release\Videleum-$Tag-windows-x64.zip" -Force
+
+          # Build Windows Setup .exe using Inno Setup (iscc)
+          $IssPath = Join-Path $env:RUNNER_TEMP "videleum-setup.iss"
+          $OutDir = (Resolve-Path "dist-release").Path
+          $IconPath = (Resolve-Path "desktop\assets\app.ico").Path
+          $IssContent = @"
+          [Setup]
+          AppId={{8B5E2E6A-9F3C-4D2B-A1E7-6C4D8F0A2B9E}
+          AppName=Videleum
+          AppVersion=$RawVer
+          AppPublisher=MiQieR
+          AppPublisherURL=https://github.com/MiQieR/Videleum
+          DefaultDirName={autopf}\Videleum
+          DefaultGroupName=Videleum
+          PrivilegesRequired=lowest
+          SetupIconFile=$IconPath
+          UninstallDisplayIcon={app}\Videleum.exe
+          OutputDir=$OutDir
+          OutputBaseFilename=Videleum-Setup-$Tag-windows-x64
+          Compression=lzma2
+          SolidCompression=yes
+          ArchitecturesAllowed=x64compatible
+          ArchitecturesInstallIn64BitMode=x64compatible
+
+          [Files]
+          Source: "$StageDir\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+          [Icons]
+          Name: "{group}\Videleum"; Filename: "{app}\Videleum.exe"; IconFilename: "{app}\assets\app.ico"; WorkingDir: "{app}"
+          Name: "{autodesktop}\Videleum"; Filename: "{app}\Videleum.exe"; IconFilename: "{app}\assets\app.ico"; WorkingDir: "{app}"
+
+          [Run]
+          Filename: "{app}\Videleum.exe"; Description: "Launch Videleum"; Flags: nowait postinstall skipifsilent
+          "@
+          Set-Content -Path $IssPath -Value $IssContent -Encoding UTF8
+          iscc $IssPath
+
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows-x64
+          path: dist-release/*
+
+  # ============================================================================
+  # 3. Publish GitHub Release with macOS & Windows Installers & Checksums
+  # ============================================================================
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "release" && -n "${{ github.event.release.tag_name }}" ]]; then
+            TAG="${{ github.event.release.tag_name }}"
+          elif [[ "${{ github.event_name }}" == "push" && "${{ github.ref_name }}" == v* ]]; then
+            TAG="${{ github.ref_name }}"
+          elif [[ -n "${{ github.event.inputs.version }}" ]]; then
+            TAG="${{ github.event.inputs.version }}"
+          else
+            PKG_VER=$(node -p "require('./package.json').version")
+            TAG="v${PKG_VER}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Copy Chrome Extension archive & Generate SHA256SUMS.txt
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          for zip in chrome-extension/*.zip; do
+            if [ -f "$zip" ]; then
+              cp "$zip" release-assets/
+            fi
+          done
+          cd release-assets
+          sha256sum * > SHA256SUMS.txt
+          ls -lh
+
+      - name: Create / Update GitHub Release
+        if: ${{ github.event_name == 'release' || startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.event.inputs.publish_release == 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Videleum ${{ steps.version.outputs.tag }}
+          generate_release_notes: true
+          files: release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

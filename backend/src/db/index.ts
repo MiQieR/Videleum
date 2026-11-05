@@ -1,0 +1,160 @@
+import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
+import fs from "fs-extra";
+import path from "path";
+import { DATA_DIR } from "../config/paths";
+import { pathExistsTrustedSync } from "../utils/security";
+import * as schema from "./schema";
+import { logger } from "../utils/logger";
+
+// Ensure data directory exists
+fs.ensureDirSync(DATA_DIR);
+
+const dbPath = path.join(DATA_DIR, "videleum.db");
+
+const DB_RETRY_BASE_DELAY_MS = 250;
+const DB_RETRY_BACKOFF_MULTIPLIER = 2;
+
+function sleepWithoutBusySpin(delayMs: number): void {
+  if (delayMs <= 0) {
+    return;
+  }
+
+  // better-sqlite3 connection opening is synchronous; use Atomics.wait to avoid CPU busy-spin.
+  const signal = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(signal, 0, 0, delayMs);
+}
+
+/**
+ * Configure SQLite database for compatibility with NTFS and other FUSE-based filesystems
+ * This is critical for environments like iStoreOS/OpenWrt where data may be on NTFS partitions
+ *
+ * @param db - The SQLite database instance to configure
+ */
+export function configureDatabase(db: Database.Database): void {
+  // Disable WAL mode - NTFS/FUSE doesn't support atomic operations required by WAL
+  // Use DELETE journal mode instead, which is more compatible with FUSE filesystems
+  db.pragma("journal_mode = DELETE");
+
+  // Set synchronous mode to NORMAL for better performance while maintaining data integrity
+  // FULL is safer but slower, NORMAL is a good balance for most use cases
+  db.pragma("synchronous = NORMAL");
+
+  // Set busy timeout to handle concurrent access better
+  // Increased to 30 seconds for network filesystems (NFS/SMB) which may have higher latency
+  db.pragma("busy_timeout = 30000");
+
+  // Enable foreign keys
+  db.pragma("foreign_keys = ON");
+}
+
+/**
+ * Create database connection with retry logic for network filesystems
+ * This helps handle cases where the database file is on NFS/SMB mounts
+ */
+function createDatabaseConnection(
+  retries = 3
+): Database.Database {
+  let lastError: unknown;
+  let delayMs = DB_RETRY_BASE_DELAY_MS;
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      // Ensure the database file exists (better-sqlite3 will create it if it doesn't exist)
+      // But we need to ensure the directory is accessible first
+      if (!pathExistsTrustedSync(dbPath)) {
+        // Touch the file to ensure it exists before opening
+        fs.ensureFileSync(dbPath);
+      }
+
+      const db = new Database(dbPath);
+      configureDatabase(db);
+      return db;
+    } catch (error: unknown) {
+      const e = error as NodeJS.ErrnoException;
+      if (e.code === "SQLITE_BUSY" || e.code === "SQLITE_LOCKED") {
+        if (attempt < retries) {
+          logger.warn(
+            `Database connection attempt ${attempt} failed (${e.code}), retrying in ${delayMs}ms...`
+          );
+          lastError = error;
+          sleepWithoutBusySpin(delayMs);
+          delayMs *= DB_RETRY_BACKOFF_MULTIPLIER;
+          continue;
+        }
+      }
+      // Provide an actionable message for permission errors — the most common
+      // failure when upgrading Docker bind-mount deployments.
+      if (e.code === "EACCES") {
+        const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+        const gid = typeof process.getgid === "function" ? process.getgid() : undefined;
+        const identity = uid != null && gid != null ? `uid/gid ${uid}/${gid}` : "the current user";
+        const hint = uid != null && gid != null
+          ? `Fix file permissions: chown -R ${uid}:${gid} /path/to/videleum/data /path/to/videleum/uploads`
+          : "Ensure the data directory and database file are writable by the user running Videleum.";
+        throw new Error(
+          `Permission denied: cannot open database at ${dbPath}. Videleum is running as ${identity}. ${hint}`
+        );
+      }
+      // If it's not a busy/locked/permission error, or we've exhausted retries, throw
+      throw error;
+    }
+  }
+  if (lastError instanceof Error) {
+    throw lastError;
+  }
+  throw new Error("Failed to create database connection after retries");
+}
+
+// Create database connection with getters that auto-reopen if closed
+let sqliteInstance: Database.Database = createDatabaseConnection();
+let dbInstance = drizzle(sqliteInstance, { schema });
+
+// Helper to ensure connection is open
+function ensureConnection(): void {
+  if (!sqliteInstance.open) {
+    sqliteInstance = createDatabaseConnection();
+    dbInstance = drizzle(sqliteInstance, { schema });
+  }
+}
+
+// Export sqlite with auto-reconnect
+// Using an empty object as target so we always use the current sqliteInstance
+export const sqlite = new Proxy({} as Database.Database, {
+  get(_target, prop) {
+    ensureConnection();
+    return (sqliteInstance as any)[prop];
+  },
+  set(_target, prop, value) {
+    ensureConnection();
+    (sqliteInstance as any)[prop] = value;
+    return true;
+  },
+});
+
+// Export db with auto-reconnect
+// Using an empty object as target so we always use the current dbInstance
+export const db = new Proxy({} as ReturnType<typeof drizzle>, {
+  get(_target, prop) {
+    ensureConnection();
+    return (dbInstance as any)[prop];
+  },
+});
+
+// Monotonic counter bumped every time the underlying connection is swapped
+// (database import/restore). Long-running background jobs capture it and abort
+// if it changes mid-run, so they never operate across a database replacement.
+let databaseGeneration = 0;
+
+export function getDatabaseGeneration(): number {
+  return databaseGeneration;
+}
+
+// Function to reinitialize the database connection
+export function reinitializeDatabase(): void {
+  if (sqliteInstance.open) {
+    sqliteInstance.close();
+  }
+  sqliteInstance = createDatabaseConnection();
+  dbInstance = drizzle(sqliteInstance, { schema });
+  databaseGeneration += 1;
+}

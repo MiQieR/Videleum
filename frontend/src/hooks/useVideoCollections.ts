@@ -1,0 +1,77 @@
+import { useMemo, useState } from 'react';
+import { useCollection } from '../contexts/CollectionContext';
+
+interface UseVideoCollectionsProps {
+    videoId: string | undefined;
+}
+
+/**
+ * Custom hook to manage video collection operations
+ */
+export function useVideoCollections({ videoId }: UseVideoCollectionsProps) {
+    const {
+        collections,
+        addToCollection,
+        createCollection,
+        removeFromCollection
+    } = useCollection();
+
+    const [showCollectionModal, setShowCollectionModal] = useState<boolean>(false);
+    const [activeCollectionVideoId, setActiveCollectionVideoId] = useState<string | null>(null);
+    const videoCollections = useMemo(() => {
+        if (collections.length > 0 && videoId) {
+            return collections.filter(collection =>
+                collection.videos.includes(videoId)
+            );
+        }
+        return [];
+    }, [collections, videoId]);
+
+    // Calculate collections for the modal (can be current video or sidebar video)
+    const modalVideoCollections = useMemo(() => {
+        if (collections.length > 0 && activeCollectionVideoId) {
+            return collections.filter(collection =>
+                collection.videos.includes(activeCollectionVideoId)
+            );
+        }
+        return [];
+    }, [collections, activeCollectionVideoId]);
+
+    const handleAddToCollection = (targetVideoId?: string) => {
+        setActiveCollectionVideoId(targetVideoId || videoId || null);
+        setShowCollectionModal(true);
+    };
+
+    const handleCloseModal = () => {
+        setShowCollectionModal(false);
+        setActiveCollectionVideoId(null);
+    };
+
+    const handleCreateCollection = async (name: string) => {
+        if (!activeCollectionVideoId) return;
+        await createCollection(name, activeCollectionVideoId);
+    };
+
+    const handleAddToExistingCollection = async (collectionId: string) => {
+        if (!activeCollectionVideoId) return;
+        await addToCollection(collectionId, activeCollectionVideoId);
+    };
+
+    const handleRemoveFromCollection = async (collectionId: string) => {
+        if (!activeCollectionVideoId) return;
+        await removeFromCollection(collectionId, activeCollectionVideoId);
+    };
+
+    return {
+        collections,
+        videoCollections,
+        modalVideoCollections,
+        showCollectionModal,
+        activeCollectionVideoId,
+        handleAddToCollection,
+        handleCloseModal,
+        handleCreateCollection,
+        handleAddToExistingCollection,
+        handleRemoveFromCollection
+    };
+}

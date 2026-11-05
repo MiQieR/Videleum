@@ -1,0 +1,352 @@
+import { Alert, Box, Container, Pagination, Typography, useMediaQuery, useTheme } from '@mui/material';
+import React, { Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useLocation, useNavigate, useSearchParams } from 'react-router';
+import { HomeHeader } from '../components/HomeHeader';
+import { HomeLoadingSkeleton } from '../components/HomeLoadingSkeleton';
+import { HomeSidebar } from '../components/HomeSidebar';
+import { LCPImagePreloader } from '../components/LCPImagePreloader';
+import { VideoGrid } from '../components/VideoGrid';
+import VideoBatchToolbar from '../components/VideoBatchToolbar';
+import { useVideoSelection } from '../hooks/useVideoSelection';
+import { useCollection } from '../contexts/CollectionContext';
+import { useHomeViewModeRequestOptional } from '../contexts/HomeViewModeRequestContext';
+import { useLanguage } from '../contexts/LanguageContext';
+import { useVideo } from '../contexts/VideoContext';
+import { useGridLayout } from '../hooks/useGridLayout';
+import { useHomePagination } from '../hooks/useHomePagination';
+import { useHomeSettings } from '../hooks/useHomeSettings';
+import { useSettings } from '../hooks/useSettings';
+import { useVideoFiltering } from '../hooks/useVideoFiltering';
+import { useVideoSort } from '../hooks/useVideoSort';
+import { useViewMode } from '../hooks/useViewMode';
+import type { ViewMode } from '../hooks/useViewMode';
+import FavoritePage from './FavoritePage';
+import { lazyWithRetry } from '../utils/lazyWithRetry';
+
+const HOME_SORT_STORAGE_SLOT = 'homeSortOption';
+
+const ConfirmationModal = lazyWithRetry(
+    () => import('../components/ConfirmationModal'),
+    'confirmation-modal',
+);
+
+interface HomeProps {
+    initialViewMode?: ViewMode;
+}
+
+const Home: React.FC<HomeProps> = ({ initialViewMode }) => {
+    const { t } = useLanguage();
+    const theme = useTheme();
+    const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+    const {
+        videos,
+        loading,
+        error,
+        availableTags,
+        selectedTags,
+        handleTagToggle,
+        clearSelectedTags,
+        deleteVideo,
+        deleteVideos
+    } = useVideo();
+    const { collections } = useCollection();
+    const { data: settings, isLoading: settingsLoading } = useSettings();
+    const [searchParams, setSearchParams] = useSearchParams();
+    const location = useLocation();
+    const navigate = useNavigate();
+    const [isDeleteFilteredOpen, setIsDeleteFilteredOpen] = useState(false);
+    const [videoGridHeight, setVideoGridHeight] = useState<number | null>(null);
+    const videoGridRef = useRef<HTMLDivElement | null>(null);
+    const homeViewModeRequest = useHomeViewModeRequestOptional();
+    const selectedPlatform = searchParams.get('platform') || 'all';
+
+    const handlePlatformSelect = useCallback((platform: string) => {
+        setSearchParams((prev: URLSearchParams) => {
+            const next = new URLSearchParams(prev);
+            if (!platform || platform === 'all') {
+                next.delete('platform');
+            } else {
+                next.set('platform', platform);
+            }
+            next.set('page', '1');
+            return next;
+        });
+    }, [setSearchParams]);
+
+    // Custom hooks
+    const { viewMode, handleViewModeChange } = useViewMode(initialViewMode);
+    const handleHomeViewModeChange = useCallback((mode: ViewMode) => {
+        handleViewModeChange(mode);
+        // Keep deep-link routes aligned with the active tab so reload/share
+        // opens the same view the user switched to.
+        if (location.pathname === '/favorites') {
+            if (mode === 'collections') {
+                navigate('/collections');
+            } else if (mode !== 'favorite') {
+                navigate('/?page=1');
+            }
+        } else if (location.pathname === '/collections') {
+            if (mode === 'favorite') {
+                navigate('/favorites');
+            } else if (mode !== 'collections') {
+                navigate('/?page=1');
+            }
+        }
+    }, [handleViewModeChange, location.pathname, navigate]);
+    const handleHomeTagToggle = useCallback((tag: string) => {
+        handleHomeViewModeChange('all-videos');
+        handleTagToggle(tag);
+    }, [handleHomeViewModeChange, handleTagToggle]);
+
+    useEffect(() => {
+        const request = homeViewModeRequest?.request;
+        if (!request) {
+            return;
+        }
+
+        handleHomeViewModeChange(request.mode);
+        homeViewModeRequest.clearHomeViewModeRequest(request.sequence);
+    }, [handleHomeViewModeChange, homeViewModeRequest]);
+    const {
+        isSidebarOpen,
+        itemsPerPage,
+        infiniteScroll,
+        videoColumns,
+        defaultSort,
+        showTagsOnThumbnail,
+        settingsLoaded,
+        handleSidebarToggle
+    } = useHomeSettings({
+        settings,
+        settingsLoading
+    });
+    const gridProps = useGridLayout({ isSidebarOpen, videoColumns });
+
+    // Add default empty array to ensure videos is always an array
+    const videoArray = Array.isArray(videos) ? videos : [];
+
+    // Filter videos based on view mode
+    const filteredVideos = useVideoFiltering({
+        videos: videoArray,
+        viewMode,
+        selectedTags,
+        collections,
+        authorTags: settings?.authorTags,
+        collectionTags: settings?.collectionTags,
+        selectedPlatform,
+    });
+
+    // Use the custom hook for sorting
+    const {
+        sortedVideos,
+        sortOption,
+        sortAnchorEl,
+        handleSortClick,
+        handleSortClose
+    } = useVideoSort({
+        videos: filteredVideos,
+        defaultSort,
+        preserveOrder: viewMode === 'history',
+        storageKey: HOME_SORT_STORAGE_SLOT,
+        onSortChange: () => {
+            setSearchParams((prev: URLSearchParams) => {
+                const newParams = new URLSearchParams(prev);
+                newParams.set('page', '1');
+                return newParams;
+            });
+        }
+    });
+
+    // Pagination logic
+    const {
+        page,
+        totalPages,
+        displayedVideos,
+        handlePageChange,
+        swipeHandlers
+    } = useHomePagination({
+        sortedVideos,
+        itemsPerPage,
+        infiniteScroll,
+        selectedTags
+    });
+
+    const selection = useVideoSelection({
+        scopeKey: JSON.stringify(['home', location.pathname, viewMode, selectedPlatform, [...selectedTags].sort()]),
+        modeScopeKey: JSON.stringify(['home', location.pathname, viewMode]),
+        videos: videoArray,
+        enabled: viewMode === 'all-videos' || viewMode === 'history',
+        libraryReady: !loading || videoArray.length > 0,
+    });
+
+    const loadingSkeletonCount = Math.min(Math.max(itemsPerPage, 6), 12);
+    const priorityVideos = infiniteScroll ? sortedVideos : displayedVideos;
+
+    useLayoutEffect(() => {
+        const videoGrid = videoGridRef.current;
+        if (!videoGrid) {
+            setVideoGridHeight(null);
+            return undefined;
+        }
+
+        const updateVideoGridHeight = () => {
+            const nextHeight = Math.ceil(videoGrid.getBoundingClientRect().height);
+            setVideoGridHeight((currentHeight) => (
+                currentHeight === nextHeight ? currentHeight : nextHeight
+            ));
+        };
+
+        updateVideoGridHeight();
+
+        if (typeof ResizeObserver === 'undefined') {
+            window.addEventListener('resize', updateVideoGridHeight);
+            return () => window.removeEventListener('resize', updateVideoGridHeight);
+        }
+
+        const observer = new ResizeObserver(updateVideoGridHeight);
+        observer.observe(videoGrid);
+        return () => observer.disconnect();
+    }, [displayedVideos.length, infiniteScroll, isSidebarOpen, loading, settingsLoaded, sortedVideos.length, videoArray.length, videoColumns, viewMode]);
+
+    if (!settingsLoaded || (loading && videoArray.length === 0)) {
+        return <HomeLoadingSkeleton gridProps={gridProps} isSidebarOpen={isSidebarOpen} cardsCount={loadingSkeletonCount} />;
+    }
+
+    if (error && videoArray.length === 0) {
+        return (
+            <Container sx={{ mt: 4 }}>
+                <Alert severity="error">{error}</Alert>
+            </Container>
+        );
+    }
+
+
+
+
+    // Regular home view (not in search mode)
+    return (
+        <Container maxWidth={false} sx={{ py: 4, px: { xs: 0, sm: 3 }, overflowX: 'hidden' }}>
+            {/* Preload first video thumbnail for better LCP */}
+            {priorityVideos.length > 0 && <LCPImagePreloader videos={priorityVideos} />}
+
+            {/* Delete Filtered Videos Modal - deletes the same set as currently shown when filtering */}
+            {isDeleteFilteredOpen && viewMode !== 'favorite' && (
+                <Suspense fallback={null}>
+                    <ConfirmationModal
+                        isOpen={isDeleteFilteredOpen}
+                        onClose={() => setIsDeleteFilteredOpen(false)}
+                        onConfirm={async () => {
+                            if (filteredVideos.length > 0) {
+                                await deleteVideos(filteredVideos.map((v) => v.id));
+                            }
+                        }}
+                        title={t('deleteAllFilteredVideos')}
+                        message={t('confirmDeleteFilteredVideos', {
+                            count: filteredVideos.length
+                        })}
+                        confirmText={t('delete')}
+                        cancelText={t('cancel')}
+                        isDanger={true}
+                    />
+                </Suspense>
+            )}
+
+            {videoArray.length === 0 && viewMode !== 'favorite' ? (
+                <Box sx={{ textAlign: 'center', py: 8 }}>
+                    <Typography variant="h5" color="text.secondary">
+                        {t('noVideosYet')}
+                    </Typography>
+                </Box>
+            ) : (
+                <Box sx={{ display: 'flex', alignItems: 'flex-start', minWidth: 0 }}>
+                    <HomeSidebar
+                        isSidebarOpen={isSidebarOpen}
+                        collections={collections}
+                        availableTags={availableTags}
+                        selectedTags={selectedTags}
+                        onTagToggle={selection.locked ? () => {} : handleHomeTagToggle}
+                        videos={videoArray}
+                        maxPanelHeight={videoGridHeight}
+                    />
+
+                    {/* Videos grid */}
+                    <Box sx={{ flex: 1, minWidth: 0, alignSelf: 'flex-start' }}>
+                        <Box component="fieldset" disabled={selection.locked} sx={{ border: 0, p: 0, m: 0, minWidth: 0 }}>
+                            <HomeHeader
+                                viewMode={viewMode}
+                                onViewModeChange={handleHomeViewModeChange}
+                                onSidebarToggle={handleSidebarToggle}
+                                onSelectionToggle={selection.canWrite && (selection.active || sortedVideos.length > 0)
+                                    ? selection.active ? selection.exit : selection.enter
+                                    : undefined}
+                                selectionActive={selection.active}
+                                actionsDisabled={selection.locked}
+                                selectedTagsCount={selectedTags.length}
+                                onDeleteFilteredClick={() => setIsDeleteFilteredOpen(true)}
+                                onClearTagFilter={clearSelectedTags}
+                                sortOption={sortOption}
+                                sortAnchorEl={sortAnchorEl}
+                                onSortClick={handleSortClick}
+                                onSortClose={handleSortClose}
+                                selectedPlatform={selectedPlatform}
+                                onPlatformSelect={handlePlatformSelect}
+                            />
+                        </Box>
+                        <VideoBatchToolbar selection={selection} pageIds={displayedVideos.map((v) => v.id)}
+                            orderedIds={sortedVideos.map((v) => v.id)} availableTags={availableTags}
+                            infiniteScroll={infiniteScroll} hideEntryButton />
+                        {viewMode === 'favorite' ? (
+                            <FavoritePage
+                                onBrowseCollections={() => handleHomeViewModeChange('collections')}
+                                onFindAuthors={() => handleHomeViewModeChange('all-videos')}
+                            />
+                        ) : viewMode === 'collections' && displayedVideos.length === 0 ? (
+                            <Box sx={{ py: 8, textAlign: 'center' }}>
+                                <Typography variant="h6" color="text.secondary">
+                                    {t('noCollectionsFound')}
+                                </Typography>
+                            </Box>
+                        ) : (
+                            // Swiping the grid sideways turns the page, so a
+                            // touch-only screen can page without the arrow keys.
+                            <Box ref={videoGridRef} {...swipeHandlers}>
+                                <VideoGrid
+                                    selection={selection}
+                                    videos={videoArray}
+                                    sortedVideos={sortedVideos}
+                                    displayedVideos={displayedVideos}
+                                    collections={collections}
+                                    viewMode={viewMode}
+                                    infiniteScroll={infiniteScroll}
+                                    gridProps={gridProps}
+                                    onDeleteVideo={deleteVideo}
+                                    showTagsOnThumbnail={showTagsOnThumbnail}
+                                    onTagToggle={selection.locked ? () => {} : handleHomeTagToggle}
+                                />
+                            </Box>
+                        )}
+
+                        {viewMode !== 'favorite' && !infiniteScroll && totalPages > 1 && (
+                            <Box sx={{ mt: 4, display: 'flex', justifyContent: 'center', px: { xs: 2, sm: 0 } }}>
+                                <Pagination
+                                    disabled={selection.locked}
+                                    count={totalPages}
+                                    page={page}
+                                    onChange={handlePageChange}
+                                    color="primary"
+                                    size={isMobile ? 'medium' : 'large'}
+                                    siblingCount={isMobile ? 0 : 1}
+                                    showFirstButton
+                                    showLastButton
+                                />
+                            </Box>
+                        )}
+                    </Box>
+                </Box>
+            )
+            }
+        </Container >
+    );
+};
+
+export default Home;

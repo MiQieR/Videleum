@@ -1,0 +1,289 @@
+import { VerticalAlignTop } from '@mui/icons-material';
+import {
+    alpha,
+    AppBar,
+    Box,
+    Fab,
+    Slide,
+    Toolbar,
+    useMediaQuery,
+    useTheme
+} from '@mui/material';
+import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { matchPath, useLocation, useNavigate } from 'react-router';
+
+import { useAuth } from '../../contexts/AuthContext';
+import { useHomeViewModeRequestOptional } from '../../contexts/HomeViewModeRequestContext';
+import { useLanguage } from '../../contexts/LanguageContext';
+import { usePageTagFilterOptional } from '../../contexts/PageTagFilterContext';
+import { useThemeContext } from '../../contexts/ThemeContext';
+import { useVideo } from '../../contexts/VideoContext';
+import { useSettings } from '../../hooks/useSettings';
+import HeaderToolbarContent from './HeaderToolbarContent';
+import { HeaderProps } from './types';
+import { useHeaderPreferences } from './useHeaderPreferences';
+import { useHeaderScrollState } from './useHeaderScrollState';
+import { useHeaderSubmission } from './useHeaderSubmission';
+import { useHeaderSubscriptions } from './useHeaderSubscriptions';
+
+const HeaderContainer: React.FC<HeaderProps> = ({
+    onSubmit,
+    onAudioOnlySubmit,
+    activeDownloads = [],
+    queuedDownloads = [],
+    isSearchMode = false,
+    onResetSearch,
+    collections = [],
+    videos = []
+}) => {
+    const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
+    const [manageAnchorEl, setManageAnchorEl] = useState<null | HTMLElement>(null);
+    const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+    const navigate = useNavigate();
+    const location = useLocation();
+    const theme = useTheme();
+    const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+    const { mode: themeMode } = useThemeContext();
+    const { t } = useLanguage();
+    const { userRole, isAuthenticated } = useAuth();
+    const { data: settingsData } = useSettings();
+    const { availableTags, selectedTags, handleTagToggle } = useVideo();
+    const homeViewModeRequest = useHomeViewModeRequestOptional();
+
+    const isVisitor = userRole === 'visitor';
+    const pageTagFilter = usePageTagFilterOptional()?.pageTagFilter ?? null;
+    const effectiveTags = useMemo(() => pageTagFilter ?? {
+        availableTags,
+        selectedTags,
+        onTagToggle: handleTagToggle
+    }, [availableTags, handleTagToggle, pageTagFilter, selectedTags]);
+
+    const { websiteName, infiniteScroll, showThemeButton, showAudioDownloadButton } = useHeaderPreferences(
+        isAuthenticated,
+        settingsData
+    );
+    const hasActiveSubscriptions = useHeaderSubscriptions(isVisitor);
+
+    const isSettingsPage = location.pathname.startsWith('/settings');
+    // `/collections` renders the same Home page (collections view), which
+    // supports tag filtering and infinite scroll, so treat it as a home route.
+    const isHomePage = location.pathname === '/' || location.pathname === '/collections';
+    const isAuthorPage = location.pathname.startsWith('/author/');
+    const isCollectionPage = location.pathname.startsWith('/collection/');
+    const showTagsInMobileMenu = isHomePage || isAuthorPage || isCollectionPage;
+    const linkToAllTagsInMobileMenu = isHomePage;
+    const handleMobileTagToggle = useCallback((tag: string) => {
+        if (isHomePage) {
+            homeViewModeRequest?.requestHomeViewMode('all-videos');
+        }
+        effectiveTags.onTagToggle(tag);
+    }, [effectiveTags, homeViewModeRequest, isHomePage]);
+    const mobileEffectiveTags = useMemo(() => ({
+        ...effectiveTags,
+        onTagToggle: handleMobileTagToggle,
+    }), [effectiveTags, handleMobileTagToggle]);
+    const isScrolled = useHeaderScrollState(isMobile, infiniteScroll, isHomePage);
+    const handleCloseMobileMenu = () => {
+        setMobileMenuOpen(false);
+    };
+    const handleBackdropPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+        event.stopPropagation();
+    };
+    const handleBackdropClick = (event: React.MouseEvent<HTMLDivElement>) => {
+        event.preventDefault();
+        event.stopPropagation();
+        handleCloseMobileMenu();
+    };
+    const handleToggleMobileMenu = () => {
+        setMobileMenuOpen((open) => !open);
+    };
+
+    const {
+        videoUrl,
+        setVideoUrl,
+        isSubmitting,
+        error,
+        handleSubmit,
+        handleAudioSubmit,
+    } = useHeaderSubmission({
+        onSubmit,
+        onAudioOnlySubmit,
+        isVisitor,
+        navigate,
+        t,
+        onCloseMobileMenu: handleCloseMobileMenu
+    });
+
+    // The header outlives route changes, so mirror the search page's query
+    // into the box (back/forward, a pasted /search link) and drop it once the
+    // user leaves search. Keyed on `q` alone so a sort change on the results
+    // page doesn't overwrite a refinement still being typed.
+    const activeSearchQuery = matchPath('/search', location.pathname)
+        ? new URLSearchParams(location.search).get('q') ?? ''
+        : '';
+    useEffect(() => {
+        setVideoUrl(activeSearchQuery);
+    }, [activeSearchQuery, setVideoUrl]);
+
+    const handleDownloadsClick = (event: React.MouseEvent<HTMLElement>) => {
+        setAnchorEl(event.currentTarget);
+    };
+
+    const handleDownloadsClose = () => {
+        setAnchorEl(null);
+    };
+
+    const handleManageClick = (event: React.MouseEvent<HTMLElement>) => {
+        setManageAnchorEl(event.currentTarget);
+    };
+
+    const handleManageClose = () => {
+        setManageAnchorEl(null);
+    };
+    const handleToolbarSubmit = (event: FormEvent) => {
+        void handleSubmit(event);
+    };
+    const handleScrollToTop = () => {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+
+    const headerBackgroundColor = themeMode === 'dark'
+        ? theme.palette.background.default
+        : theme.palette.background.paper;
+    const gradientBackground = `linear-gradient(to bottom, ${headerBackgroundColor} 0%, ${alpha(headerBackgroundColor, 0)} 100%)`;
+    const desktopBackgroundColor = isMobile
+        ? 'background.paper'
+        : alpha(theme.palette.background.paper, 0.7);
+    const collapsedMobileHeader = isMobile && isScrolled && !mobileMenuOpen;
+    const toolbarPaddingY = isMobile ? (collapsedMobileHeader ? 0.5 : 1) : 0;
+    const toolbarMinHeight = collapsedMobileHeader ? '40px !important' : undefined;
+    const spacerHeight = collapsedMobileHeader ? '40px' : isMobile ? '50px' : '64px';
+    const showScrollTopButton = isScrolled && !isSettingsPage && (isMobile || (infiniteScroll && isHomePage));
+    const desktopFabDisplay = infiniteScroll && isHomePage ? 'flex' : 'none';
+
+    return (
+        <>
+            <AppBar
+                position="fixed"
+                color="default"
+                elevation={0}
+                sx={{
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    width: '100%',
+                    maxWidth: '100%',
+                    zIndex: (muiTheme) => muiTheme.zIndex.appBar + 1,
+                    bgcolor: collapsedMobileHeader ? 'transparent' : desktopBackgroundColor,
+                    backgroundImage: collapsedMobileHeader ? gradientBackground : 'none',
+                    borderBottom: collapsedMobileHeader ? 0 : 1,
+                    borderColor: 'divider',
+                    transition: 'background-color 0.3s ease-in-out, background-image 0.3s ease-in-out, border-bottom 0.3s ease-in-out, backdrop-filter 0.3s ease-in-out, height 0.3s ease-in-out',
+                    backdropFilter: collapsedMobileHeader ? 'none' : 'blur(10px)',
+                    boxSizing: 'border-box'
+                }}
+            >
+                <Toolbar
+                    sx={{
+                        flexDirection: isMobile ? 'column' : 'row',
+                        alignItems: isMobile ? 'stretch' : 'center',
+                        py: toolbarPaddingY,
+                        minHeight: toolbarMinHeight,
+                        transition: 'min-height 0.3s ease-in-out, padding 0.3s ease-in-out',
+                        width: '100%',
+                        maxWidth: '100%',
+                        boxSizing: 'border-box'
+                    }}
+                >
+                    <HeaderToolbarContent
+                        isMobile={isMobile}
+                        isScrolled={isScrolled}
+                        isVisitor={isVisitor}
+                        websiteName={websiteName}
+                        onResetSearch={onResetSearch}
+                        activeDownloads={activeDownloads}
+                        queuedDownloads={queuedDownloads}
+                        downloadsAnchorEl={anchorEl}
+                        manageAnchorEl={manageAnchorEl}
+                        onDownloadsClick={handleDownloadsClick}
+                        onDownloadsClose={handleDownloadsClose}
+                        onManageClick={handleManageClick}
+                        onManageClose={handleManageClose}
+                        hasActiveSubscriptions={hasActiveSubscriptions}
+                        showThemeButton={showThemeButton}
+                        showAudioDownloadButton={showAudioDownloadButton}
+                        mobileMenuOpen={mobileMenuOpen}
+                        onToggleMobileMenu={handleToggleMobileMenu}
+                        onCloseMobileMenu={handleCloseMobileMenu}
+                        videoUrl={videoUrl}
+                        setVideoUrl={setVideoUrl}
+                        isSubmitting={isSubmitting}
+                        error={error}
+                        isSearchMode={isSearchMode}
+                        onSubmit={handleToolbarSubmit}
+                        onAudioOnlySubmit={handleAudioSubmit}
+                        collections={collections}
+                        videos={videos}
+                        showTagsInMobileMenu={showTagsInMobileMenu}
+                        linkToAllTagsInMobileMenu={linkToAllTagsInMobileMenu}
+                        effectiveTags={mobileEffectiveTags}
+                    />
+                </Toolbar>
+            </AppBar>
+
+            {isMobile && (
+                <Box
+                    data-testid="mobile-menu-backdrop"
+                    onPointerDown={handleBackdropPointerDown}
+                    onClick={handleBackdropClick}
+                    aria-hidden
+                    sx={{
+                        position: 'fixed',
+                        inset: 0,
+                        bgcolor: alpha(theme.palette.common.black, 0.4),
+                        zIndex: (muiTheme) => muiTheme.zIndex.appBar,
+                        opacity: mobileMenuOpen ? 1 : 0,
+                        pointerEvents: mobileMenuOpen ? 'auto' : 'none',
+                        transition: 'opacity 0.3s ease-in-out',
+                    }}
+                />
+            )}
+
+            <Box
+                sx={{
+                    height: spacerHeight,
+                    flexShrink: 0,
+                    transition: 'height 0.3s ease-in-out'
+                }}
+            />
+
+            <Slide direction="up" in={showScrollTopButton} mountOnEnter unmountOnExit>
+                <Fab
+                    color="primary"
+                    size="medium"
+                    aria-label="scroll to top"
+                    onClick={handleScrollToTop}
+                    sx={{
+                        position: 'fixed',
+                        bottom: 16,
+                        left: 16,
+                        zIndex: (muiTheme) => muiTheme.zIndex.speedDial,
+                        display: {
+                            xs: 'flex',
+                            md: desktopFabDisplay
+                        },
+                        opacity: 0.8,
+                        '&:hover': {
+                            opacity: 1
+                        }
+                    }}
+                >
+                    <VerticalAlignTop />
+                </Fab>
+            </Slide>
+        </>
+    );
+};
+
+export default HeaderContainer;

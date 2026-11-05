@@ -1,0 +1,388 @@
+# Getting Started
+
+## Prerequisites
+
+- **Node.js** (22.22+, 23.x, 24.x, 25.x, or 26.x)
+- **npm** (v9 or higher) or **yarn**
+- **Python 3.8+** (for yt-dlp and PO Token provider)
+- **yt-dlp** (installed via pip/pipx)
+- **Docker** (optional, for containerized deployment)
+
+## Installation
+
+### 1. Clone the Repository
+
+```bash
+git clone https://github.com/MiQieR/Videleum.git
+cd Videleum
+```
+
+### 2. Install Dependencies
+
+You can install all dependencies for the root, frontend, and backend with a single command:
+
+```bash
+npm run install:all
+```
+
+If you use an unsupported Node.js version, the backend may fall back to compiling `better-sqlite3` from source and fail with `node-gyp` errors such as "You need to install the latest version of Visual Studio" on Windows. Switch to a supported Node.js release first.
+
+Or manually:
+
+```bash
+npm install
+cd frontend && npm install
+cd ../backend && npm install
+```
+
+**Note**: The backend installation will automatically build the `bgutil-ytdlp-pot-provider` server. It also performs a best-effort auto-install for `ffmpeg`/`ffprobe` if missing (does not fail install when auto-install is unavailable). You can disable this behavior with `SKIP_FFMPEG_AUTO_INSTALL=1`. You must still ensure `yt-dlp` and the `bgutil-ytdlp-pot-provider` python plugin are installed in your environment:
+
+```bash
+# Install yt-dlp and the plugin. curl-cffi enables yt-dlp browser
+# impersonation, which MissAV downloads need to get past Cloudflare.
+pip install yt-dlp bgutil-ytdlp-pot-provider curl-cffi
+
+# OR using pipx (recommended for isolation)
+pipx install yt-dlp
+pipx inject yt-dlp bgutil-ytdlp-pot-provider curl-cffi
+```
+
+### 3. Configure Environment Variables
+
+#### Backend Configuration
+
+Create a `.env` file in the `backend/` directory:
+
+```env
+PORT=5551
+# Optional: declare the admin trust boundary for this deployment.
+# Valid values: application | container | host
+# Default: container
+# VIDELEUM_ADMIN_TRUST_LEVEL=container
+# Optional: yt-dlp JS runtime for YouTube challenge solving.
+# Default is "deno". On Alpine Linux (musl), set to "node" if Deno is unstable.
+# YT_DLP_JS_RUNTIME=node
+```
+
+Data and uploads are stored under `backend/data` and `backend/uploads` by default (relative to the backend working directory).
+
+For a detailed explanation of `application`, `container`, and `host`, see [Deployment Security Model](deployment-security-model.md).
+
+#### Frontend Configuration
+
+Create a `.env` file in the `frontend/` directory:
+
+```env
+VITE_API_URL=/api
+VITE_BACKEND_URL=
+```
+
+`backend/.env.example` is provided. Copy it to `backend/.env` and adjust as needed. The frontend ships with `frontend/.env`; use `frontend/.env.local` to override defaults.
+
+### 4. Database Setup
+
+The application uses **SQLite** with **Drizzle ORM**. The database will be automatically created and migrated on first startup:
+
+- Database location: `backend/data/videleum.db`
+- Migrations are run automatically when the server starts
+- If you have legacy JSON data, you can migrate it using the settings page or API endpoint
+
+## Running the Application
+
+### Development Mode
+
+From the root directory, start both frontend and backend:
+
+```bash
+npm run dev
+```
+
+This will start:
+
+- **Frontend**: http://localhost:5556 (Vite dev server with hot reload)
+- **Backend API**: http://localhost:5551 (Express server with nodemon)
+
+### Production Mode (Local)
+
+Build and start in production mode:
+
+```bash
+# Build frontend
+npm run build
+
+# Start backend
+cd backend
+npm run start
+
+# In another terminal, preview the frontend build
+cd frontend
+npm run preview
+```
+
+For Docker-based production, follow the [Docker Deployment Guide](docker-guide.md).
+
+`npm run start` at the repo root is a convenience command that runs the backend start script and the frontend dev server together.
+
+### Individual Services
+
+You can also run services individually:
+
+```bash
+# Backend only
+cd backend
+npm run dev        # Development mode
+npm run start      # Production mode
+
+# Frontend only
+cd frontend
+npm run dev        # Development mode
+npm run preview    # Preview production build
+```
+
+## Available Scripts
+
+From the root directory:
+
+```bash
+npm run dev          # Start both frontend and backend in development mode
+npm run start        # Start backend + frontend dev server (convenience)
+npm run build        # Build the frontend for production
+npm run install:all  # Install dependencies for root, frontend, and backend
+npm run test         # Run frontend + backend tests
+npm run test:watch   # Run frontend + backend tests in watch mode
+npm run test:frontend # Run frontend tests
+npm run test:backend  # Run backend tests
+```
+
+Backend-specific scripts (from `backend/` directory):
+
+```bash
+npm run dev          # Start backend with nodemon (auto-reload)
+npm run start        # Start backend in production mode
+npm run build        # Compile TypeScript to JavaScript
+npm run test         # Run tests with Vitest
+npm run test:watch   # Run tests with Vitest in watch mode
+npm run test:coverage # Run tests with coverage report
+npm run generate     # Generate database migrations with Drizzle Kit
+npm run reset-password -- <new-password> # Reset admin password via script
+```
+
+Frontend-specific scripts (from `frontend/` directory):
+
+```bash
+npm run dev          # Start Vite dev server
+npm run build        # Build for production
+npm run preview      # Preview production build
+npm run lint         # Run ESLint
+npm run test         # Run tests with Vitest
+npm run test:watch   # Run tests with Vitest in watch mode
+npm run test:coverage # Run tests with coverage report
+```
+
+## First-Time Setup
+
+1. **Access the Application**: Open http://localhost:5556 in your browser
+
+2. **Set Up Login Protection** (Optional):
+
+   - Go to Settings → Security
+   - Enable login protection
+   - If you do not set an admin password, the initial default admin password will be `123`
+   - Change the default password after first sign-in, or set a custom admin password before saving
+   - Optionally register a passkey (WebAuthn)
+
+3. **Configure Download Settings**:
+
+   - Go to Settings → Download Settings
+   - Set concurrent download limit
+   - Configure download quality preferences
+
+4. **Upload Cookies** (Optional, for age-restricted/premium content):
+
+   - Go to Settings → Cookie Settings
+   - Upload your `cookies.txt` file
+
+5. **Configure Twitch Subscriptions** (Optional):
+
+   - Go to Settings → Twitch Subscriptions
+   - Add `twitchClientId` and `twitchClientSecret` if you want Helix-backed channel detection and polling
+   - Credentials are optional; without them, Videleum falls back to yt-dlp polling in best-effort mode
+   - Twitch subscriptions download published VODs only; live stream capture is not included
+
+6. **Configure Cloud Storage** (Optional):
+
+   - Go to Settings → Cloud Drive Settings
+   - Enable "Enable Auto Save to Cloud"
+   - Enter your OpenList/Alist API URL (e.g., `https://your-alist-instance.com/api/fs/put`)
+   - Enter your API token
+   - Optionally set a public URL for direct file access
+   - Set the upload path (e.g., `/videleum-uploads`)
+   - Test the connection to verify settings
+   - Note: When enabled, videos will be automatically uploaded to cloud storage after download, and local files will be deleted
+
+7. **Configure Visitor User** (Optional):
+
+   - Go to Settings → Security
+   - Enable "Visitor User" to allow read-only access
+   - Set a visitor password for the read-only role
+
+8. **Create RSS Feed Links** (Optional):
+
+   - Go to Settings → Security & Access
+   - Create private RSS links for external feed readers
+   - Filter each link by channel, author, tag, source, recent days, and item limit
+   - Treat RSS feed URLs like passwords; anyone with the URL can read that feed
+
+9. **Start Downloading**:
+   - Enter a video URL in the download input
+   - Supported platforms: YouTube, Bilibili, Twitch VODs, MissAV, and all yt-dlp supported sites
+
+## Architecture Overview
+
+### Backend
+
+- **Framework**: Express.js with TypeScript
+- **Database**: SQLite with Drizzle ORM
+- **Architecture**: Layered (Routes → Controllers → Services → Database)
+- **Downloaders**: Abstract base class pattern for platform-specific implementations
+
+### Frontend
+
+- **Framework**: React 19 with TypeScript
+- **Build Tool**: Vite
+- **UI Library**: Material-UI (MUI)
+- **State Management**: React Context API
+- **Routing**: React Router v7
+
+### Key Features
+
+- **Modular Storage Service**: Split into focused modules for maintainability
+- **Download Queue Management**: Concurrent downloads with queue support
+- **Video Download Tracking**: Prevents duplicate downloads
+- **Subscription System**: Automatic downloads from subscribed channels
+- **RSS Feed Links**: Private filtered RSS feeds for external readers
+- **Database Migrations**: Automatic schema updates on startup
+
+## Troubleshooting
+
+### Database Issues
+
+- If you encounter database errors, check that the `backend/data/` directory exists and is writable
+- To reset the database, delete `backend/data/videleum.db` and restart the server
+
+### Download Issues
+
+- Ensure `yt-dlp` is installed and accessible in your PATH
+- Check that the `bgutil-ytdlp-pot-provider` plugin is installed
+- Verify network connectivity and firewall settings
+
+### Port Conflicts
+
+- If ports 5551 or 5556 are in use, modify the PORT environment variables
+- Update frontend `VITE_API_URL` and `VITE_BACKEND_URL` accordingly
+
+### File Watcher Limit (ENOSPC Error)
+
+If you encounter `ENOSPC: System limit for number of file watchers reached` when running the frontend dev server:
+
+**Note:** The project's `vite.config.js` is already configured with polling-based file watching as a workaround, which should prevent this error in most cases. If you still encounter this issue, try the solutions below:
+
+**On Linux (host system):**
+
+```bash
+# Check current limit
+cat /proc/sys/fs/inotify/max_user_watches
+
+# Increase the limit (temporary, until reboot)
+sudo sysctl fs.inotify.max_user_watches=524288
+
+# Make it permanent
+echo "fs.inotify.max_user_watches=524288" | sudo tee -a /etc/sysctl.conf
+sudo sysctl -p
+```
+
+**In Docker:**
+Add to your `docker-compose.yml` under the frontend service:
+
+```yaml
+services:
+  frontend:
+    sysctls:
+      - fs.inotify.max_user_watches=524288
+```
+
+Or run the container with:
+
+```bash
+docker run --sysctl fs.inotify.max_user_watches=524288 ...
+```
+
+**Alternative: Configure Vite to use polling (already configured in this project):**
+
+The `vite.config.js` file includes a watch configuration that uses polling instead of native file watchers, which bypasses the inotify limit entirely:
+
+```js
+server: {
+  watch: {
+    usePolling: true,
+    interval: 2000,
+    ignored: ['/node_modules/']
+  }
+}
+```
+
+This is already configured in the project, so the error should not occur. If you're using a custom Vite config, make sure to include this configuration.
+
+## Upgrading when deployed from source (tags)
+
+If you deployed Videleum by downloading and extracting source code from a [release tag](https://github.com/MiQieR/Videleum/tags) (e.g. **v1.7.112**), upgrade as follows.
+
+### 1. Check for a new version
+
+- In the app: the footer or Settings may show an update notice and a link to the latest release when one is available.
+- Or call the API: `GET /api/system/version` returns `currentVersion`, `latestVersion`, `releaseUrl`, and `hasUpdate`.
+
+### 2. Download the new version
+
+- Open the [tags page](https://github.com/MiQieR/Videleum/tags) and pick the tag you want (e.g. the latest).
+- Download the source archive (**Source code (zip)** or **Source code (tar.gz)**) for that tag.
+- Extract the archive to a **new** directory (e.g. `videleum-new`); do not overwrite your running app yet.
+
+### 3. Preserve your data and config
+
+Before replacing your app, ensure you keep:
+
+- **Database and app data**: `backend/data/` (contains `videleum.db` and other data).
+- **Uploads/videos**: `backend/uploads/` (or your configured upload path).
+- **Environment**: `backend/.env` and `frontend/.env` (or `.env.local`) with your settings.
+
+Back these up or note their paths so you can restore them after upgrading.
+
+### 4. Replace the app with the new source
+
+- Stop the running Videleum process.
+- Replace the **application files** in your deployment directory with the contents of the new extracted source (or point your deployment at the new directory).
+- Copy your saved **data and config** back:
+  - Restore or keep `backend/data/` and `backend/uploads/` in place.
+  - Restore `backend/.env` and frontend env files.
+
+Do **not** overwrite `backend/data/` or `backend/uploads/` with the new archive’s empty folders.
+
+### 5. Reinstall dependencies, build, and start
+
+From the **project root** of the upgraded source:
+
+```bash
+npm run install:all
+npm run build
+```
+
+Then start the app as you normally do (e.g. `npm run start` from the root, or run backend and serve frontend separately). The database will be migrated automatically on startup if the new version includes schema changes.
+
+**Summary:** Download the new tag’s source → keep `backend/data`, `backend/uploads`, and `.env` files → replace the rest with the new code → `npm run install:all` → `npm run build` → start the app.
+
+## Next Steps
+
+- Read the [API Endpoints](api-endpoints.md) documentation
+- Check the [Directory Structure](directory-structure.md) for code organization
+- Review the [Docker Deployment Guide](docker-guide.md) for production deployment

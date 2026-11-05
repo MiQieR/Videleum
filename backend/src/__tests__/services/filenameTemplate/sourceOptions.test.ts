@@ -1,0 +1,383 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const getCollectionsMock = vi.fn();
+const getVideosMock = vi.fn();
+const getSettingsMock = vi.fn();
+const subscriptionsRowsMock = {
+  current: [] as Array<Record<string, unknown>>,
+};
+
+vi.mock("../../../services/storageService", () => ({
+  getCollections: () => getCollectionsMock(),
+  getVideos: () => getVideosMock(),
+  getSettings: () => getSettingsMock(),
+}));
+
+import {
+  assignDateCollisionIndexes,
+  buildStoredSourceOptionsMap,
+  enrichSourceOptionsForDownload,
+  resetDownloadCollisionReservationsForTests,
+  setCollectionTypeRowsLoaderForTests,
+} from "../../../services/filenameTemplate/sourceOptions";
+import { FilenameTemplateSourceOptions } from "../../../services/filenameTemplate/types";
+
+describe("filenameTemplate/sourceOptions", () => {
+  beforeEach(() => {
+    getCollectionsMock.mockReset();
+    getCollectionsMock.mockReturnValue([]);
+    getVideosMock.mockReset();
+    getVideosMock.mockReturnValue([]);
+    getSettingsMock.mockReset();
+    getSettingsMock.mockReturnValue({});
+    subscriptionsRowsMock.current = [];
+    resetDownloadCollisionReservationsForTests();
+    setCollectionTypeRowsLoaderForTests(
+      () => subscriptionsRowsMock.current as Array<{
+        collectionId: string | null;
+        subscriptionType: string | null;
+        playlistId: string | null;
+        author: string | null;
+        authorUrl: string | null;
+        playlistTitle: string | null;
+        channelName: string | null;
+      }>
+    );
+  });
+
+  afterEach(() => {
+    setCollectionTypeRowsLoaderForTests();
+  });
+
+  it("builds stored source options from collection membership and subscription type", () => {
+    getCollectionsMock.mockReturnValue([
+      {
+        id: "col-pl",
+        name: "My Playlist",
+        videos: ["v1", "v2"],
+      },
+    ]);
+    subscriptionsRowsMock.current = [
+      {
+        collectionId: "col-pl",
+        subscriptionType: "playlist",
+        playlistId: "PL123",
+        author: "Source Label",
+        authorUrl: "https://youtube.com/@source-label",
+        playlistTitle: "Pinned Playlist",
+        channelName: null,
+      },
+    ];
+
+    const result = buildStoredSourceOptionsMap([
+      { id: "v1", author: "Creator" } as any,
+      { id: "v2", author: "Creator" } as any,
+    ]);
+
+    expect(result.get("v1")).toMatchObject({
+      sourceCustomName: "Source Label",
+      sourceCollectionName: "Pinned Playlist",
+      sourceCollectionId: "col-pl",
+      sourceCollectionType: "playlist",
+      mediaPlaylistIndex: 1,
+    });
+    expect(result.get("v2")?.mediaPlaylistIndex).toBe(2);
+  });
+
+  it("prefers subscription playlist metadata over author collections", () => {
+    getCollectionsMock.mockReturnValue([
+      {
+        id: "author-col",
+        name: "Channel A",
+        origin: "author_auto",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        videos: ["v1"],
+      },
+      {
+        id: "playlist-col",
+        name: "Travel Playlist - Channel A",
+        origin: "manual",
+        createdAt: "2026-02-01T00:00:00.000Z",
+        videos: ["v1"],
+      },
+    ]);
+    subscriptionsRowsMock.current = [
+      {
+        collectionId: "playlist-col",
+        subscriptionType: "playlist",
+        playlistId: "PL123",
+        author: "Renamed Subscription Label",
+        authorUrl: "https://youtube.com/playlist?list=PL123",
+        playlistTitle: "Travel Playlist",
+        channelName: "Channel A",
+      },
+    ];
+
+    const result = buildStoredSourceOptionsMap([
+      { id: "v1", author: "Channel A" } as any,
+    ]);
+
+    expect(result.get("v1")).toMatchObject({
+      sourceCustomName: "Channel A",
+      sourceCollectionName: "Travel Playlist",
+      sourceCollectionId: "playlist-col",
+      sourceCollectionType: "playlist",
+      mediaPlaylistIndex: 1,
+    });
+  });
+
+  it("groups collection members by author under author_folder_only (issue #295 1-A)", () => {
+    getCollectionsMock.mockReturnValue([
+      {
+        id: "col-1",
+        name: "Some Collection",
+        videos: ["v1", "v2"],
+      },
+    ]);
+    getSettingsMock.mockReturnValue({
+      authorOrganizationMode: "author_folder_only",
+    });
+
+    const result = buildStoredSourceOptionsMap([
+      { id: "v1", author: "Creator" } as any,
+      { id: "v2", author: "Creator" } as any,
+    ]);
+
+    // Folder grouping is the author, not the collection, so the batch rename
+    // keeps files in the author folder. Episode numbering is preserved.
+    expect(result.get("v1")).toMatchObject({
+      sourceCustomName: "Creator",
+      sourceCollectionName: "Creator",
+      sourceCollectionId: "col-1",
+      mediaPlaylistIndex: 1,
+    });
+    expect(result.get("v2")?.mediaPlaylistIndex).toBe(2);
+  });
+
+  it("reconstructs sourceCustomName from a matching channel subscription", () => {
+    subscriptionsRowsMock.current = [
+      {
+        collectionId: null,
+        subscriptionType: "author",
+        playlistId: null,
+        author: "Source Label",
+        authorUrl: "https://youtube.com/@source-label",
+        playlistTitle: null,
+        channelName: null,
+      },
+    ];
+
+    const result = buildStoredSourceOptionsMap([
+      {
+        id: "v1",
+        author: "Creator",
+        channelUrl: "https://youtube.com/@source-label",
+      } as any,
+    ]);
+
+    expect(result.get("v1")).toMatchObject({
+      sourceCustomName: "Source Label",
+      sourceCollectionName: "Source Label",
+      sourceCollectionType: "channel",
+    });
+  });
+
+  it("keeps the collection name for grouping under author_collection_linked", () => {
+    getCollectionsMock.mockReturnValue([
+      {
+        id: "col-1",
+        name: "Some Collection",
+        videos: ["v1"],
+      },
+    ]);
+    getSettingsMock.mockReturnValue({
+      authorOrganizationMode: "author_collection_linked",
+    });
+
+    const result = buildStoredSourceOptionsMap([
+      { id: "v1", author: "Creator" } as any,
+    ]);
+
+    expect(result.get("v1")?.sourceCollectionName).toBe("Some Collection");
+  });
+
+  it("assigns per-day collision indexes deterministically", () => {
+    const videos = [
+      {
+        id: "v2",
+        author: "Channel",
+        date: "20260430",
+        addedAt: "2026-04-30T11:00:00Z",
+        createdAt: "2026-04-30T11:00:00Z",
+      },
+      {
+        id: "v1",
+        author: "Channel",
+        date: "20260430",
+        addedAt: "2026-04-30T10:00:00Z",
+        createdAt: "2026-04-30T10:00:00Z",
+      },
+    ] as any[];
+    const options = new Map<string, FilenameTemplateSourceOptions>([
+      [
+        "v1",
+        {
+          sourceCollectionName: "Channel",
+          sourceCollectionType: "channel",
+          mediaPlaylistIndex: 1,
+        },
+      ],
+      [
+        "v2",
+        {
+          sourceCollectionName: "Channel",
+          sourceCollectionType: "channel",
+          mediaPlaylistIndex: 2,
+        },
+      ],
+    ]);
+
+    assignDateCollisionIndexes(videos, options);
+
+    expect(options.get("v1")?.mediaPlaylistIndexWithinDate).toBe(1);
+    expect(options.get("v2")?.mediaPlaylistIndexWithinDate).toBe(2);
+  });
+
+  it("uses stable playlist index for playlist downloads", () => {
+    const result = enrichSourceOptionsForDownload(
+      {
+        sourceCollectionType: "playlist",
+        sourceCollectionName: "Playlist",
+        mediaPlaylistIndex: 12,
+      },
+      {
+        author: "Creator",
+        uploadDate: "20260430",
+        existingVideos: [],
+      }
+    );
+
+    expect(result.mediaPlaylistIndexWithinDate).toBe(12);
+  });
+
+  it("counts existing same-day items for channel/single downloads", () => {
+    const existingVideos = [
+      {
+        id: "v1",
+        author: "Channel",
+        date: "20260430",
+      },
+      {
+        id: "v2",
+        author: "Channel",
+        date: "20260430",
+      },
+      {
+        id: "v3",
+        author: "Other Channel",
+        date: "20260430",
+      },
+      {
+        id: "v4",
+        author: "Channel",
+        date: "20260501",
+      },
+    ] as any[];
+
+    const result = enrichSourceOptionsForDownload(
+      {
+        sourceCollectionType: "channel",
+        sourceCollectionName: "Channel",
+      },
+      {
+        author: "Channel",
+        uploadDate: "20260430",
+        existingVideos,
+      }
+    );
+
+    expect(result.mediaPlaylistIndexWithinDate).toBe(3);
+  });
+
+  it("reserves unique same-day indexes for parallel channel/single downloads", () => {
+    const existingVideos = [
+      {
+        id: "v1",
+        author: "Channel",
+        date: "20260430",
+      },
+      {
+        id: "v2",
+        author: "Channel",
+        date: "20260430",
+      },
+    ] as any[];
+
+    const firstResult = enrichSourceOptionsForDownload(
+      {
+        sourceCollectionType: "channel",
+        sourceCollectionName: "Channel",
+      },
+      {
+        author: "Channel",
+        uploadDate: "20260430",
+        existingVideos,
+      }
+    );
+    const secondResult = enrichSourceOptionsForDownload(
+      {
+        sourceCollectionType: "channel",
+        sourceCollectionName: "Channel",
+      },
+      {
+        author: "Channel",
+        uploadDate: "20260430",
+        existingVideos,
+      }
+    );
+
+    expect(firstResult.mediaPlaylistIndexWithinDate).toBe(3);
+    expect(secondResult.mediaPlaylistIndexWithinDate).toBe(4);
+  });
+
+  it("reuses the cached persisted date-collision index across fallback lookups", () => {
+    getVideosMock.mockReturnValue([
+      {
+        id: "v1",
+        author: "Channel",
+        date: "20260430",
+      },
+      {
+        id: "v2",
+        author: "Channel",
+        date: "20260430",
+      },
+    ] as any[]);
+
+    const firstResult = enrichSourceOptionsForDownload(
+      {
+        sourceCollectionType: "channel",
+        sourceCollectionName: "Channel",
+      },
+      {
+        author: "Channel",
+        uploadDate: "20260430",
+      }
+    );
+    const secondResult = enrichSourceOptionsForDownload(
+      {
+        sourceCollectionType: "channel",
+        sourceCollectionName: "Channel",
+      },
+      {
+        author: "Channel",
+        uploadDate: "20260430",
+      }
+    );
+
+    expect(firstResult.mediaPlaylistIndexWithinDate).toBe(3);
+    expect(secondResult.mediaPlaylistIndexWithinDate).toBe(4);
+    expect(getCollectionsMock).toHaveBeenCalledTimes(1);
+    expect(getVideosMock).toHaveBeenCalledTimes(2);
+  });
+});

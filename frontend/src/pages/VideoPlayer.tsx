@@ -1,0 +1,911 @@
+import {
+    Alert,
+    Box,
+    CircularProgress,
+    Container,
+    Typography
+} from '@mui/material';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate, useParams } from 'react-router';
+import CollectionModal from '../components/CollectionModal';
+import ConfirmationModal from '../components/ConfirmationModal';
+import SubscribeModal from '../components/SubscribeModal';
+import CommentsSection from '../components/VideoPlayer/CommentsSection';
+import UpNextSidebar from '../components/VideoPlayer/UpNextSidebar';
+import AudioModePlayer from '../components/VideoPlayer/AudioModePlayer';
+import AudioUpNextSidebar from '../components/VideoPlayer/AudioUpNextSidebar';
+import VideoControls from '../components/VideoPlayer/VideoControls';
+import CompatibilityPlayer from '../components/VideoPlayer/CompatibilityPlayer';
+import LiveTranslationStatusAlert from '../components/VideoPlayer/LiveTranslationStatusAlert';
+import VideoInfo from '../components/VideoPlayer/VideoInfo';
+import { LiveTranslationProvider } from '../contexts/LiveTranslationContext';
+import { useLiveTranslationAvailability } from '../hooks/useLiveTranslationAvailability';
+import { useLiveTranslationSubtitleTrack } from '../hooks/useLiveTranslationSubtitleTrack';
+import { getLiveTranslationLanguageLabel } from '../utils/liveTranslationLanguages';
+import { useAuth } from '../contexts/AuthContext';
+import { useLanguage } from '../contexts/LanguageContext';
+import { useVideo } from '../contexts/VideoContext';
+import { useCloudStorageUrl } from '../hooks/useCloudStorageUrl';
+import { useSettings } from '../hooks/useSettings';
+import { useStatisticsIngestion } from '../hooks/useStatisticsIngestion';
+import { useVideoCollections } from '../hooks/useVideoCollections';
+import { useVideoMutations } from '../hooks/useVideoMutations';
+import { useVideoPlayerSettings } from '../hooks/useVideoPlayerSettings';
+import { useVideoProgress } from '../hooks/useVideoProgress';
+import { useVideoQueries } from '../hooks/useVideoQueries';
+import { useVideoRecommendations } from '../hooks/useVideoRecommendations';
+import { resolvePlaybackQueue } from '../utils/recommendations';
+import { useVideoSubscriptions } from '../hooks/useVideoSubscriptions';
+import { getBackendUrl } from '../utils/apiUrl';
+import { encodeLocalMediaPath, isHttpUrl } from '../utils/localMediaPath';
+import { isCompatibilityModeForced } from '../utils/compatibilityMode/deployment';
+import { isCompatibilityModeSupported } from '../utils/compatibilityMode/support';
+import { getBestVideoResumeProgress } from '../utils/videoResumeProgress';
+import { viewportHeight } from '../utils/viewportUnits';
+
+const MAX_BACK_TRAIL_LENGTH = 20;
+
+// Kept outside the component: the element lives in React state, which the
+// compiler treats as immutable, but seeking is plain imperative DOM work.
+// The player's own play/pause/timeupdate listeners keep its controls in sync.
+const playFrom = (media: HTMLMediaElement, seconds: number) => {
+    media.currentTime = seconds;
+    media.play().catch((error) => {
+        console.error('Error playing from description timestamp:', error);
+    });
+};
+
+const VideoPlayer: React.FC = () => {
+    const { id } = useParams<{ id: string }>();
+    const navigate = useNavigate();
+    const location = useLocation();
+    const { t } = useLanguage();
+    const { videos } = useVideo();
+    const { userRole } = useAuth();
+    const { data: settings, isLoading: settingsLoading = false } = useSettings();
+    const isVisitor = userRole === 'visitor';
+    const navigationState = (location.state ?? null) as
+        | {
+            statisticsRelatedEventId?: string | null;
+            sourceCollectionId?: string | null;
+            playbackQueueVideoIds?: string[];
+            autoplayFromVideoId?: string | null;
+            previousVideoIds?: string[];
+        }
+        | null;
+    const statisticsRelatedEventId =
+        navigationState?.statisticsRelatedEventId ?? null;
+    const sourceCollectionId = navigationState?.sourceCollectionId ?? null;
+    const playbackQueueVideoIds = navigationState?.playbackQueueVideoIds;
+    const autoplayFromVideoId = navigationState?.autoplayFromVideoId ?? null;
+    const navigationPreviousVideoIds = useMemo(
+        () => navigationState?.previousVideoIds ?? [],
+        [navigationState]
+    );
+
+    const [showComments, setShowComments] = useState<boolean>(false);
+    const [autoPlayNext, setAutoPlayNext] = useState<boolean>(() => {
+        const saved = localStorage.getItem('autoPlayNext');
+        return saved !== null ? JSON.parse(saved) : false;
+    });
+    const [isCinemaMode, setIsCinemaMode] = useState<boolean>(false);
+    // Compatibility mode: play through canvas + WebCodecs so the page holds no
+    // media element at all. Proof of concept — the standard controls are hidden.
+    const compatibilityModeSupported = useMemo(
+        () => isCompatibilityModeSupported(),
+        []
+    );
+    // The car display cannot render a media element at all, so that build
+    // forces the mode on: no toggle, and no standard player to fall back to.
+    const compatibilityModeForced = useMemo(() => isCompatibilityModeForced(), []);
+    const [compatibilityMode, setCompatibilityMode] = useState<boolean>(() => {
+        const saved = localStorage.getItem('compatibilityMode');
+        return saved !== null ? JSON.parse(saved) : false;
+    });
+    // Underlying <video> element, exposed by VideoControls for live translation capture.
+    const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
+    const { data: liveTranslationAvailability } = useLiveTranslationAvailability();
+    const statisticsIngestion = useStatisticsIngestion();
+    const upNextImpressionEventIdRef = useRef<string | null>(null);
+    const upNextImpressionKeyRef = useRef<string | null>(null);
+    const liveTargetLanguage = liveTranslationAvailability?.targetLanguage || 'en';
+    const liveSubtitleLabel = `${t('liveTranslation') || 'Live translation'} (${getLiveTranslationLanguageLabel(liveTargetLanguage)})`;
+    const liveSubtitleTrack = useLiveTranslationSubtitleTrack(
+        videoElement,
+        liveTargetLanguage,
+        liveSubtitleLabel,
+    );
+
+    useEffect(() => {
+        localStorage.setItem('autoPlayNext', JSON.stringify(autoPlayNext));
+    }, [autoPlayNext]);
+
+    useEffect(() => {
+        localStorage.setItem('compatibilityMode', JSON.stringify(compatibilityMode));
+    }, [compatibilityMode]);
+
+    // Confirmation Modal State
+    const [confirmationModal, setConfirmationModal] = useState({
+        isOpen: false,
+        title: '',
+        message: '',
+        onConfirm: () => { },
+        confirmText: t('confirm'),
+        cancelText: t('cancel'),
+        isDanger: false
+    });
+
+    // Use custom hooks
+    const { video, loading, error, comments, loadingComments } = useVideoQueries({
+        videoId: id,
+        videos,
+        showComments
+    });
+    const isAudio = (video?.mediaType ?? 'video') === 'audio';
+    const showCompatibilityPlayer =
+        !isAudio &&
+        (compatibilityModeForced ||
+            (compatibilityMode && compatibilityModeSupported));
+
+    // Handle error redirect and invisible videos in visitor mode
+    useEffect(() => {
+        if (error) {
+            const timer = setTimeout(() => {
+                navigate('/');
+            }, 3000);
+            return () => clearTimeout(timer);
+        }
+        // In visitor mode, redirect if video is invisible
+        if (isVisitor && video && (video.visibility ?? 1) === 0) {
+            const timer = setTimeout(() => {
+                navigate('/');
+            }, 3000);
+            return () => clearTimeout(timer);
+        }
+    }, [error, navigate, isVisitor, video]);
+
+    // Update document title
+    useEffect(() => {
+        if (video?.title) {
+            const siteName = settings?.websiteName || 'Videleum';
+            document.title = `${video.title} - ${siteName}`;
+        }
+
+        return () => {
+            // Revert title on cleanup
+            if (settings?.websiteName) {
+                document.title = settings.websiteName;
+            } else {
+                document.title = "Videleum";
+            }
+        };
+    }, [video?.title, settings?.websiteName]);
+
+    // Use video player settings hook
+    const {
+        autoPlay: settingsAutoPlay,
+        autoLoop,
+        subtitlesEnabled,
+        availableTags,
+        handleSubtitlesToggle,
+        handleLoopToggle,
+        pauseOnFocusLoss,
+        playFromBeginning,
+        seekIntervals,
+    } = useVideoPlayerSettings();
+
+    const autoPlay = autoPlayNext || settingsAutoPlay;
+
+    // Get cloud storage URLs
+    const videoUrl = useCloudStorageUrl(video?.videoPath, isAudio ? 'audio' : 'video', video?.signedUrl);
+
+    // Get thumbnail URL for poster
+    // Only load thumbnail from cloud if the video itself is in cloud storage
+    const isVideoInCloud = video?.videoPath?.startsWith('cloud:') ?? false;
+    const thumbnailPathForCloud = isVideoInCloud ? video?.thumbnailPath : null;
+    const posterUrl = useCloudStorageUrl(thumbnailPathForCloud, 'thumbnail', video?.signedThumbnailUrl);
+    const localPosterUrl = !isVideoInCloud && video?.thumbnailPath
+        ? isHttpUrl(video.thumbnailPath)
+            ? video.thumbnailPath
+            : `${getBackendUrl()}${encodeLocalMediaPath(video.thumbnailPath)}`
+        : undefined;
+
+    // Use custom hooks
+    const {
+        collections,
+        videoCollections,
+        modalVideoCollections,
+        showCollectionModal,
+        handleAddToCollection,
+        handleCloseModal,
+        handleCreateCollection,
+        handleAddToExistingCollection,
+        handleRemoveFromCollection
+    } = useVideoCollections({ videoId: id });
+
+    const {
+        authorChannelUrl,
+        isSubscribed,
+        subscriptionId,
+        showSubscribeModal,
+        setShowSubscribeModal,
+        handleAuthorClick: handleAuthorClickFromHook,
+        handleSubscribe,
+        handleSubscribeConfirm,
+        handleUnsubscribe: handleUnsubscribeFromHook,
+        unsubscribeMutation
+    } = useVideoSubscriptions({ video });
+
+    const {
+        ratingMutation,
+        titleMutation,
+        tagsMutation,
+        visibilityMutation,
+        lockMutation,
+        deleteMutation,
+        uploadSubtitleMutation,
+        deleteSubtitleMutation
+    } = useVideoMutations({
+        videoId: id,
+        onDeleteSuccess: () => navigate('/', { replace: true })
+    });
+
+    const { handleTimeUpdate, setIsDeleting } = useVideoProgress({ videoId: id, video, videoElement });
+
+    const { relatedVideos } = useVideoRecommendations({
+        video,
+        sourceCollectionId,
+        playbackQueueVideoIds
+    });
+    const effectiveCinemaMode = isCinemaMode && !isAudio;
+
+    const upNextSlate = useMemo(() => {
+        if (!video) return [];
+
+        const queueIds = resolvePlaybackQueue({
+            currentVideoId: video.id,
+            collections,
+            sourceCollectionId,
+            playbackQueueVideoIds
+        });
+        const currentQueueIndex = queueIds?.indexOf(video.id) ?? -1;
+
+        return relatedVideos.map((relatedVideo, index) => {
+            let lane: 'continue' | 'related' | 'discover' = 'related';
+            if (
+                currentQueueIndex !== -1 &&
+                queueIds?.slice(currentQueueIndex + 1, currentQueueIndex + 4).includes(relatedVideo.id)
+            ) {
+                lane = 'continue';
+            } else if (
+                index < 3 &&
+                video.seriesTitle &&
+                relatedVideo.seriesTitle === video.seriesTitle &&
+                typeof video.partNumber === 'number' &&
+                relatedVideo.partNumber === video.partNumber + 1
+            ) {
+                lane = 'continue';
+            } else if (index >= Math.max(relatedVideos.length - 2, 3)) {
+                lane = 'discover';
+            }
+
+            return {
+                videoId: relatedVideo.id,
+                lane,
+                position: index + 1
+            };
+        });
+    }, [collections, playbackQueueVideoIds, relatedVideos, sourceCollectionId, video]);
+
+    // Only a trailing entry can name this video as its own predecessor, and
+    // that would make shift+P a no-op that looks broken. Nothing writes one any
+    // more, but a history entry from an older build still can, so trailing
+    // self-references are dropped rather than trusted. Earlier occurrences stay:
+    // a trail that revisits a video - A, B, A - is real history, and dropping
+    // the first A would strand the walk back at B.
+    const backTrail = useMemo(() => {
+        const trail = [...navigationPreviousVideoIds];
+
+        while (trail.length > 0 && trail[trail.length - 1] === video?.id) {
+            trail.pop();
+        }
+
+        return trail;
+    }, [navigationPreviousVideoIds, video]);
+
+    // Where shift+P goes. Inside a queue or collection it is the neighbour
+    // before this one, so the pair walks the list in both directions. Anywhere
+    // else it is whichever video led here - shift+N works everywhere the
+    // recommendations do, so shift+P has to as well, or the pair is one-way.
+    // Only a video opened cold - a fresh tab, a shared link - has no previous.
+    const previousVideoId = useMemo(() => {
+        if (!video) return null;
+
+        const queueIds = resolvePlaybackQueue({
+            currentVideoId: video.id,
+            collections,
+            sourceCollectionId,
+            playbackQueueVideoIds
+        });
+        const currentQueueIndex = queueIds?.indexOf(video.id) ?? -1;
+        if (currentQueueIndex > 0) {
+            return queueIds![currentQueueIndex - 1];
+        }
+
+        return backTrail[backTrail.length - 1] ?? null;
+    }, [
+        backTrail,
+        collections,
+        playbackQueueVideoIds,
+        sourceCollectionId,
+        video
+    ]);
+
+    // True when shift+P is following the trail of videos rather than the
+    // collection's own order; only then does going back consume an entry.
+    const isFollowingBackTrail = useMemo(() => {
+        if (!video || previousVideoId === null) return false;
+
+        const queueIds = resolvePlaybackQueue({
+            currentVideoId: video.id,
+            collections,
+            sourceCollectionId,
+            playbackQueueVideoIds
+        });
+
+        return (queueIds?.indexOf(video.id) ?? -1) <= 0;
+    }, [collections, playbackQueueVideoIds, previousVideoId, sourceCollectionId, video]);
+
+    useEffect(() => {
+        if (!statisticsIngestion.enabled || !video || upNextSlate.length === 0) return;
+
+        const slateKey = `${video.id}:${upNextSlate.map(item => `${item.videoId}:${item.lane}`).join(',')}`;
+        if (upNextImpressionKeyRef.current === slateKey) return;
+
+        upNextImpressionKeyRef.current = slateKey;
+        upNextImpressionEventIdRef.current = statisticsIngestion.recordEvent({
+            eventType: 'up_next_impression',
+            surface: 'web',
+            videoId: video.id,
+            payload: {
+                fromVideoId: video.id,
+                slate: upNextSlate
+            }
+        });
+    }, [statisticsIngestion, upNextSlate, video]);
+
+    const handleToggleComments = () => {
+        setShowComments(!showComments);
+    };
+
+    // Handle author click with navigation
+    const handleAuthorClick = () => {
+        const result = handleAuthorClickFromHook();
+        if (result?.shouldNavigate) {
+            navigate(result.path);
+        }
+    };
+
+    // Handle avatar click - always navigate to internal author page
+    const handleAvatarClick = () => {
+        if (video?.author) {
+            navigate(`/author/${encodeURIComponent(video.author)}`);
+        }
+    };
+
+    // Handle unsubscribe with confirmation modal
+    const handleUnsubscribe = () => {
+        if (!subscriptionId) return;
+
+        setConfirmationModal({
+            isOpen: true,
+            title: t('unsubscribe'),
+            message: t('confirmUnsubscribe', { author: video?.author || '' }),
+            onConfirm: () => {
+                handleUnsubscribeFromHook(() => {
+                    unsubscribeMutation.mutate(subscriptionId);
+                });
+                setConfirmationModal({ ...confirmationModal, isOpen: false });
+            },
+            confirmText: t('unsubscribe'),
+            cancelText: t('cancel'),
+            isDanger: true
+        });
+    };
+
+    const handleCollectionClick = (collectionId: string) => {
+        navigate(`/collection/${collectionId}`);
+    };
+
+    const executeDelete = async () => {
+        if (!id) return;
+        setIsDeleting(true);
+        try {
+            await deleteMutation.mutateAsync(id);
+        } catch {
+            setIsDeleting(false);
+        }
+    };
+
+    const handleDelete = () => {
+        setConfirmationModal({
+            isOpen: true,
+            title: t('deleteVideo'),
+            message: t('confirmDelete'),
+            onConfirm: executeDelete,
+            confirmText: t('delete'),
+            cancelText: t('cancel'),
+            isDanger: true
+        });
+    };
+
+    const handleRatingChange = async (newValue: number) => {
+        if (!id) return;
+        await ratingMutation.mutateAsync(newValue);
+    };
+
+    const handleSaveTitle = async (newTitle: string) => {
+        if (!id) return;
+        await titleMutation.mutateAsync(newTitle);
+    };
+
+    const handleUpdateTags = async (newTags: string[]) => {
+        if (!id) return;
+        await tagsMutation.mutateAsync(newTags);
+    };
+
+    const handleToggleVisibility = async () => {
+        if (!id || !video) return;
+        const newVisibility = video.visibility === 0 ? 1 : 0;
+        await visibilityMutation.mutateAsync(newVisibility);
+    };
+
+    const handleToggleLock = async () => {
+        if (!id || !video) return;
+        const nextLocked = video.autoDeleteLocked === 1 ? null : 1;
+        await lockMutation.mutateAsync(nextLocked);
+    };
+
+    const executeRemoveFromCollection = async (collectionId: string) => {
+        await handleRemoveFromCollection(collectionId);
+        setConfirmationModal({ ...confirmationModal, isOpen: false });
+    };
+
+    const handleRemoveFromCollectionWithConfirm = (collectionId: string) => {
+        const targetCollection = modalVideoCollections.find(
+            (collection) => collection.id === collectionId
+        );
+        setConfirmationModal({
+            isOpen: true,
+            title: t('removeFromCollection'),
+            message: targetCollection
+                ? `${t('confirmRemoveFromCollection')} "${targetCollection.name}"?`
+                : t('confirmRemoveFromCollection'),
+            onConfirm: () => executeRemoveFromCollection(collectionId),
+            confirmText: t('remove'),
+            cancelText: t('cancel'),
+            isDanger: true
+        });
+    };
+
+    // Scroll to top when video ID changes
+    useEffect(() => {
+        window.scrollTo(0, 0);
+    }, [id]);
+
+    if (loading) {
+        return (
+            <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: viewportHeight(50) }}>
+                <CircularProgress />
+                <Typography sx={{ ml: 2 }}>{t('loadingVideo')}</Typography>
+            </Box>
+        );
+    }
+
+    if (error || !video) {
+        return (
+            <Container sx={{ mt: 4 }}>
+                <Alert severity="error">{t('videoNotFoundOrLoaded')}</Alert>
+            </Container>
+        );
+    }
+
+
+
+    // The trail is the fallback for videos a queue cannot walk back through, so
+    // a move that lands inside a queue records nothing: the queue's own order
+    // already provides the way back, and an entry there would later be read as
+    // the predecessor of the queue's first item - pointing at itself, or
+    // forward into the queue.
+    //
+    // Capped, since it rides in router state on every navigation and nobody
+    // walks back more than a handful of videos.
+    const pushBackTrail = (fromVideoId: string, toVideoId: string) => {
+        const destinationQueue = resolvePlaybackQueue({
+            currentVideoId: toVideoId,
+            collections,
+            sourceCollectionId,
+            playbackQueueVideoIds
+        });
+
+        const destinationIndex = destinationQueue?.indexOf(toVideoId) ?? -1;
+        const originIndex = destinationQueue?.indexOf(fromVideoId) ?? -1;
+
+        // Skip the entry only when walking the queue back from the destination
+        // passes through this video anyway. Entering a queue from outside it,
+        // or jumping backwards within one, has to be recorded - otherwise the
+        // walk back follows the queue to its first item and dead-ends there,
+        // with no way back to where the queue was entered from.
+        if (destinationIndex > 0 && originIndex >= 0 && originIndex < destinationIndex) {
+            return backTrail;
+        }
+
+        return [...backTrail, fromVideoId].slice(-MAX_BACK_TRAIL_LENGTH);
+    };
+
+    const buildPlaybackState = (
+        relatedEventId: string | null = statisticsRelatedEventId,
+        extras: Record<string, unknown> = {}
+    ) => ({
+        ...(relatedEventId ? { statisticsRelatedEventId: relatedEventId } : {}),
+        ...(sourceCollectionId ? { sourceCollectionId } : {}),
+        ...(playbackQueueVideoIds ? { playbackQueueVideoIds } : {}),
+        ...extras
+    });
+
+    // Every deliberate move to an Up Next video - a click in either sidebar, or
+    // shift+N - lands here, so they record the same event and carry the same
+    // playback state forward.
+    const goToUpNextVideo = (videoId: string, index: number, via: 'click' | 'keyboard' = 'click') => {
+        const slateItem = upNextSlate[index] ?? { videoId, lane: 'related', position: index + 1 };
+        const clickEventId = statisticsIngestion.enabled && video
+            ? statisticsIngestion.recordEvent({
+                eventType: 'up_next_clicked',
+                surface: 'web',
+                videoId,
+                relatedEventId: upNextImpressionEventIdRef.current,
+                value: slateItem.position,
+                payload: {
+                    fromVideoId: video.id,
+                    toVideoId: videoId,
+                    position: slateItem.position,
+                    lane: slateItem.lane,
+                    via
+                }
+            })
+            : null;
+        const state = buildPlaybackState(clickEventId ?? statisticsRelatedEventId, {
+            previousVideoIds: pushBackTrail(video.id, videoId)
+        });
+
+        if (Object.keys(state).length > 0) {
+            navigate(`/video/${videoId}`, { state });
+            return;
+        }
+
+        navigate(`/video/${videoId}`);
+    };
+
+    const handleNextVideo = () => {
+        if (relatedVideos.length === 0) return;
+        goToUpNextVideo(relatedVideos[0].id, 0, 'keyboard');
+    };
+
+    // Going back pops the entry it used rather than pushing a new one, so
+    // A -> B -> C unwinds to B and then to A instead of bouncing between the
+    // last two videos. Stepping back through a collection's own order leaves
+    // the trail alone - it still describes how the collection was entered.
+    const handlePreviousVideo = () => {
+        if (!previousVideoId) return;
+
+        const remainingTrail = isFollowingBackTrail
+            ? backTrail.slice(0, -1)
+            : backTrail;
+        const state = buildPlaybackState(
+            statisticsRelatedEventId,
+            remainingTrail.length > 0 ? { previousVideoIds: remainingTrail } : {}
+        );
+
+        if (Object.keys(state).length > 0) {
+            navigate(`/video/${previousVideoId}`, { state });
+            return;
+        }
+
+        navigate(`/video/${previousVideoId}`);
+    };
+
+    const handleVideoEnded = () => {
+        if (autoPlayNext && relatedVideos.length > 0) {
+            const nextVideo = relatedVideos[0];
+            const autoplayEventId = statisticsIngestion.enabled && video
+                ? statisticsIngestion.recordEvent({
+                    eventType: 'autoplay_advanced',
+                    surface: 'web',
+                    videoId: nextVideo.id,
+                    relatedEventId: upNextImpressionEventIdRef.current,
+                    payload: {
+                        fromVideoId: video.id,
+                        toVideoId: nextVideo.id
+                    }
+                })
+                : null;
+            const state = buildPlaybackState(
+                autoplayEventId ?? statisticsRelatedEventId,
+                {
+                    previousVideoIds: pushBackTrail(video.id, nextVideo.id),
+                    ...(statisticsIngestion.enabled && video
+                        ? { autoplayFromVideoId: video.id }
+                        : {})
+                }
+            );
+
+            if (Object.keys(state).length > 0) {
+                navigate(`/video/${nextVideo.id}`, { state });
+                return;
+            }
+
+            navigate(`/video/${nextVideo.id}`);
+        }
+    };
+
+    // A timestamp in the description jumps there and plays, with the player
+    // brought back into view, the way YouTube chapter links behave. D Mode
+    // runs its own seek pipeline and reports no element, so its description
+    // timestamps stay plain text.
+    const handleDescriptionSeek = videoElement
+        ? (seconds: number) => {
+            playFrom(videoElement, seconds);
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+        : undefined;
+
+    // Determine start time based on saved progress only.
+    // Playback-local time should not be fed back into startTime on unrelated rerenders.
+    const startTimeResult = playFromBeginning
+        ? 0
+        : getBestVideoResumeProgress(
+            id,
+            video.progress,
+            video.progressUpdatedAt ?? video.lastPlayedAt
+        );
+
+    return (
+        <Container maxWidth={false} disableGutters sx={{ py: { xs: 2, md: 4 }, px: { xs: 0, md: 2 } }}>
+            {/* Grid layout: xs = stacked; lg + cinema = stacked; lg + normal = main column + sidebar */}
+            <Box
+                sx={{
+                    display: 'grid',
+                    gap: 4,
+                    mt: effectiveCinemaMode ? 0 : { xs: 0, md: 4 },
+                    gridTemplateColumns: {
+                        xs: 'minmax(0, 1fr)',
+                        lg: effectiveCinemaMode ? '1fr' : 'minmax(0, 1fr) minmax(280px, 360px)'
+                    },
+                    gridTemplateAreas: {
+                        xs: '"main" "sidebar"',
+                        lg: effectiveCinemaMode ? '"main" "sidebar"' : '"main sidebar"'
+                    }
+                }}
+            >
+                {/* Main Column: Video + Info + Comments */}
+                <Box sx={{ gridArea: 'main' }}>
+                    <LiveTranslationProvider
+                        videoId={video.id}
+                        videoElement={videoElement}
+                        src={(videoUrl || video?.sourceUrl) || null}
+                        originalAudioWithSubtitles={
+                            settings?.liveTranslationOriginalAudioWithSubtitles === true
+                        }
+                        originalAudioWithSubtitlesReady={!settingsLoading}
+                        onTranscript={liveSubtitleTrack.addCue}
+                        onInterrupted={liveSubtitleTrack.endUtterance}
+                        onTurnComplete={liveSubtitleTrack.finishTurn}
+                        onActiveChange={(active) => {
+                            if (active) {
+                                liveSubtitleTrack.activate();
+                            } else {
+                                liveSubtitleTrack.deactivate();
+                            }
+                        }}
+                    >
+                    {showCompatibilityPlayer ? <CompatibilityPlayer
+                        src={(videoUrl || video?.sourceUrl) || null}
+                        poster={posterUrl || localPosterUrl || video?.thumbnailUrl}
+                        autoPlay={autoPlay}
+                        startTime={startTimeResult}
+                        onTimeUpdate={handleTimeUpdate}
+                        onEnded={handleVideoEnded}
+                        canFallBackToStandardPlayer={!compatibilityModeForced}
+                        onExit={() => setCompatibilityMode(false)}
+                        seekIntervals={seekIntervals}
+                        statisticsVideoId={video.id}
+                        statisticsPlatform={
+                            typeof video.source === 'string' ? video.source.toLowerCase() : null
+                        }
+                        statisticsRelatedEventId={statisticsRelatedEventId}
+                        statisticsAutoplayFromVideoId={autoplayFromVideoId}
+                    /> : isAudio ? <AudioModePlayer
+                        src={(videoUrl || video?.sourceUrl) || null}
+                        mediaPath={video.videoPath}
+                        poster={posterUrl || localPosterUrl || video?.thumbnailUrl}
+                        autoPlay={autoPlay}
+                        autoLoop={autoLoop}
+                        pauseOnFocusLoss={pauseOnFocusLoss}
+                        onTimeUpdate={handleTimeUpdate}
+                        startTime={startTimeResult}
+                        subtitles={video.subtitles}
+                        subtitlesEnabled={subtitlesEnabled}
+                        onSubtitlesToggle={handleSubtitlesToggle}
+                        onLoopToggle={handleLoopToggle}
+                        onEnded={handleVideoEnded}
+                        isCinemaMode={false}
+                        onToggleCinemaMode={() => setIsCinemaMode(!isCinemaMode)}
+                        statisticsVideoId={video.id}
+                        statisticsPlatform={
+                            typeof video.source === 'string' ? video.source.toLowerCase() : null
+                        }
+                        statisticsRelatedEventId={statisticsRelatedEventId}
+                        statisticsAutoplayFromVideoId={autoplayFromVideoId}
+                        onUploadSubtitle={async (file: File) => {
+                            if (!id) return;
+                            await uploadSubtitleMutation.mutateAsync({ file });
+                        }}
+                        onDeleteSubtitle={async (index: number) => {
+                            if (!video?.subtitles) return;
+                            await deleteSubtitleMutation.mutateAsync({
+                                index,
+                                currentSubtitles: video.subtitles
+                            });
+                        }}
+                        onVideoElementReady={setVideoElement}
+                        liveSubtitle={{
+                            available: liveSubtitleTrack.isActive,
+                            label: liveSubtitleTrack.label,
+                            track: liveSubtitleTrack.track,
+                        }}
+                        seekIntervals={seekIntervals}
+                        onNextVideo={relatedVideos.length > 0 ? handleNextVideo : undefined}
+                        onPreviousVideo={previousVideoId ? handlePreviousVideo : undefined}
+                    /> : <VideoControls
+                        src={(videoUrl || video?.sourceUrl) || null}
+                        mediaPath={video.videoPath}
+                        poster={posterUrl || localPosterUrl || video?.thumbnailUrl}
+                        autoPlay={autoPlay}
+                        autoLoop={autoLoop}
+                        pauseOnFocusLoss={pauseOnFocusLoss}
+                        onTimeUpdate={handleTimeUpdate}
+                        startTime={startTimeResult}
+                        subtitles={video.subtitles}
+                        subtitlesEnabled={subtitlesEnabled}
+                        onSubtitlesToggle={handleSubtitlesToggle}
+                        onLoopToggle={handleLoopToggle}
+                        onEnded={handleVideoEnded}
+                        isCinemaMode={isCinemaMode}
+                        onToggleCinemaMode={() => setIsCinemaMode(!isCinemaMode)}
+                        statisticsVideoId={video.id}
+                        statisticsPlatform={typeof video.source === 'string' ? video.source.toLowerCase() : null}
+                        statisticsRelatedEventId={statisticsRelatedEventId}
+                        statisticsAutoplayFromVideoId={autoplayFromVideoId}
+                        onUploadSubtitle={async (file: File) => {
+                            if (!id) return;
+                            await uploadSubtitleMutation.mutateAsync({ file });
+                        }}
+                        onDeleteSubtitle={async (index: number) => {
+                            if (!video?.subtitles) return;
+                            await deleteSubtitleMutation.mutateAsync({ index, currentSubtitles: video.subtitles });
+                        }}
+                        onVideoElementReady={setVideoElement}
+                        liveSubtitle={{ available: liveSubtitleTrack.isActive, label: liveSubtitleTrack.label, track: liveSubtitleTrack.track }}
+                        seekIntervals={seekIntervals}
+                        onEnterCompatibilityMode={
+                            compatibilityModeSupported
+                                ? () => setCompatibilityMode(true)
+                                : undefined
+                        }
+                        onNextVideo={relatedVideos.length > 0 ? handleNextVideo : undefined}
+                        onPreviousVideo={previousVideoId ? handlePreviousVideo : undefined}
+                    />}
+
+                    <LiveTranslationStatusAlert isCinemaMode={effectiveCinemaMode} />
+                    </LiveTranslationProvider>
+
+                    <Box sx={{
+                        px: { xs: 2, md: 0 },
+                        maxWidth: effectiveCinemaMode ? '1200px' : 'none',
+                        mx: effectiveCinemaMode ? 'auto' : 0,
+                        width: '100%'
+                    }}>
+                        <VideoInfo
+                            video={video}
+                            onTitleSave={handleSaveTitle}
+                            onRatingChange={handleRatingChange}
+                            onAuthorClick={handleAuthorClick}
+                            onAvatarClick={handleAvatarClick}
+                            onAddToCollection={handleAddToCollection}
+                            onDelete={handleDelete}
+                            isDeleting={deleteMutation.isPending}
+                            isSavingTitle={titleMutation.isPending}
+                            isTogglingVisibility={visibilityMutation.isPending}
+                            isTogglingLock={lockMutation.isPending}
+                            deleteError={deleteMutation.error ? (deleteMutation.error as any).message || t('deleteFailed') : null}
+                            videoCollections={videoCollections}
+                            onCollectionClick={handleCollectionClick}
+                            availableTags={availableTags}
+                            onTagsUpdate={handleUpdateTags}
+                            isSubscribed={isSubscribed}
+                            onSubscribe={handleSubscribe}
+                            onUnsubscribe={handleUnsubscribe}
+                            onToggleVisibility={handleToggleVisibility}
+                            onToggleLock={handleToggleLock}
+                            onSeek={handleDescriptionSeek}
+                        />
+
+                        {(video.source === 'youtube' || video.source === 'bilibili') && (
+                            <CommentsSection
+                                comments={comments}
+                                loading={loadingComments}
+                                showComments={showComments}
+                                onToggleComments={handleToggleComments}
+                            />
+                        )}
+                    </Box>
+                </Box>
+
+                {/* Sidebar Section */}
+                <Box sx={{
+                    gridArea: 'sidebar',
+                    maxWidth: effectiveCinemaMode ? '1200px' : 'none',
+                    mx: effectiveCinemaMode ? 'auto' : 0,
+                    width: '100%'
+                }}>
+                    {isAudio ? <AudioUpNextSidebar
+                        relatedVideos={relatedVideos}
+                        autoPlayNext={autoPlayNext}
+                        onAutoPlayNextChange={setAutoPlayNext}
+                        onVideoClick={goToUpNextVideo}
+                        onAddToCollection={handleAddToCollection}
+                        currentVideoId={video.id}
+                    /> : <UpNextSidebar
+                        relatedVideos={relatedVideos}
+                        autoPlayNext={autoPlayNext}
+                        onAutoPlayNextChange={setAutoPlayNext}
+                        onVideoClick={goToUpNextVideo}
+                        onAddToCollection={handleAddToCollection}
+                    />}
+                </Box>
+            </Box>
+
+            <CollectionModal
+                open={showCollectionModal}
+                onClose={handleCloseModal}
+                videoCollections={modalVideoCollections}
+                collections={collections}
+                onAddToCollection={handleAddToExistingCollection}
+                onCreateCollection={handleCreateCollection}
+                onRemoveFromCollection={handleRemoveFromCollectionWithConfirm}
+            />
+
+            <ConfirmationModal
+                isOpen={confirmationModal.isOpen}
+                onClose={() => setConfirmationModal({ ...confirmationModal, isOpen: false })}
+                onConfirm={confirmationModal.onConfirm}
+                title={confirmationModal.title}
+                message={confirmationModal.message}
+                confirmText={confirmationModal.confirmText}
+                cancelText={confirmationModal.cancelText}
+                isDanger={confirmationModal.isDanger}
+            />
+
+            <SubscribeModal
+                open={showSubscribeModal}
+                onClose={() => setShowSubscribeModal(false)}
+                onConfirm={handleSubscribeConfirm}
+                authorName={video?.author}
+                url={authorChannelUrl || ''}
+                source={video?.source}
+            />
+        </Container>
+    );
+};
+
+export default VideoPlayer;

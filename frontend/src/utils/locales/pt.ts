@@ -1,0 +1,1883 @@
+export const pt = {
+  // Bulk video organization
+  bulkInvalidVideos: "As etiquetas de {count} vídeos selecionados estão danificadas. Nenhum vídeo foi alterado. Exclua-os para continuar ou repare as etiquetas.",
+  bulkRemoveInvalid: "Excluir vídeos danificados",
+  bulkRequestNotSent: "Não foi possível enviar o pedido. Nenhum vídeo foi alterado. Tente novamente.",
+  bulkSelectVideos: "Selecionar vídeos",
+  bulkExitSelection: "Sair da seleção",
+  bulkSelectedCount: "{count} selecionados",
+  bulkSelectPage: "Todos",
+  bulkSelectPageDescription: "Todos os vídeos desta página",
+  bulkSelectResults: "Selecionar resultados ({count})",
+  bulkClearSelection: "Limpar",
+  bulkSelectionLimit: "Select up to 500 videos. Narrow the filter or select videos individually.",
+  bulkTagsTitle: "Add tags to {count} videos",
+  bulkTagsHint: "Existing tags are preserved. Only the selected tags will be added.",
+  bulkTagsValidation: "Add 1–20 tags, up to 80 characters each. Press Enter to add a tag.",
+  bulkCollectionTitle: "Add {count} videos to a collection",
+  bulkCollectionHint: "Existing collection memberships and video file locations are preserved.",
+  bulkExistingCollection: "Coleção existente",
+  bulkNewCollection: "Nova coleção",
+  bulkCollectionNameHint: "1–200 characters; no filesystem-reserved characters.",
+  bulkAddToCollection: "Adicionar à coleção",
+  bulkSelectVideo: "Selecionar {title}",
+  bulkSaved: "Updated {changed} videos; {unchanged} needed no changes.",
+  bulkUnchanged: "All selected videos already have these tags or collection membership.",
+  bulkSavedRefreshFailed: "Saved, but the list could not refresh. Refresh the page to see the changes.",
+  bulkMissingVideos: "{count} selected videos no longer exist. This request changed no videos.",
+  bulkRemoveMissing: "Remove unavailable videos",
+  bulkCollectionConflict: "This collection name already exists. Choose the existing collection to continue.",
+  bulkRequestUnknown: "No response was received. The operation may have completed. Retrying these same choices is safe.",
+
+  // Header
+  videleum: "Videleum",
+  // Auto Delete (library-wide age-based cleanup)
+  autoDelete: "Exclusão automática",
+  autoDeleteDescription:
+    "Exclui automaticamente os vídeos baixados depois de permanecerem na sua biblioteca por um número definido de dias. Desativado por padrão. Bloqueie vídeos individuais para protegê-los.",
+  autoDeleteInterval: "Excluir após",
+  autoDeleteIntervalHelp: "Vídeos mais antigos que isso são excluídos permanentemente.",
+  autoDeleteIntervalError: "Digite um número inteiro de dias (1–3650).",
+  autoDeleteHowItWorks: "Como funciona a exclusão automática",
+  autoDeleteHowItWorksScan:
+    "Todos os dias às 03:00 (horário do servidor), o Videleum verifica sua biblioteca.",
+  autoDeleteHowItWorksDelete:
+    "Qualquer vídeo adicionado à sua biblioteca há mais tempo do que o intervalo acima é excluído permanentemente — seu arquivo, miniatura e legendas são removidos, enquanto o histórico e o rastreamento de downloads são marcados como excluídos, exatamente como excluir manualmente. (\"Adicionado\" é quando ele entrou no Videleum, não a data de envio original do vídeo.)",
+  autoDeleteHowItWorksLock:
+    "Um vídeo que você bloqueia (o botão de cadeado no player e nos cartões de vídeo) nunca é excluído automaticamente por nenhuma regra, não importa quão antigo seja. Novos downloads começam desbloqueados.",
+  autoDeleteHowItWorksDisable:
+    "Desativar isto interrompe imediatamente esta política de exclusão automática de toda a biblioteca, incluindo uma varredura ativa na próxima verificação de segurança por vídeo. A política de retenção separada de uma assinatura ainda pode excluir vídeos desbloqueados; bloqueie um vídeo para protegê-lo de todas as regras automáticas.",
+  autoDeleteHowItWorksDowntime:
+    "Se o servidor estava desligado às 03:00, a verificação é executada logo após a próxima inicialização.",
+  lockVideo: "Bloquear (proteger da exclusão automática)",
+  unlockVideo: "Desbloquear (permitir exclusão automática)",
+  videoLocked: "Vídeo bloqueado — protegido da exclusão automática",
+  videoUnlocked: "Vídeo desbloqueado",
+  manage: "Gerenciar",
+  settings: "Configurações",
+  logout: "Sair",
+  pleaseEnterUrlOrSearchTerm:
+    "Por favor, insira uma URL de vídeo ou termo de pesquisa",
+  unexpectedErrorOccurred:
+    "Ocorreu um erro inesperado. Por favor, tente novamente.",
+  uploadVideo: "Enviar Vídeo",
+  enterUrlOrSearchTerm: "Digite a URL do vídeo ou termo de pesquisa",
+  enterSearchTerm: "Digite o termo de pesquisa",
+  manageVideos: "Gerenciar Vídeos",
+  instruction: "Instruções",
+
+
+  // Home
+  pasteUrl: "Colar URL de vídeo ou coleção",
+  download: "Baixar",
+  search: "Pesquisar",
+  recentDownloads: "Downloads Recentes",
+  noDownloads: "Nenhum download ainda",
+  downloadStarted: "Download iniciado",
+  downloadFailed: "Falha no download",
+  downloadSuccess: "Download iniciado com sucesso",
+  downloadAudioOnly: "Baixar apenas o áudio",
+  downloadAudioOnlyHint: "Salva somente a faixa de áudio (sem vídeo).",
+  audioFormat: "Formato de áudio",
+  audioFormatM4a: "M4A",
+  audioFormatMp3: "MP3",
+  audioFormatOpus: "Opus",
+  confirmDownloadAllPlaylists:
+    "Baixar todas as playlists deste canal? Isso criará uma coleção para cada playlist.",
+  downloadAll: "Baixar tudo",
+  loadingVideos: "Carregando vídeos...",
+  searchResultsFor: "Resultados da pesquisa para",
+  fromYourLibrary: "Da sua Biblioteca",
+  noMatchingVideos: "Nenhum vídeo correspondente na sua biblioteca.",
+  fromYouTube: "Do YouTube",
+  loadingYouTubeResults: "Carregando resultados do YouTube...",
+  noYouTubeResults: "Nenhum resultado do YouTube encontrado",
+  fromBilibili: "Do Bilibili",
+  loadingBilibiliResults: "Carregando resultados do Bilibili...",
+  noBilibiliResults: "Nenhum resultado do Bilibili encontrado",
+  bilibiliSearchFailed: "A pesquisa de vídeos do Bilibili falhou. Tente novamente ou verifique a rede e as definições do proxy. Os outros resultados continuam disponíveis.",
+  bilibiliSearchRiskControlled: "O Bilibili exige uma verificação de segurança e a pesquisa de vídeos está temporariamente indisponível. Tente atualizar o cookie do Bilibili nas definições e tente novamente. Os outros resultados continuam disponíveis.",
+  noVideosYet:
+    "Ainda sem vídeos. Envie um URL de vídeo para baixar o seu primeiro!",
+  views: "visualizações",
+
+
+  // Settings
+  general: "Geral",
+  security: "Segurança",
+  videoDefaults: "Padrões do Reprodutor de Vídeo",
+  downloadSettings: "Configurações de Download",
+
+  // Settings Categories
+  interfaceDisplay: "Interface e Exibição",
+  videoPlayback: "Reprodução de Vídeo",
+  downloadsFiles: "Downloads e Arquivos",
+  libraryStorage: "Biblioteca e Armazenamento",
+  securityAccess: "Segurança e Acesso",
+  integrationsAdvanced: "Integrações e Avançado",
+  fileOrganization: "Organização de Arquivos",
+  language: "Idioma",
+  websiteName: "Nome do site",
+  websiteNameHelper: "{current}/{max} caracteres (Padrão: {default})",
+  theme: "Tema",
+  themeLight: "Sempre claro",
+  themeDark: "Sempre escuro",
+  themeSystem: "Seguir o Sistema",
+  showThemeButtonInHeader: "Mostrar botão de tema no cabeçalho",
+  showAudioDownloadButton: "Mostrar o botão de download de áudio",
+  tmdbApiKey: "Chave API TMDB",
+  tmdbApiKeyHelper:
+    "Chave API do TheMovieDB para buscar metadados e pôsteres de filmes/séries. Obtenha sua chave em https://www.themoviedb.org/settings/api",
+  testTmdbCredential: "Testar credencial",
+  tmdbCredentialMissing: "Digite primeiro uma credencial TMDB.",
+  tmdbCredentialValid: "A credencial TMDB é válida.",
+  tmdbCredentialTestFailed: "Falha ao testar a credencial TMDB.",
+  tmdbCredentialValidApiKey: "A API Key do TMDB é válida.",
+  tmdbCredentialValidReadAccessToken:
+    "O Read Access Token do TMDB é válido.",
+  tmdbCredentialInvalid:
+    "A credencial do TMDB é inválida. Verifique se é uma API Key ou um Read Access Token válidos.",
+  tmdbCredentialRequestFailed:
+    "Não foi possível acessar o TMDB. Tente novamente.",
+  mountDirectories: "Diretórios de montagem",
+  mountDirectoriesPlaceholder:
+    "Digite os diretórios de montagem (um por linha)\nExemplo:\n/mnt/media1\n/mnt/media2",
+  mountDirectoriesHelper:
+    "Digite os diretórios de montagem onde os arquivos de vídeo estão armazenados, um diretório por linha",
+  mountDirectoriesEmptyError:
+    "Por favor, digite pelo menos um diretório de montagem",
+  infiniteScroll: "Rolagem infinita",
+  infiniteScrollDisabled: "Desativado quando a rolagem infinita está ativada",
+  maxVideoColumns: "Máximo de colunas de vídeo (Página inicial)",
+  videoColumns: "Colunas de vídeo (Página inicial)",
+  columnsCount: "{count} Colunas",
+  enableLogin: "Ativar Proteção de Login",
+  allowPasswordLogin: "Permitir Login com Senha",
+  allowPasswordLoginHelper:
+    "Quando desabilitado, o login com senha não está disponível. Você deve ter pelo menos uma chave de acesso para desabilitar o login com senha.",
+  allowPasswordLoginHttpsOnlyHelper:
+    "Para desabilitar o login com senha, abra esta página por HTTPS ou localhost. O login apenas com passkey exige uma origem segura.",
+  allowResetPassword: "Permitir Redefinir Senha",
+  allowResetPasswordHelper:
+    "Quando desabilitado, o botão de redefinir senha não será exibido na página de login e a API de redefinir senha será bloqueada.",
+  enableApiKeyAuth: "Ativar Autenticação por Chave API",
+  apiKeyAuthHelper:
+    "Quando ativado, as solicitações de API podem ser autorizadas com X-API-Key sem uma sessão de login.",
+  apiKey: "Chave API",
+  refreshApiKey: "Atualizar",
+  refreshApiKeyTitle: "Atualizar Chave API",
+  refreshApiKeyConfirm: "A geração de uma nova chave API invalidará a existente. Todos os clientes que usam a chave antiga precisarão ser atualizados após salvar.",
+  copyApiKey: "Copiar",
+  apiKeySaveHint: "Salve as configurações para ativar as alterações na chave API.",
+  apiKeyCopied: "Chave API copiada para a área de transferência",
+  apiKeyCopyFailed: "Falha ao copiar a chave API. Por favor, copie-a manualmente.",
+  password: "Senha",
+  enterPassword: "Digite a senha",
+  togglePasswordVisibility: "Alternar visibilidade da senha",
+  passwordHelper:
+    "Deixe em branco para manter a senha atual, ou digite para alterar",
+  passwordSetHelper: "Definir uma senha para acessar o aplicativo",
+  autoPlay: "Reproduzir vídeos automaticamente ao carregar",
+  autoLoop: "Repetição Automática de Vídeos",
+  maxConcurrent: "Máximo de Downloads Simultâneos",
+  maxConcurrentDescription:
+    "Limita o número de downloads simultâneos, incluindo downloads regulares e tarefas de assinatura contínua.",
+  autoRetry: "Tentativa automática",
+  autoRetryDescription:
+    "Reagenda automaticamente downloads com falha após um atraso fixo.",
+  retryTimes: "Número de tentativas",
+  retryTimesDescription:
+    "Selecione quantas vezes o sistema tentará novamente uma tarefa com falha.",
+  retryInterval: "Intervalo de tentativa",
+  retryIntervalDescription:
+    "Selecione quanto tempo o sistema espera antes de tentar novamente uma tarefa com falha.",
+  dontSkipDeletedVideo: "Não pular vídeos excluídos",
+  dontSkipDeletedVideoDescription:
+    "Quando habilitado, vídeos com status excluído serão baixados novamente automaticamente em vez de serem pulados.",
+  mediaServerExportMode: "Exportação de sidecars para servidor de mídia",
+  mediaServerExportModeDescription:
+    "Grava sidecars NFO no estilo Kodi e aliases de arte ao lado dos vídeos para Emby, Jellyfin e Plex. Os melhores resultados usam um preset com estrutura de série e temporada.",
+  mediaServerExportModeOff: "Desativado",
+  mediaServerExportModeNfo: "Gravar sidecars NFO",
+  mediaServerExportModeNfoAndSourceJson:
+    "Gravar NFO + JSON de metadados da origem",
+  mediaServerExportModeOffDescription:
+    "Do not generate new sidecars for future downloads. You can still clean up files that Videleum generated earlier.",
+  mediaServerExportCleanupHint:
+    "Current mode only cleans up previously generated sidecar files and will not generate new ones.",
+  mediaServerExportRecommendedLayoutWarning:
+    "A prévia atual do layout de nome ainda não é ideal para bibliotecas de TV. Emby, Jellyfin e Plex funcionam melhor com pastas da série e subpastas Season XX.",
+  mediaServerExportRebuild: "Reconstruir sidecars do servidor de mídia",
+  mediaServerExportRebuildConfirmTitle:
+    "Reconstruir sidecars do servidor de mídia?",
+  mediaServerExportRebuildConfirmBody:
+    "Isto reescreverá os arquivos sidecar NFO, JSON de origem e arte gerenciados pelo Videleum para vídeos locais existentes. Edições manuais em sidecars gerados podem ser substituídas.",
+  mediaServerExportRebuildError:
+    "Falha ao reconstruir os sidecars do servidor de mídia.",
+  mediaServerExportRebuildRunning:
+    "Reconstruindo sidecars do servidor de mídia",
+  mediaServerExportRebuildComplete:
+    "Reconstrução dos sidecars do servidor de mídia concluída",
+  mediaServerExportRebuildSummary:
+    "{succeeded} atualizados, {skipped} ignorados, {failed} falharam.",
+  mediaServerExportRebuildDisabledOff:
+    "Escolha um modo de exportação NFO antes de reconstruir os sidecars.",
+  mediaServerExportRebuildDisabledRunning:
+    "Já existe uma reconstrução de sidecars do servidor de mídia em andamento.",
+  mediaServerExportCleanup: "Clean Up Media Server Sidecars",
+  mediaServerExportCleanupConfirmTitle: "Clean up media server sidecars?",
+  mediaServerExportCleanupConfirmBody:
+    "This removes Videleum-generated NFO, source JSON, and artwork sidecar files for existing local videos. Video files and thumbnails are not deleted.",
+  mediaServerExportCleanupError: "Failed to clean up media server sidecars.",
+  mediaServerExportCleanupRunning: "Cleaning up media server sidecars",
+  mediaServerExportCleanupComplete: "Media server sidecar cleanup complete",
+  mediaServerExportCleanupSummary:
+    "{succeeded} cleaned, {skipped} skipped, {failed} failed.",
+  mediaServerExportSweptSummary:
+    "Também foram removidos {count} arquivos complementares órfãos.",
+  mediaServerExportActiveDownloadsError:
+    "Cannot run media server sidecar maintenance while downloads are active.",
+  mediaServerExportQueuedDownloadsError:
+    "Cannot run media server sidecar maintenance while downloads are queued.",
+  mediaServerExportUnsupportedModeError:
+    "The selected media server export mode is not supported.",
+  mediaServerExportCleanupUnsupportedModeError:
+    "This server version does not support cleanup while media server sidecar export is off.",
+  mediaServerIntegrationTitle: "Media Server Integration & Auto-Refresh",
+  mediaServerIntegrationDescription:
+    "Configure Jellyfin, Emby, or Plex endpoints and tokens. Automatically notifies media servers to scan their libraries when downloads complete or sidecars are rebuilt.",
+  jellyfinServerUrl: "Jellyfin Server URL",
+  jellyfinApiKey: "Jellyfin API Key",
+  embyServerUrl: "Emby Server URL",
+  embyApiKey: "Emby API Key",
+  plexServerUrl: "Plex Server URL",
+  plexToken: "Plex Token (X-Plex-Token)",
+  connectionSuccess: "Connected successfully",
+  connectionFailed: "Connection failed",
+  refreshMediaServers: "Refresh Libraries Now",
+  refreshingMediaServers: "Requesting refresh...",
+  refreshTriggered: "Library refresh triggered",
+  mediaServerAutoRefreshOnDownload: "Automatically notify media servers on download completion",
+  liveTranslation: "Tradução de áudio ao vivo",
+  liveTranslationDescription: "Transmite o áudio do vídeo atual para o Gemini Live Translation e reproduz a fala traduzida com legendas ao vivo. Enquanto ativo, o áudio do vídeo é enviado para a API Gemini do Google.",
+  enableLiveTranslation: "Ativar tradução de áudio ao vivo",
+  liveTranslationOriginalAudioWithSubtitles: "Áudio original e legenda traduzida",
+  liveTranslationOriginalAudioWithSubtitlesDescription:
+    "Manter o áudio original do vídeo e exibir legendas traduzidas sem reproduzir a fala traduzida.",
+  liveTranslationApiKey: "Chave de API do Gemini",
+  liveTranslationApiKeyConfigured: "A chave de API está configurada",
+  liveTranslationApiKeyReplaceHelper: "Há uma chave de API configurada. Insira uma nova chave para substituí-la ou deixe em branco para manter a atual.",
+  liveTranslationClearApiKey: "Limpar chave",
+  liveTranslationModel: "Modelo de tradução ao vivo",
+  liveTranslationSourceLanguage: "Idioma de origem",
+  liveTranslationTargetLanguage: "Idioma de destino",
+  liveTranslationSourceAuto: "Detecção automática",
+  liveTranslationTargetRequired: "É necessário um idioma de destino.",
+  liveTranslationSettingsSaved: "Configurações de tradução ao vivo salvas.",
+  liveTranslationDocumentation: "Documentação do Gemini Live Translation",
+  liveTranslate: "Tradução ao vivo",
+  stopLiveTranslation: "Parar tradução ao vivo",
+  liveTranslationConnecting: "Conectando…",
+  liveTranslationTranslatingTo: "Traduzindo para {language}",
+  liveTranslationPaused: "Pausado",
+  liveTranslationRetry: "Tentar novamente",
+  liveTranslationUnavailable: "A tradução ao vivo está indisponível no momento.",
+  liveTranslationUnsupportedBrowser: "Este navegador não oferece suporte à tradução ao vivo.",
+  liveTranslationInsecureContext: "A tradução ao vivo requer uma conexão segura (HTTPS ou localhost).",
+  liveTranslationAudioCaptureBlocked: "A tradução ao vivo não está disponível para a fonte de áudio deste vídeo.",
+  liveTranslationAdminRequiredPlayer: "A tradução ao vivo requer uma conta de administrador.",
+  liveTranslationApiKeyMissingPlayer: "A tradução ao vivo não está configurada. Adicione uma chave de API do Gemini nas Configurações.",
+  liveTranslationErrorGeneric: "Erro na tradução ao vivo. Tente novamente.",
+  liveTranslationErrorRequiresNormalSpeed: "A tradução ao vivo requer velocidade de reprodução 1x.",
+  liveTranslationErrorTicket: "Não foi possível iniciar a sessão de tradução ao vivo. Tente novamente.",
+  liveTranslationErrorCaptureFailed: "Não foi possível capturar o áudio deste vídeo.",
+  liveTranslationErrorConnection: "Não foi possível conectar ao serviço de tradução. Tente novamente.",
+  liveTranslationErrorWebSocket: "Não foi possível abrir a conexão de tradução ao vivo. Se este site estiver atrás de um proxy reverso, verifique se ele encaminha as solicitações WebSocket (Upgrade) para /api/live-translation/ws.",
+  liveTranslationErrorRateLimited: "O serviço de tradução está ocupado. Tente novamente em instantes.",
+  liveTranslationErrorSessionTimeout: "A sessão de tradução ao vivo atingiu o limite de tempo. Você pode reiniciá-la.",
+  liveTranslationErrorTooManySessions: "Muitas sessões de tradução ao vivo ativas. Tente novamente em instantes.",
+  preferredAudioLanguage: "Idioma de áudio preferido",
+  preferredAudioLanguageDescription:
+    "Quando disponível, o áudio multistream do YouTube neste idioma será preferido para downloads.",
+  preferredAudioLanguageDefault: "Padrão",
+  preferredAudioLanguage_en: "Inglês",
+  preferredAudioLanguage_zh: "Chinês",
+  preferredAudioLanguage_ja: "Japonês",
+  preferredAudioLanguage_ko: "Coreano",
+  preferredAudioLanguage_es: "Espanhol",
+  preferredAudioLanguage_fr: "Francês",
+  preferredAudioLanguage_de: "Alemão",
+  preferredAudioLanguage_pt: "Português",
+  preferredAudioLanguage_ru: "Russo",
+  preferredAudioLanguage_ar: "Árabe",
+  preferredAudioLanguage_hi: "Hindi",
+  preferredAudioLanguage_it: "Italiano",
+  preferredAudioLanguage_nl: "Holandês",
+  preferredAudioLanguage_pl: "Polonês",
+  preferredAudioLanguage_tr: "Turco",
+  preferredAudioLanguage_vi: "Vietnamita",
+  preferredVideoResolution: "Resolução de vídeo preferida",
+  preferredVideoResolutionDescription: "Prefere uma resolução máxima ao baixar. O yt-dlp escolhe o melhor fluxo nessa altura ou abaixo dela, o que evita que episódios de uma coleção caiam de forma inconsistente para uma resolução baixa. A configuração personalizada do yt-dlp tem prioridade.",
+  preferredVideoResolutionAuto: "Automática (melhor disponível)",
+  preferredVideoResolutionStrict: "Aplicar o limite de resolução com rigor",
+  preferredVideoResolutionStrictDescription: "Quando ativado, um episódio sem nenhum fluxo dentro do limite falha em vez de ser baixado em uma resolução maior. Deixe desativado para tratar a resolução como uma preferência flexível.",
+  defaultVideoCodec: "Predefinição de formato de download",
+  defaultVideoCodecDescription:
+    "Escolha o comportamento de formato padrão para novos downloads. Auto usa os padrões de alta qualidade do Videleum. Melhor compatibilidade prefere vídeo H.264 com saída MP4/M4A. Melhor qualidade prefere VP9/WebM. Esta é uma preferência com fallbacks, e configurações de formato personalizadas do yt-dlp a substituem.",
+  defaultVideoCodecDefault: "Auto (padrão do Videleum)",
+  defaultVideoCodec_h264: "Melhor compatibilidade (H.264 / MP4)",
+  defaultVideoCodec_h265: "Avançado: H.265 (HEVC / MP4)",
+  defaultVideoCodec_av1: "Avançado: AV1 (MP4)",
+  defaultVideoCodec_vp9: "Melhor qualidade (VP9 / WebM)",
+  preferredVideoContainer: "Contêiner final",
+  preferredVideoContainerDescription:
+    "Escolha o contêiner usado para o arquivo salvo depois que o yt-dlp mescla os fluxos. Auto mantém o comportamento da predefinição e é o mais seguro. MP4/WebM devem combinar com a predefinição de codec escolhida; MKV é melhor para codecs mistos e servidores de mídia, mas pode não tocar diretamente em navegadores. merge-output-format personalizado do yt-dlp substitui esta configuração.",
+  preferredVideoContainer_auto: "Auto (seguir predefinição)",
+  preferredVideoContainer_mp4: "MP4",
+  preferredVideoContainer_webm: "WebM",
+  preferredVideoContainer_mkv: "MKV",
+  saveSettings: "Salvar Configurações",
+  saving: "Salvando...",
+  backToManage: "Voltar para Gerenciar",
+  settingsSaved: "Configurações salvas com sucesso",
+  settingsFailed: "Falha ao salvar configurações",
+  debugMode: "Modo de Depuração",
+  debugModeDescription:
+    "Mostrar ou ocultar mensagens do console (requer atualização)",
+  telegramNotifications: "Recursos do Telegram",
+  telegramNotificationsDescription:
+    "Use um bot do Telegram para adicionar links à fila de downloads ou receber notificações de conclusão de download.",
+  telegramEnabled: "Ativar recursos do Telegram",
+  telegramBotToken: "Token do bot",
+  telegramBotTokenHelper: "Crie um bot via @BotFather no Telegram para obter seu token.",
+  telegramChatId: "ID do chat",
+  telegramChatIdHelper: "Envie uma mensagem para @RawDataBot no Telegram para obter seu ID de chat.",
+  telegramDownloadEnabled: "Permitir downloads de links do Telegram",
+  telegramNotifyOnSuccess: "Notificar em caso de sucesso",
+  telegramNotifyOnFail: "Notificar em caso de falha",
+  twitchSubscriptions: "Assinaturas da Twitch",
+  twitchClientId: "ID do cliente da Twitch",
+  twitchClientSecret: "Segredo do cliente da Twitch",
+  twitchSubscriptionCredentialsHelper:
+    "As credenciais de cliente da Twitch são opcionais. Sem elas, o Videleum usa polling com yt-dlp em modo best-effort, mas adicioná-las torna a detecção do canal mais confiável.",
+  twitchSubscriptionDescription:
+    "O Videleum verificará este canal da Twitch em busca de novos VODs e fará o download depois que a Twitch os publicar.",
+  twitchSubscriptionCredentialsMissing:
+    "A inscrição da Twitch falhou. As credenciais de cliente são opcionais, mas recomendadas para inscrições de canal mais confiáveis.",
+  twitchSubscriptionVodsOnly:
+    "O Videleum baixa VODs da Twitch depois que eles são publicados. A captura de transmissões ao vivo não está incluída nesta versão.",
+  twitchClientHelpLink: "Como obter o Client ID e o Secret da Twitch",
+  twitchClientHelpTitle: "Obter o Client ID e o Secret da Twitch",
+  twitchClientHelpIntro:
+    "Primeiro você precisa criar um aplicativo da Twitch no console de desenvolvedores da Twitch.",
+  twitchClientHelpStep1:
+    "Abra o console de desenvolvedores da Twitch e entre com a sua conta da Twitch.",
+  twitchClientHelpStep2: "Crie um novo aplicativo para o Videleum.",
+  twitchClientHelpStep3:
+    "Defina uma OAuth Redirect URL. Se você usar apenas assinaturas no lado do servidor, um valor como http://localhost é suficiente.",
+  twitchClientHelpStep4:
+    "Depois que o aplicativo for criado, copie o Client ID na página de detalhes do aplicativo.",
+  twitchClientHelpStep5:
+    "Gere ou revele um Client Secret e depois cole os dois valores nas configurações do Videleum.",
+  twitchClientHelpSecurity:
+    "Mantenha o Client Secret privado e não o compartilhe em capturas de tela ou páginas públicas.",
+  twitchDeveloperConsole: "Console de desenvolvedores da Twitch",
+  twitchDeveloperDocs: "Documentação para desenvolvedores da Twitch",
+  telegramTestButton: "Enviar mensagem de teste",
+  telegramTestSuccess: "Mensagem de teste enviada com sucesso!",
+  telegramTestFailed: "Teste falhou: {error}",
+  telegramTestMissingFields: "Por favor, insira primeiro o token do bot e o ID do chat.",
+  pauseOnFocusLoss: "Pausar vídeo quando a janela perder o foco",
+  playFromBeginning: "Sempre reiniciar vídeos do início",
+  seekControls: "Controles de salto",
+  seekControlsDescription:
+    "Escolha a duração dos saltos curto, médio e longo. As setas esquerda e direita usam o intervalo curto.",
+  seekShortInterval: "Intervalo curto",
+  seekMediumInterval: "Intervalo médio",
+  seekLongInterval: "Intervalo longo",
+  seekDurationUnit: "Unidade",
+  seekUnitSeconds: "segundos",
+  seekUnitMinutes: "minutos",
+  seekUnitHours: "horas",
+  seekIntervalRangeError:
+    "Insira uma duração inteira de 1 segundo a 1 hora.",
+  seekIntervalOrderError:
+    "O intervalo curto deve ser menor que o médio, e o médio menor que o longo.",
+  resetSeekIntervals: "Redefinir intervalos de salto",
+  seekBackwardBy: "Retroceder {duration}",
+  seekForwardBy: "Avançar {duration}",
+  seekDurationSecond: "{count} segundo",
+  seekDurationSeconds: "{count} segundos",
+  seekDurationMinute: "{count} minuto",
+  seekDurationMinutes: "{count} minutos",
+  seekDurationHour: "{count} hora",
+  seekDurationHours: "{count} horas",
+  tagsManagement: "Gerenciamento de Tags",
+  newTag: "Nova Tag",
+  selectTags: "Selecionar Tags",
+  tags: "Tags",
+  noTagsAvailable: "Nenhuma tag disponível",
+  addTag: "Adicionar Tag",
+  addTags: "Adicionar Tags",
+  failedToSaveTags: "Falha ao salvar tags",
+  renameTag: "Renomear Tag",
+  confirmRenameTag: "Renomear",
+  tagRenamedSuccess: "Tag renomeada com sucesso",
+  tagRenameFailed: "Falha ao renomear tag",
+  tagConflictCaseInsensitive:
+    "Já existe uma tag com o mesmo nome (as tags não diferenciam maiúsculas de minúsculas).",
+  renameTagDescription:
+    "Renomear uma tag verificará e atualizará todos os vídeos que usam atualmente esta tag.",
+  enterNewTagName: "Digite o novo nome para a tag '{tag}'",
+
+  // Database
+  database: "Banco de Dados",
+  migrateDataDescription:
+    "Migrar dados de arquivos JSON legados para o novo banco de dados SQLite. Esta ação é segura para executar várias vezes (duplicatas serão ignoradas).",
+  migrateDataButton: "Migrar Dados do JSON",
+  scanFiles: "Escanear Arquivos",
+  scanFilesSuccess: "Verificação concluída. {count} novos vídeos adicionados.",
+  scanFilesDeleted: " {count} arquivos ausentes removidos.",
+  scanFilesFailed: "Falha na verificação",
+  scanAlreadyRunning:
+    "Já há uma verificação em andamento. Aguarde a conclusão.",
+  scanMountDirectoriesSuccess:
+    "Verificação de diretórios montados concluída. {addedCount} novos vídeos adicionados. {deletedCount} vídeos ausentes removidos.",
+  subscribePlaylistsSuccess:
+    "Inscrito com sucesso em {count} lista{plural} de reprodução.",
+  subscribePlaylistsSkipped:
+    "{count} lista{plural} de reprodução {wasWere} já inscrita{plural}.",
+  subscribePlaylistsErrors: "{count} erro{plural} ocorreu{plural}.",
+  subscribePlaylistsNoNew: "Nenhuma nova lista de reprodução foi inscrita.",
+  playlistsWatcher: "Monitor de listas de reprodução",
+  scanFilesConfirmMessage:
+    "O sistema verificará a pasta raiz do caminho do vídeo. Novos arquivos serão adicionados e arquivos de vídeo ausentes serão removidos do sistema.",
+  scanning: "Verificando...",
+  migrateConfirmation:
+    "Tem certeza de que deseja migrar os dados? Isso pode levar alguns instantes.",
+  migrationResults: "Resultados da Migração",
+  migrationReport: "Relatório de Migração",
+  migrationSuccess: "Migração concluída. Veja detalhes no alerta.",
+  migrationNoData: "Migração finalizada, mas nenhum dado encontrado.",
+  migrationFailed: "Falha na migração",
+  migrationWarnings: "AVISOS",
+  migrationErrors: "ERROS",
+  itemsMigrated: "itens migrados",
+  fileNotFound: "Arquivo não encontrado em",
+  noDataFilesFound:
+    "Nenhum arquivo de dados encontrado para migrar. Verifique seus mapeamentos de volume.",
+  removeLegacyData: "Remover Dados Legados",
+  removeLegacyDataDescription:
+    "Excluir os arquivos JSON antigos (videos.json, collections.json, etc.) para liberar espaço em disco. Faça isso apenas após verificar se seus dados foram migrados com sucesso.",
+  removeLegacyDataConfirmTitle: "Excluir Dados Legados?",
+  removeLegacyDataConfirmMessage:
+    "Tem certeza de que deseja excluir os arquivos de dados JSON legados? Esta ação não pode ser desfeita.",
+  legacyDataDeleted: "Dados legados excluídos com sucesso.",
+  legacyDataDeleteFailed: "Falha ao excluir dados legados",
+  deleteLegacyDataButton: "Excluir dados antigos",
+  cleanupTempFiles: "Limpar Arquivos Temporários",
+  cleanupTempFilesDescription:
+    "Remover todos os arquivos temporários de download (.ytdl, .part) do diretório de uploads. Isto ajuda a liberar espaço em disco de downloads incompletos ou cancelados.",
+  cleanupTempFilesConfirmTitle: "Limpar Arquivos Temporários?",
+  cleanupTempFilesConfirmMessage:
+    "Isto excluirá permanentemente todos os arquivos .ytdl e .part no diretório de uploads. Certifique-se de que não há downloads ativos antes de continuar.",
+
+
+  // Task Hooks
+  taskHooks: "Ganchos de Tarefa",
+  taskHooksDescription:
+    "Execute comandos shell personalizados em pontos específicos do ciclo de vida da tarefa. Variáveis de ambiente disponíveis: VIDELEUM_TASK_ID, VIDELEUM_TASK_TITLE, VIDELEUM_SOURCE_URL, VIDELEUM_VIDEO_PATH.",
+  taskHooksWarning:
+    "Aviso: Os comandos são executados com as permissões do servidor. Use com cautela.",
+  deploymentSecurityTitle: "Modelo de segurança da implantação",
+  deploymentSecurityLoading:
+    "A política de segurança da implantação está sendo carregada. Os recursos restritos permanecerão ocultos até que a política esteja disponível.",
+  deploymentSecurityDetails: "Detalhes",
+  deploymentSecurityDetailsTitle: "Detalhes de segurança da implantação",
+  deploymentSecurityCapabilityFeature: "Capacidade / Recurso",
+  deploymentSecurityClose: "Fechar",
+  adminTrustLevelLabel: "Nível de confiança do administrador",
+  adminTrustLevelApplication: "Aplicação",
+  adminTrustLevelContainer: "Contêiner",
+  adminTrustLevelHost: "Host",
+  adminTrustLevelApplicationDescription:
+    "O administrador é considerado confiável apenas na camada da aplicação.",
+  adminTrustLevelContainerDescription:
+    "O administrador é considerado confiável para ações do backend ou do processo do contêiner.",
+  adminTrustLevelHostDescription:
+    "O administrador é considerado confiável para ações administrativas com escopo de host.",
+  deploymentSecurityStandardAppManagement:
+    "Gerenciamento padrão do app (vídeos, coleções, tags, login, backups)",
+  deploymentSecurityTaskHooksCapability:
+    "Upload / exclusão / execução de ganchos de tarefa",
+  deploymentSecurityRawYtDlpConfigTextArea:
+    "Área de texto da configuração bruta do yt-dlp",
+  deploymentSecurityFullRawYtDlpFlagPassthrough:
+    "Passagem completa de flags brutas do yt-dlp",
+  deploymentSecurityMountDirectorySettingsPersistence:
+    "Persistência das configurações de diretórios montados",
+  deploymentSecurityScanMountDirectories:
+    "Verificar arquivos dos diretórios montados configurados",
+  deploymentSecurityFutureHostPathMaintenanceFeatures:
+    "Futuros recursos de manutenção de caminhos do host",
+  deploymentSecurityConfigurationTitle: "Como configurar",
+  deploymentSecurityConfigurationValuesNote:
+    "Use VIDELEUM_ADMIN_TRUST_LEVEL com application, container ou host. Se o valor estiver ausente ou inválido, o fallback será container.",
+  deploymentSecurityDockerConfigTitle: "Docker / Docker Compose",
+  deploymentSecurityDockerConfigDescription:
+    "Defina VIDELEUM_ADMIN_TRUST_LEVEL no environment do serviço. Substitua application por container ou host conforme necessário.",
+  deploymentSecurityDockerPermissionsNote:
+    "Se você estiver atualizando uma instalação com bind mounts criada antes da versão 1.9.0, garanta que as pastas uploads e data no host sejam graváveis por uid/gid 1000 (`node`). Isso também corrige diretórios uploads/images-small pertencentes a root que podem fazer a geração de miniaturas ou as varreduras falharem com EACCES.",
+  deploymentSecurityLocalConfigTitle: "Execução local do código-fonte",
+  deploymentSecurityLocalConfigDescription:
+    "Exporte VIDELEUM_ADMIN_TRUST_LEVEL antes de iniciar o Videleum ou passe a variável inline ao executar npm run dev.",
+  deploymentSecurityLocalEnvFileNote:
+    "Você também pode colocar a mesma linha em backend/.env.",
+  taskHooksPolicyNotice:
+    "Os ganchos de tarefa são desativados pela política de segurança da implantação no modo de confiança application.",
+  hookTaskBeforeStart: "Antes do Início da Tarefa",
+  hookTaskBeforeStartHelper: "Executa antes do download começar.",
+  hookTaskSuccess: "Tarefa com Sucesso",
+  hookTaskSuccessHelper:
+    "Executa após download bem-sucedido, antes do upload/exclusão na nuvem (aguarda conclusão).",
+  hookTaskFail: "Falha na Tarefa",
+  hookTaskFailHelper: "Executa quando uma tarefa falha.",
+  hookTaskCancel: "Tarefa Cancelada",
+  hookTaskCancelHelper: "Executa quando uma tarefa é cancelada manualmente.",
+  found: "Encontrado",
+  notFound: "Não Definido",
+  deleteHook: "Excluir Script de Gancho",
+  confirmDeleteHook: "Tem certeza que deseja excluir este script de gancho?",
+  uploadHook: "Enviar .sh",
+  enterPasswordToUploadHook:
+    "Por favor, digite sua senha para fazer upload deste script Hook.",
+  riskCommandDetected:
+    "Comando de risco detectado: {command}. Upload rejeitado.",
+  cleanupTempFilesActiveDownloads:
+    "Não é possível limpar enquanto houver downloads ativos. Aguarde a conclusão de todos os downloads ou cancele-os primeiro.",
+  itemsPerPage: "Itens por página",
+  itemsPerPageHelper: "Número de vídeos a mostrar por página (Padrão: 12)",
+  showYoutubeSearch: "Mostrar resultados de pesquisa do YouTube",
+  showBilibiliSearch: "Mostrar resultados de pesquisa do Bilibili",
+  defaultSort: "Ordenação Padrão",
+  showTagsOnThumbnail: "Mostrar tags na miniatura",
+  playSoundOnTaskComplete: "Reproduzir som ao concluir tarefa",
+  soundSuccess: "Som de sucesso",
+  visitorModeReadOnly: "Modo visitante: Somente leitura",
+  visitorModeUrlRestricted: "Visitantes não podem processar URLs",
+  visitorUser: "Usuário Visitante",
+  enableVisitorUser: "Habilitar Usuário Visitante",
+  visitorUserHelper:
+    "Habilite uma conta de visitante separada com acesso somente leitura. Os visitantes podem visualizar o conteúdo, mas não podem fazer alterações.",
+  visitorPassword: "Senha de Visitante",
+  visitorPasswordHelper: "Defina a senha para a conta de visitante.",
+  visitorPasswordSetHelper:
+    "A senha está definida. Deixe em branco para mantê-la.",
+  visitorAccounts: "Contas de visitante",
+  addVisitorUser: "Adicionar usuário visitante",
+  editVisitorUser: "Editar usuário visitante",
+  username: "Nome de usuário",
+  userStatus: "Status",
+  userEnabled: "Habilitado",
+  userDisabled: "Desabilitado",
+  userLastLogin: "Último login",
+  userNeverLoggedIn: "Nunca",
+  userActions: "Ações",
+  enableUser: "Habilitar",
+  disableUser: "Desabilitar",
+  deleteUser: "Excluir",
+  setNewPassword: "Definir nova senha",
+  generatePassword: "Gerar",
+  copyPassword: "Copiar",
+  passwordCopied: "Senha copiada para a área de transferência",
+  userCreated: "Usuário visitante criado",
+  userUpdated: "Usuário visitante atualizado",
+  userDeleted: "Usuário visitante excluído",
+  userDeleteConfirm: "Isso remove a conta e desconecta o usuário imediatamente. Não é possível desfazer.",
+  userDisableConfirm: "Desabilitar desconecta este usuário em todos os lugares. Você pode reabilitá-lo depois.",
+  userPasswordChangeWarning: "Alterar a senha desconecta este usuário em todos os lugares.",
+  userUsernameInvalid: "O nome de usuário deve ter de 3 a 32 caracteres: letras, números, pontos, hífens ou sublinhados.",
+  userUsernameReserved: "Este nome de usuário é reservado.",
+  userUsernameTaken: "O nome de usuário já está em uso.",
+  userPasswordInvalid: "A senha deve ter de 6 a 128 caracteres.",
+  userEnabledInvalid: "Valor de ativação inválido.",
+  userNotFound: "Usuário não encontrado.",
+  userEmptyPatch: "Nada para atualizar.",
+  noVisitorUsers: "Ainda não há contas de visitante.",
+  legacySharedUserTooltip: "Migrado da senha de visitante compartilhada",
+  visitorUsersImmediateHint: "As alterações de conta são aplicadas imediatamente e não exigem salvar as configurações.",
+  visitorLoginHint: 'Se você usava a antiga senha compartilhada, seu nome de usuário é "visitor".',
+  incorrectUsernameOrPassword: "Nome de usuário ou senha incorretos",
+  cleanupTempFilesSuccess:
+    "{count} arquivo(s) temporário(s) excluído(s) com sucesso.",
+  cleanupTempFilesFailed: "Falha ao limpar arquivos temporários",
+
+
+  // Cookie Settings
+  cookieSettings: "Configurações de Cookies",
+  cookieUploadDescription:
+    'Envie cookies.txt para passar nas verificações de bot do YouTube e ativar o download de legendas do Bilibili. O arquivo será renomeado automaticamente para cookies.txt. (Exemplo: use a extensão "Get cookies.txt LOCALLY" para exportar cookies)',
+  uploadCookies: "Enviar Cookies",
+  onlyTxtFilesAllowed: "Apenas arquivos .txt são permitidos",
+  cookiesUploadedSuccess: "Cookies enviados com sucesso",
+  cookiesUploadFailed: "Falha ao enviar cookies",
+  cookiesFound: "cookies.txt encontrado",
+  cookiesNotFound: "cookies.txt não encontrado",
+  deleteCookies: "Excluir Cookies",
+  confirmDeleteCookies:
+    "Tem certeza de que deseja excluir o arquivo de cookies? Isso afetará sua capacidade de baixar vídeos com restrição de idade ou exclusivos para membros.",
+  cookiesDeletedSuccess: "Cookies excluídos com sucesso",
+  cookiesDeleteFailed: "Falha ao excluir cookies",
+  youtubeCookiesMayHaveExpired:
+    "O YouTube recusou o download (HTTP 403). Seus cookies do YouTube podem ter expirado; envie-os novamente.",
+  youtubeCookiesRequiredForBotCheck:
+    "O YouTube requer cookies de autenticação para passar na verificação de bot. Envie seus cookies do YouTube em Configurações -> Segurança e Acesso -> Configurações de Cookies.",
+
+
+  // Cloud Drive
+  cloudDriveSettings: "Armazenamento em Nuvem (OpenList)",
+  cloudDriveDescription:
+    "Faça upload automático de vídeos para o armazenamento em nuvem (Alist) e verifique se há novos arquivos na nuvem. Os arquivos locais serão excluídos após o upload bem-sucedido.",
+  enableAutoSave: "Ativar Sincronização na Nuvem",
+  apiUrl: "URL da API",
+  apiUrlHelper: "ex. https://your-alist-instance.com/api/fs/put",
+  token: "Token",
+  publicUrl: "URL Público",
+  publicUrlHelper:
+    "Domínio público para acessar arquivos (ex. https://your-cloudflare-tunnel-domain.com). Se definido, será usado em vez da URL da API para acessar arquivos.",
+  uploadPath: "Caminho de upload",
+  cloudDrivePathHelper: "Caminho do diretório na nuvem, ex. /videleum-uploads",
+  scanPaths: "Caminhos de Varredura",
+  scanPathsHelper:
+    "Um caminho por linha. Os vídeos serão verificados a partir desses caminhos. Se vazio, usará o caminho de upload. Exemplo:\n/a/Filmes\n/b/Documentários",
+  cloudDriveNote:
+    "Após habilitar este recurso, os vídeos recém-baixados serão automaticamente enviados para o armazenamento em nuvem e os arquivos locais serão excluídos. Os vídeos serão reproduzidos do armazenamento em nuvem via proxy.",
+  cloudScanAdded: "Adicionado da nuvem",
+  testing: "Testando...",
+  testConnection: "Testar Conexão",
+  sync: "Sincronizar",
+  syncToCloud: "Sincronização Bidirecional",
+  syncWarning:
+    "Esta operação fará upload de vídeos locais para a nuvem e verificará se há novos arquivos no armazenamento em nuvem. Os arquivos locais serão excluídos após o upload.",
+  syncing: "Sincronizando...",
+  syncCompleted: "Sincronização Concluída",
+  syncFailed: "Falha na Sincronização",
+  syncReport: "Total: {total} | Enviados: {uploaded} | Falhos: {failed}",
+  syncErrors: "Erros:",
+  fillApiUrlToken: "Por favor, preencha a URL da API e o Token primeiro",
+  connectionTestSuccess:
+    "Teste de conexão bem-sucedido! As configurações são válidas.",
+  connectionFailedStatus:
+    "Falha na conexão: O servidor retornou o status {status}",
+  connectionFailedUrl:
+    "Não é possível conectar ao servidor. Verifique a URL da API.",
+  authFailed: "Falha na autenticação. Verifique seu token.",
+  connectionTestFailed: "Falha no teste de conexão: {error}",
+  syncFailedMessage: "Falha na sincronização. Tente novamente.",
+  foundVideosToSync:
+    "Encontrados {count} vídeos com arquivos locais para sincronizar",
+  uploadingVideo: "Enviando: {title}",
+  clearThumbnailCache: "Limpar Cache Local de Miniaturas",
+  clearing: "Limpando...",
+  clearThumbnailCacheSuccess:
+    "Cache de miniaturas limpo com sucesso. As miniaturas serão regeneradas na próxima vez que forem acessadas.",
+  clearThumbnailCacheError: "Falha ao limpar cache de miniaturas",
+  clearThumbnailCacheConfirmMessage:
+    "Isso limpará todas as miniaturas armazenadas localmente para vídeos na nuvem. As miniaturas serão regeneradas do armazenamento em nuvem na próxima vez que forem acessadas. Continuar?",
+
+
+  // Manage
+  manageContent: "Gerenciar Conteúdo",
+  videos: "Vídeos",
+  collections: "Coleções",
+  allVideos: "Todos os Vídeos",
+  delete: "Excluir",
+  backToHome: "Voltar para Início",
+  confirmDelete: "Tem certeza de que deseja excluir isto?",
+  deleteSuccess: "Excluído com sucesso",
+  deleteFailed: "Falha ao excluir",
+  noVideos: "Nenhum vídeo encontrado",
+  noCollectionsFound: "Nenhuma coleção encontrada",
+  noCollections: "Nenhuma coleção encontrada",
+  searchVideos: "Pesquisar vídeos...",
+  thumbnail: "Miniatura",
+  title: "Título",
+  author: "Autor",
+  authors: "Autores",
+  all: "Todos",
+  showAll: "Ver todos",
+  allAuthors: "Todos os autores",
+  allTags: "Todas as tags",
+  showMoreTags: "Mostrar mais tags",
+  showLessTags: "Mostrar menos tags",
+  filteredByTags: "Filtrado por {count} tags",
+
+  created: "Criado",
+  name: "Nome",
+  size: "Tamanho",
+  actions: "Ações",
+  deleteCollection: "Excluir Coleção",
+  cleanup: "Limpar",
+  cleanupEmptyCollectionsTitle: "Limpar coleções vazias?",
+  cleanupEmptyCollectionsMessage:
+    "{count} coleção(ões) não contêm vídeos e serão excluídas. Os vídeos em outras coleções não são afetados.",
+  cleanupEmptyCollectionsSuccess: "{count} coleção(ões) vazia(s) excluída(s).",
+  cleanupEmptyCollectionsFailed: "Falha ao limpar as coleções vazias",
+  deleteVideo: "Excluir Vídeo",
+  redownloadVideo: "Baixar vídeo novamente",
+  redownloadThumbnail: "Baixar miniatura novamente",
+  noSourceUrlAvailable: "Nenhuma URL de origem disponível",
+  downloadAlreadyInProgress: "O download já está em andamento",
+  refreshFileSizesSuccess: "Tamanhos de arquivo atualizados. {count} vídeos atualizados.",
+  refreshFileSizesFailed: " {count} falhas.",
+  refreshFileSizesSkipped: " {count} inalterados ou indisponíveis.",
+  refreshFileSizesError: "Falha ao atualizar tamanhos de arquivo: {error}",
+  noVideosFoundMatching:
+    "Nenhum vídeo encontrado correspondente à sua pesquisa.",
+  refreshThumbnail: "Atualizar miniatura",
+  confirmBulkDelete:
+    "Tem certeza de que deseja excluir estes vídeos? Esta ação não pode ser desfeita.",
+
+
+  // Video Player
+  playing: "Reproduzir",
+  paused: "Pausar",
+  next: "Próximo",
+  previous: "Anterior",
+  loop: "Repetir",
+  autoPlayOn: "Reprodução Automática Ligada",
+  autoPlayOff: "Reprodução Automática Desligada",
+  autoPlayNext: "Reprodução Automática do Próximo",
+  videoNotFound: "Vídeo não encontrado",
+  videoNotFoundOrLoaded: "Vídeo não encontrado ou não pôde ser carregado.",
+  deleting: "Excluindo...",
+  addToCollection: "Adicionar à Coleção",
+  originalLink: "Link Original",
+  source: "Fonte:",
+  addedDate: "Data de Adição:",
+  hideComments: "Ocultar comentários",
+  showComments: "Mostrar comentários",
+  latestComments: "Últimos Comentários",
+  noComments: "Nenhum comentário disponível.",
+  upNext: "A Seguir",
+  noOtherVideos: "Nenhum outro vídeo disponível",
+  currentlyIn: "Atualmente em:",
+  collectionWarning: "Adicionar a uma coleção diferente removerá da atual.",
+  addToExistingCollection: "Adicionar a coleção existente:",
+  selectCollection: "Selecionar uma coleção",
+  add: "Adicionar",
+  createNewCollection: "Criar nova coleção:",
+  collectionName: "Nome da coleção",
+  selectOrCreateCollection: "Selecionar ou criar uma coleção",
+  createNewCollectionLabel: 'Criar "{name}"',
+  create: "Criar",
+  removeFromCollection: "Remover da Coleção",
+  confirmRemoveFromCollection:
+    "Tem certeza de que deseja remover este vídeo da coleção?",
+  remove: "Remover",
+  loadingVideo: "Carregando vídeo...",
+
+  // Compatibility mode (canvas + WebCodecs playback, no media element)
+  compatibilityMode: "D Mode",
+  compatibilityModeEnter: "D Mode (tela do carro)",
+  compatibilityModeExit: "Voltar ao player padrão",
+  compatibilityModeFailed: "Falha na reprodução do D Mode",
+  compatibilityModeFallbackHint: "Desative o D Mode para usar o player padrão.",
+  compatibilityModeUnplayable:
+    "Este vídeo não pode ser reproduzido nesta tela.",
+  compatibilityModeUnavailable:
+    "Este navegador não oferece suporte a WebCodecs, então o D Mode está indisponível.",
+  current: "(Atual)",
+  rateThisVideo: "Avaliar este vídeo",
+  enterFullscreen: "Tela Cheia",
+  exitFullscreen: "Sair da Tela Cheia",
+  enterCinemaMode: "Modo Cinema",
+  exitCinemaMode: "Sair do Modo Cinema",
+  share: "Compartilhar",
+  editTitle: "Editar Título",
+  hideVideo: "Tornar Vídeo Oculto para Modo Visitante",
+  showVideo: "Tornar Vídeo Visível para Modo Visitante",
+  toggleVisibility: "Alternar Visibilidade",
+  titleUpdated: "Título atualizado com sucesso",
+  titleUpdateFailed: "Falha ao atualizar título",
+  thumbnailRefreshed: "Miniatura atualizada com sucesso",
+  thumbnailRefreshFailed: "Falha ao atualizar miniatura",
+  videoUpdated: "Vídeo atualizado com sucesso",
+  videoUpdateFailed: "Falha ao atualizar vídeo",
+  failedToLoadVideos:
+    "Falha ao carregar vídeos. Por favor, tente novamente mais tarde.",
+  videoRemovedSuccessfully: "Vídeo removido com sucesso",
+  failedToDeleteVideo: "Falha ao excluir vídeo",
+  pleaseEnterSearchTerm: "Por favor, insira um termo de pesquisa",
+  failedToSearch: "Falha na pesquisa. Por favor, tente novamente.",
+  searchCancelled: "Pesquisa cancelada",
+  openInExternalPlayer: "Abrir no player externo",
+  playWith: "Reproduzir com...",
+  deleteAllFilteredVideos: "Excluir todos os vídeos filtrados",
+  confirmDeleteFilteredVideos:
+    "Tem certeza de que deseja excluir {count} vídeos filtrados pelas tags selecionadas?",
+  deleteFilteredVideosSuccess: "{count} vídeos excluídos com sucesso.",
+  deletingVideos: "Excluindo vídeos...",
+
+
+  // Login
+  signIn: "Entrar",
+  admin: "Administrador",
+  visitorSignIn: "Login de Visitante",
+  orVisitor: "OU VISITANTE",
+  verifying: "Verificando...",
+  incorrectPassword: "Senha incorreta",
+  loginFailed: "Falha ao verificar senha",
+  defaultPasswordHint: "Use a senha de administrador configurada em Configurações.",
+  checkingConnection: "Verificando conexão...",
+  connectionError: "Erro de Conexão",
+  backendConnectionFailed:
+    "Não foi possível conectar ao servidor. Verifique se o backend está em execução e a porta está aberta, depois tente novamente.",
+  retry: "Tentar Novamente",
+  resetPassword: "Redefinir Senha",
+  resetPasswordTitle: "Redefinir Senha",
+  resetPasswordMessage:
+    "A recuperação de senha deve ser feita a partir do ambiente do backend. Use um comando do backend para definir explicitamente uma nova senha.",
+  resetPasswordConfirm: "Redefinir",
+  resetPasswordSuccess:
+    "As instruções de recuperação de senha são mostradas abaixo. Use um comando do backend para definir a nova senha.",
+  resetPasswordRecoveryMessage:
+    "A recuperação de senha deve ser feita a partir do ambiente do backend. Defina uma nova senha explicitamente em vez de depender de credenciais geradas nos logs.",
+  resetPasswordRecoveryGuide:
+    "Escolha o comando correspondente ao seu ambiente:\n\nShell do backend\n  node dist/scripts/reset-password.js <new-password>\n\nHost Docker\n  docker exec -it videleum-backend node /app/dist/scripts/reset-password.js <new-password>\n\nUse o diretório ou contêiner do backend que tenha acesso aos dados persistentes da aplicação.",
+  resetPasswordDisabledInfo:
+    "A redefinição de senha está desabilitada na interface web. Para redefinir sua senha, execute um dos seguintes comandos a partir do ambiente do backend:\n\nShell do backend\n  node dist/scripts/reset-password.js <new-password>\n\nHost Docker\n  docker exec -it videleum-backend node /app/dist/scripts/reset-password.js <new-password>\n\nUse o diretório ou contêiner do backend que tenha acesso aos dados persistentes da aplicação.",
+  resetPasswordScriptGuide:
+    "Para redefinir a senha manualmente, execute um dos seguintes comandos e informe explicitamente a nova senha:\n\nShell do backend\n  node dist/scripts/reset-password.js <new-password>\n\nHost Docker\n  docker exec -it videleum-backend node /app/dist/scripts/reset-password.js <new-password>\n\nO script não gera nem exibe senhas aleatórias.",
+  waitTimeMessage: "Por favor, aguarde {time} antes de tentar novamente.",
+  tooManyAttempts: "Muitas tentativas falharam.",
+
+  // Passkeys
+  createPasskey: "Criar chave de acesso",
+  creatingPasskey: "Criando...",
+  passkeyCreated: "Chave de acesso criada com sucesso",
+  passkeyCreationFailed:
+    "Falha ao criar chave de acesso. Por favor, tente novamente.",
+  passkeyWebAuthnNotSupported:
+    "WebAuthn não é suportado neste navegador. Por favor, use um navegador moderno que suporte WebAuthn.",
+  passkeyRequiresHttps:
+    "WebAuthn requer HTTPS ou localhost. Por favor, acesse o aplicativo via HTTPS ou use localhost em vez de um endereço IP.",
+  removePasskeys: "Remover todas as chaves de acesso",
+  removePasskeysTitle: "Remover todas as chaves de acesso",
+  removePasskeysMessage:
+    "Tem certeza de que deseja remover todas as chaves de acesso? Esta ação não pode ser desfeita.",
+  passkeysRemoved: "Todas as chaves de acesso foram removidas",
+  passkeysRemoveFailed:
+    "Falha ao remover chaves de acesso. Por favor, tente novamente.",
+  loginWithPasskey: "Entrar com chave de acesso",
+  authenticating: "Autenticando...",
+  passkeyLoginFailed:
+    "Falha na autenticação com chave de acesso. Por favor, tente novamente.",
+  passkeyErrorPermissionDenied:
+    "A solicitação não é permitida pelo agente do usuário ou pela plataforma no contexto atual, possivelmente porque o usuário negou a permissão.",
+  passkeyErrorAlreadyRegistered:
+    "O autenticador já foi registrado anteriormente.",
+  linkCopied: "Link copiado para a área de transferência",
+  copyFailed: "Falha ao copiar link",
+  copyUrl: "Copiar URL",
+
+
+  // Collection Page
+  loadingCollection: "Carregando coleção...",
+  collectionNotFound: "Coleção não encontrada",
+  noVideosInCollection: "Nenhum vídeo nesta coleção.",
+  back: "Voltar",
+
+
+  // Author Videos
+  loadVideosError:
+    "Falha ao carregar vídeos. Por favor, tente novamente mais tarde.",
+  unknownAuthor: "Desconhecido",
+  noVideosForAuthor: "Nenhum vídeo encontrado para este autor.",
+  deleteAuthor: "Excluir Autor",
+  deleteAuthorConfirmation:
+    "Tem certeza de que deseja excluir o autor {author}? Isso excluirá todos os vídeos associados a este autor.",
+  authorDeletedSuccessfully: "Autor excluído com sucesso",
+  failedToDeleteAuthor: "Falha ao excluir autor",
+  createCollectionFromAuthor: "Criar Coleção do Autor",
+  createCollectionFromAuthorTooltip:
+    "Mover todos os vídeos deste autor para uma coleção",
+  creatingCollection: "Criando coleção...",
+  collectionCreatedFromAuthor:
+    "Coleção criada e todos os vídeos movidos com sucesso",
+  failedToCreateCollectionFromAuthor: "Falha ao criar coleção do autor",
+  collectionAlreadyExists: "Uma coleção com este nome já existe",
+  createCollectionFromAuthorConfirmation:
+    'Uma coleção chamada "{author}" será criada e todos os vídeos deste autor serão movidos para ela. Continuar?',
+  createCollectionFromAuthorConfirmationWithMove:
+    'Uma coleção chamada "{author}" será criada e todos os vídeos deste autor serão movidos para ela. {count} vídeo(s) que estão atualmente em outras coleções serão movidos para esta nova coleção. Continuar?',
+  addVideosToCollection: "Adicionar Vídeos à Coleção",
+  addVideosToExistingCollectionConfirmation:
+    'Adicionar {count} vídeo(s) do autor "{author}" à coleção existente "{author}". Continuar?',
+  addVideosToExistingCollectionConfirmationWithMove:
+    'Adicionar {count} vídeo(s) do autor "{author}" à coleção existente "{author}". {moveCount} vídeo(s) que estão atualmente em outras coleções serão movidos para esta coleção. Continuar?',
+
+
+  // Delete Collection Modal
+  deleteCollectionTitle: "Excluir Coleção",
+  deleteCollectionConfirmation: "Tem certeza de que deseja excluir a coleção",
+  collectionContains: "Esta coleção contém",
+  deleteCollectionOnly: "Excluir Apenas Coleção",
+  deleteCollectionAndVideos: "Excluir Coleção e Todos os Vídeos",
+
+
+  // Common
+  loading: "Carregando...",
+  error: "Erro",
+  success: "Sucesso",
+  info: "Informação",
+  cancel: "Cancelar",
+  close: "Fechar",
+  ok: "OK",
+  confirm: "Confirmar",
+  save: "Salvar",
+  note: "Nota",
+  on: "Ligado",
+  off: "Desligado",
+  continue: "Continuar",
+  expand: "Expandir",
+  collapse: "Recolher",
+
+
+  // Video Card
+  unknownDate: "Data desconhecida",
+  part: "Parte",
+  collection: "Coleção",
+  new: "NOVO",
+  justNow: "Agora mesmo",
+  hoursAgo: "Há {hours} h",
+  today: "Hoje",
+  thisWeek: "Esta semana",
+  weeksAgo: "Há {weeks} sem.",
+
+
+  // Upload Modal
+  selectVideoFile: "Selecionar Arquivo de Vídeo",
+  selectVideoFolder: "Selecionar Pasta",
+  uploadFileLimitHint:
+    "Você pode enviar até {count} arquivos e {size} GB no total por vez. Em envios de pasta, cada vídeo e seu tamanho contam para esses limites.",
+  pleaseSelectVideo: "Por favor, selecione um arquivo de vídeo",
+  noSupportedVideosFound:
+    "Nenhum arquivo de vídeo compatível foi encontrado na sua seleção",
+  tooManyFilesSelected:
+    "Você pode enviar até {count} arquivos por vez. Reduza sua seleção e tente novamente.",
+  totalUploadSizeExceeded:
+    "Os arquivos selecionados excedem o limite total de upload de {size} GB. Reduza sua seleção e tente novamente.",
+  uploadFailed: "Falha no envio",
+  failedToUpload: "Falha ao enviar vídeo",
+  uploading: "Enviando...",
+  upload: "Enviar",
+  uploadSummary:
+    "{uploaded} enviados, {duplicates} duplicados, {failed} falhas",
+  unsupportedFilesSkipped: "{count} arquivos não compatíveis ignorados",
+  multipleUploadUsesFilename:
+    "Envios múltiplos usam o nome de cada arquivo como título",
+  uploadThumbnail: "Fazer upload da miniatura",
+  clickToSelectImage: "Clique para selecionar uma imagem",
+  changeImage: "Alterar imagem",
+  selectImage: "Selecionar imagem",
+  thumbnailUploaded: "Miniatura enviada",
+
+
+  // Bilibili Modal
+  bilibiliCollectionDetected: "Coleção Bilibili Detectada",
+  bilibiliSeriesDetected: "Série Bilibili Detectada",
+  multiPartVideoDetected: "Vídeo em Múltiplas Partes Detectado",
+  authorOrPlaylist: "Autor / Lista de reprodução",
+  playlistDetected: "Lista de reprodução detectada",
+  playlistHasVideos: "Esta lista de reprodução tem {count} vídeos.",
+  downloadPlaylistAndCreateCollection:
+    "Baixar vídeos da lista de reprodução e criar uma coleção para ela?",
+  playlistDownloadStarted: "Download da playlist iniciado",
+  collectionHasVideos: "Esta coleção Bilibili tem {count} vídeos.",
+  seriesHasVideos: "Esta série Bilibili tem {count} vídeos.",
+  videoHasParts: "Este vídeo Bilibili tem {count} partes.",
+  downloadAllVideos: "Baixar Todos os {count} Vídeos",
+  downloadAllParts: "Baixar Todas as {count} Partes",
+  downloadThisVideoOnly: "Baixar Apenas Este Vídeo",
+  downloadCurrentPartOnly: "Baixar Apenas Parte Atual",
+  processing: "Processando...",
+  wouldYouLikeToDownloadAllParts: "Gostaria de baixar todas as partes?",
+  wouldYouLikeToDownloadAllVideos: "Gostaria de baixar todos os vídeos?",
+  allPartsAddedToCollection: "Todas as partes serão adicionadas a esta coleção",
+  allVideosAddedToCollection:
+    "Todos os vídeos serão adicionados a esta coleção",
+  queued: "Na fila",
+  waitingInQueue: "Aguardando na fila",
+
+
+  // Downloads
+  downloads: "Downloads",
+  openMenu: "Abrir menu",
+  activeDownloads: "Downloads Ativos",
+  manageDownloads: "Gerenciar Downloads",
+  queuedDownloads: "Downloads na Fila",
+  downloadHistory: "Histórico de Downloads",
+  clearQueue: "Limpar Fila",
+  clearHistory: "Limpar Histórico",
+  noActiveDownloads: "Nenhum download ativo",
+  noQueuedDownloads: "Nenhum download na fila",
+  noDownloadHistory: "Nenhum histórico de download",
+  downloadCancelled: "Download cancelado",
+  queueCleared: "Fila limpa",
+  historyCleared: "Histórico limpo",
+  removedFromQueue: "Removido da fila",
+  removedFromHistory: "Removido do histórico",
+  status: "Estado",
+  progress: "Progresso",
+  speed: "Velocidade",
+  finishedAt: "Terminado em",
+  failed: "Falhou",
+  partialDownload: "Incompleto",
+  pendingRetry: "Nova tentativa pendente",
+  cancelRetry: "Cancelar tentativa",
+  retryScheduledFor: "Nova tentativa agendada para",
+  retryAttemptProgress: "Tentativa {current} de {total}",
+  missingEpisodes: "Episódios ausentes",
+  missingVideos: "Vídeos ausentes",
+  incompleteDownloadVideoGap: "Vídeo: faltam {seconds} s em {positions}",
+  incompleteDownloadAudioGap: "Áudio: faltam {seconds} s em {positions}",
+  incompleteDownloadFragments: "Fragmentos não baixados: {count}. Baixe novamente para tentar recuperá-los.",
+
+
+  // Snackbar Messages
+  videoDownloading: "Baixando vídeo",
+  retryCancelled: "Tentativa cancelada",
+  downloadStartedSuccessfully: "Download iniciado com sucesso",
+  collectionCreatedSuccessfully: "Coleção criada com sucesso",
+  videoAddedToCollection: "Vídeo adicionado à coleção",
+  videosAddedToCollection: "Vídeos adicionados à coleção",
+  videoRemovedFromCollection: "Vídeo removido da coleção",
+  collectionDeletedSuccessfully: "Coleção excluída com sucesso",
+  failedToDeleteCollection: "Falha ao excluir coleção",
+
+  collectionUpdatedSuccessfully: "Coleção atualizada com sucesso",
+  failedToUpdateCollection: "Falha ao atualizar coleção, use um nome diferente",
+  collectionNameRequired: "O nome da coleção é obrigatório",
+  collectionNameTooLong: "O nome da coleção deve ter 200 caracteres ou menos",
+  collectionNameInvalidChars: "O nome da coleção contém caracteres inválidos",
+  collectionNameReserved: "O nome da coleção é reservado",
+  updateCollectionFailed: "Falha ao atualizar coleção",
+  createCollectionFailed: "Falha ao criar coleção",
+  collectionExistsVideoAdded:
+    "A coleção já existe — o vídeo foi adicionado a ela",
+  uploadSubtitle: "Enviar legenda",
+  subtitleUploaded: "Legenda enviada com sucesso",
+  confirmDeleteSubtitle: "Excluir esta legenda?",
+  subtitleDeleted: "Legenda excluída",
+
+  // Batch Download
+  batchDownload: "Download em lote",
+  batchDownloadDescription: "Cole vários URLs abaixo, um por linha.",
+  urls: "URLs",
+  addToQueue: "Adicionar à fila",
+  batchTasksAdded: "{count} tarefas adicionadas",
+  addBatchTasks: "Adicionar tarefas em lote",
+
+
+  // Subscriptions
+  subscribeToAuthor: "Inscrever-se no autor",
+  subscribeToChannel: "Inscrever-se no canal",
+  subscribeConfirmationMessage: "Deseja se inscrever em {author}?",
+  subscribeChannelChoiceMessage:
+    "Como você gostaria de se inscrever neste canal?",
+  subscribeChannelChoiceDescription:
+    "Escolha se inscrever em todos os vídeos ou em todas as listas de reprodução deste canal. Inscrever-se em todas as listas de reprodução também o inscreverá nas futuras listas de reprodução criadas pelo autor.",
+  subscribeAllVideos: "Inscrever-se em todos os vídeos",
+  subscribeAllPlaylists: "Inscrever-se em todas as listas de reprodução",
+  subscribeAllPlaylistsDescription:
+    "Isso se inscreverá em todas as playlists deste canal.",
+  subscribeDescription:
+    "O sistema verificará automaticamente novos vídeos deste autor e os baixará.",
+  checkIntervalMinutes: "Intervalo de verificação (minutos)",
+  subscribe: "Inscrever-se",
+  bilibiliAuthors: "Autores do Bilibili",
+  authorSearchHint: "Pesquise candidatos por nome. Introduza um UID ou URL de perfil do Bilibili para encontrar um autor específico. Os resultados de vídeos não mudam.",
+  authorLookupLabel: "Nome, UID ou URL do perfil",
+  loadingAuthors: "A pesquisar autores…",
+  noAuthorsFound: "Nenhum autor correspondente.",
+  authorSearchFailed: "A pesquisa de autores está indisponível. Tente novamente ou use um UID ou URL de perfil. Os resultados de vídeos continuam disponíveis.",
+  authorSearchRiskControlled: "O Bilibili exige uma verificação de segurança, pelo que a pesquisa de autores está temporariamente indisponível. Tente atualizar o cookie do Bilibili nas definições ou pesquise por UID ou URL de perfil.",
+  authorSubscriptionStatusFailed: "Não foi possível carregar o estado das subscrições. Tente novamente antes de subscrever.",
+  authorAlreadySubscribed: "Subscrito",
+  authorSearchPage: "Página {page}",
+  subscriptions: "Inscrições",
+  allSubscriptions: "Todas as inscrições",
+  authorSubscriptions: "Inscrições em autores",
+  playlistSubscriptions: "Inscrições em playlists",
+  subscriptionCategories: "Categorias de inscrição",
+  noSubscriptions: "Ainda não há inscrições.",
+  noAuthorSubscriptions: "Ainda não há inscrições em autores.",
+  noPlaylistSubscriptions: "Ainda não há inscrições em playlists.",
+  subscriptionTasksAllCategories: "As tarefas abaixo incluem todas as categorias de inscrição.",
+  interval: "Intervalo",
+  lastCheck: "Última verificação",
+  nextCheck: "Próxima verificação",
+  editInterval: "Editar intervalo",
+  platform: "Plataforma",
+  unsubscribe: "Cancelar inscrição",
+  confirmUnsubscribe:
+    "Tem certeza de que deseja cancelar a inscrição de {author}?",
+  subscribedSuccessfully: "Inscrito com sucesso",
+  unsubscribedSuccessfully: "Inscrição cancelada com sucesso",
+  subscriptionUpdated: "Inscrição atualizada com sucesso",
+  subscriptionUpdateFailed: "Falha ao atualizar a inscrição",
+  subscriptionAlreadyExists: "Você já está inscrito neste autor.",
+  minuteShort: "min",
+  minutes: "minutos",
+  never: "Nunca",
+  downloadAllPreviousVideos: "Baixar todos os vídeos anteriores deste autor",
+  downloadShorts: "Baixar Shorts",
+  downloadOrder: "Ordem de download",
+  downloadOrderDateDesc: "Data (mais recente primeiro)",
+  downloadOrderDateAsc: "Data (mais antigo primeiro)",
+  downloadOrderViewsDesc: "Visualizações (mais primeiro)",
+  downloadOrderViewsAsc: "Visualizações (menos primeiro)",
+  downloadOrderLargeChannelHint:
+    "Canais grandes podem demorar mais para buscar metadados antes que o download comece.",
+  downloadOrderShortsHint:
+    "Duas tarefas de download serão criadas: uma para vídeos principais e outra para Shorts.",
+  preparingOrderMetadata: "Preparando metadados da ordem...",
+  selectedDownloadOrder: "Ordem: {order}",
+  retryOrderPreparation: "Tentar preparar a ordem novamente",
+  orderPreparationRetryStarted: "Nova tentativa de preparacao da ordem iniciada",
+  orderPreparationRetryFailed: "Falha ao tentar preparar a ordem novamente",
+  downloadAllPreviousWarning:
+    "Aviso: Isso baixará todos os vídeos anteriores deste autor. Isso pode consumir um espaço de armazenamento significativo e pode acionar mecanismos de detecção de bots que podem resultar em proibições temporárias ou permanentes da plataforma. Use por sua conta e risco.",
+  downloadAllPreviousVideosInPlaylists: "Baixar vídeos anteriores em playlists",
+  downloadAllPlaylistsWarning:
+    "Aviso: Isso baixará todos os vídeos de todas as playlists neste canal. Isso pode ser um grande número de vídeos e consumir um espaço de armazenamento significativo.",
+  continuousDownloadTasks: "Tarefas de download contínuo",
+  taskStatusActive: "Ativo",
+  taskStatusPaused: "Pausado",
+  taskStatusCompleted: "Concluído",
+  taskStatusCancelled: "Cancelado",
+  downloaded: "Baixado",
+  cancelTask: "Cancelar tarefa",
+  confirmCancelTask:
+    "Tem certeza de que deseja cancelar a tarefa de download para {author}?",
+  taskCancelled: "Tarefa cancelada com sucesso",
+  deleteTask: "Excluir tarefa",
+  confirmDeleteTask:
+    "Tem certeza de que deseja excluir o registro da tarefa para {author}? Esta ação não pode ser desfeita.",
+  taskDeleted: "Tarefa excluída com sucesso",
+  clearFinishedTasks: "Limpar tarefas concluídas",
+  tasksCleared: "Tarefas concluídas limpas com sucesso",
+  confirmClearFinishedTasks:
+    "Tem certeza de que deseja limpar todas as tarefas concluídas (concluídas, canceladas)? Isso as removerá da lista, mas não excluirá nenhum arquivo baixado.",
+  clear: "Limpar",
+
+  // Subscription Retention
+  retentionDays: "Excluir automaticamente após",
+  retentionDaysUnit: "dias",
+  downloadHistoryRetention: "Retenção do histórico de downloads",
+  downloadHistoryRetentionDescription:
+    "Exclui automaticamente entradas concluídas do histórico de downloads (sucesso, falha, ignorado) mais antigas que este período. Entradas de vídeos excluídos e novas tentativas agendadas são sempre mantidas, e entradas ainda necessárias à janela de exclusão automática de uma assinatura nunca são removidas.",
+  downloadHistoryRetentionKeepForever: "Manter para sempre",
+  retentionDaysDisabled: "Desativado",
+  editRetention: "Editar exclusão automática",
+  retentionDaysHelpTitle: "Sobre a exclusão automática",
+  retentionDaysHelpMessage:
+    "Quando configurado, o Videleum exclui automaticamente os vídeos baixados por esta inscrição após o número de dias definido. Deixe desativado para manter os vídeos. Vídeos ainda referenciados por outra inscrição ou por um download manual são ignorados.",
+  retentionDaysUpdated: "Política de retenção atualizada",
+  retentionDaysUpdateFailed: "Falha ao atualizar a política de retenção",
+
+  // Per-subscription yt-dlp config override (issue #345)
+  editYtdlpConfigOverride: "Editar substituição de configuração do yt-dlp",
+  ytdlpConfigOverrideHelp:
+    "Opções de yt-dlp em texto livre aplicadas apenas a esta assinatura (ex.: --format bestaudio para um canal somente de áudio). Deixe vazio para usar a configuração global do yt-dlp. As opções definidas aqui substituem a configuração global; o que você omitir (proxy, limites de taxa) é herdado dela.",
+  ytdlpConfigOverridePlaceholder: "--format bestaudio",
+  ytdlpConfigOverrideUpdated: "Substituição do yt-dlp atualizada",
+  ytdlpConfigOverrideUpdateFailed: "Falha ao atualizar a substituição do yt-dlp",
+
+  // Per-subscription filename-template override (issue #368)
+  subscriptionFilenameTemplate: "Substituição do modelo de nome de arquivo",
+  subscriptionFilenameTemplateHelp:
+    "Modelo de nome de arquivo aplicado apenas aos downloads desta assinatura. Usa a mesma sintaxe e variáveis de Configurações → Nomenclatura de arquivos. Deixe vazio para usar a configuração global de nomenclatura de arquivos.",
+  subscriptionFilenameTemplateInherit:
+    "Deixe vazio para herdar a configuração global de nomenclatura de arquivos.",
+  subscriptionFilenameTemplatePlaceholder:
+    "{{ source_custom_name }}/{{ title }}.{{ ext }}",
+  subscriptionFilenameTemplatePreview: "Visualização",
+  subscriptionFilenameTemplateFutureOnly:
+    "As alterações afetam apenas downloads futuros. Arquivos existentes não são renomeados.",
+  editSubscriptionFilenameTemplate: "Editar substituição do modelo de nome de arquivo",
+  subscriptionFilenameTemplateCustom: "Modelo de nome de arquivo personalizado",
+  subscriptionFilenameTemplateUpdated: "Substituição do modelo de nome de arquivo atualizada",
+  subscriptionFilenameTemplateUpdateFailed:
+    "Falha ao atualizar a substituição do modelo de nome de arquivo",
+
+  // Subscription Pause/Resume
+  pause: "Pausar",
+  resume: "Retomar",
+  pauseSubscription: "Pausar assinatura",
+  resumeSubscription: "Retomar assinatura",
+  pauseTask: "Pausar tarefa",
+  resumeTask: "Retomar tarefa",
+  subscriptionPaused: "Assinatura pausada",
+  subscriptionResumed: "Assinatura retomada",
+  taskPaused: "Tarefa pausada",
+  taskResumed: "Tarefa retomada",
+  viaSubscription: "via Assinatura",
+  viaContinuousDownload: "via Download Contínuo",
+
+
+  // Playlist Subscription
+  subscribeToPlaylist: "Inscrever-se nesta playlist",
+  subscribePlaylistDescription:
+    "Verificar automaticamente novos vídeos adicionados a esta playlist",
+  playlistSubscribedSuccessfully: "Inscrito na playlist com sucesso",
+  downloadAndSubscribe: "Baixar tudo e inscrever-se",
+  playlistSubscription: "Playlist",
+  // Issue #368.2 — Inscrever-se apenas em novo conteúdo / opção de download do histórico
+  subscribeOnlyNewPlaylistVideos:
+    "Inscrever-se apenas em novos vídeos",
+  subscribeOnlyNewPlaylistVideosHelp:
+    "Os vídeos existentes da playlist não serão adicionados à fila. O Videleum fará o download dos vídeos detectados recentemente após esta inscrição ser criada.",
+  downloadExistingPlaylistVideos:
+    "Baixar vídeos existentes agora",
+  playlistSubscribedNewOnly:
+    "Inscrito apenas em novos vídeos. Os vídeos existentes não foram adicionados à fila.",
+  playlistDownloadAndSubscriptionStarted:
+    "Download iniciado e playlist inscrita.",
+  playlistBaselineFailed:
+    "Playlist inscrita, mas não foi possível iniciar o download dos vídeos existentes. Os novos vídeos continuarão sendo baixados automaticamente.",
+
+
+  // Instruction Page
+  instructionSection1Title: "1. Download e Gerenciamento de Tarefas",
+  instructionSection1Desc:
+    "Este módulo inclui aquisição de vídeo, tarefas em lote e funções de importação de arquivos.",
+  instructionSection1Sub1: "Download de Link:",
+  instructionSection1Item1Label: "Download Básico:",
+  instructionSection1Item1Text:
+    "Cole links de vários sites de vídeo na caixa de entrada para baixar diretamente.",
+  instructionSection1Item2Label: "Permissões:",
+  instructionSection1Item2Text:
+    "Para sites que exigem associação ou login, faça login na conta correspondente em uma nova guia do navegador primeiro para adquirir permissões de download.",
+  instructionSection1Sub2: "Reconhecimento Inteligente:",
+  instructionSection1Item3Label: "Assinatura de Autor do YouTube:",
+  instructionSection1Item3Text:
+    "Quando o link colado for o canal de um autor, o sistema perguntará se você deseja se inscrever. Após a inscrição, o sistema pode verificar e baixar automaticamente as atualizações do autor em intervalos definidos.",
+  instructionSection1Item4Label: "Download de Coleção Bilibili:",
+  instructionSection1Item4Text:
+    "Quando o link colado for um favorito/coleção Bilibili, o sistema perguntará se você deseja baixar todo o conteúdo da coleção.",
+  instructionSection1Sub3:
+    "Ferramentas Avançadas (Página de Gerenciamento de Download):",
+  instructionSection1Item5Label: "Adicionar Tarefas em Lote:",
+  instructionSection1Item5Text:
+    "Suporta colar vários links de download de uma vez (um por linha) para adição em lote.",
+  instructionSection1Item6Label: "Verificar Arquivos:",
+  instructionSection1Item6Text:
+    "Pesquisa automaticamente todos os arquivos no diretório raiz de armazenamento de vídeo e pastas de primeiro nível. Esta função é adequada para sincronizar arquivos com o sistema depois que os administradores os depositam manualmente no backend do servidor.",
+  instructionSection1Item7Label: "Enviar Vídeo:",
+  instructionSection1Item7Text:
+    "Suporta o envio de arquivos de vídeo locais diretamente do cliente para o servidor.",
+
+  instructionSection2Title: "2. Gerenciamento da Biblioteca de Vídeo",
+  instructionSection2Desc:
+    "Manter e editar recursos de vídeo baixados ou importados.",
+  instructionSection2Sub1: "Exclusão de Coleção/Vídeo:",
+  instructionSection2Text1:
+    "Ao excluir uma coleção na página de gerenciamento, o sistema oferece duas opções: excluir apenas o item da lista de coleção (manter arquivos) ou excluir completamente os arquivos físicos dentro da coleção.",
+  instructionSection2Sub2: "Reparo de Miniatura:",
+  instructionSection2Text2:
+    "Se um vídeo não tiver capa após o download, clique no botão de atualização na miniatura do vídeo e o sistema recapturará o primeiro quadro do vídeo como a nova miniatura.",
+
+  instructionSection3Title: "3. Configurações do Sistema",
+  instructionSection3Desc:
+    "Configurar parâmetros do sistema, manter dados e estender funções.",
+  instructionSection3Sub1: "Configurações de Segurança:",
+  instructionSection3Text1:
+    "Defina a senha de login do sistema antes de ativar o acesso. Se perder o acesso, redefina-a com o script reset-password do backend.",
+  instructionSection3Sub2: "Gerenciamento de Tags:",
+  instructionSection3Text2:
+    'Suporta adicionar ou excluir tags de classificação de vídeo. Nota: Você deve clicar no botão "Salvar" na parte inferior da página para que as alterações entrem em vigor.',
+  instructionSection3Sub3: "Manutenção do Sistema:",
+  instructionSection3Item1Label: "Limpar Arquivos Temporários:",
+  instructionSection3Item1Text:
+    "Usado para limpar arquivos de download temporários residuais causados por falhas ocasionais de backend para liberar espaço.",
+  instructionSection3Item2Label: "Migração de Banco de Dados:",
+  instructionSection3Item2Text:
+    "Projetado para usuários de versões anteriores. Use esta função para migrar dados de JSON para o novo banco de dados SQLite. Após a migração bem-sucedida, clique no botão excluir para limpar dados históricos antigos.",
+  instructionSection3Sub4: "Serviços Estendidos:",
+  instructionSection3Item3Label: "Nuvem OpenList:",
+  instructionSection3Item3Text:
+    "(Em Desenvolvimento) Suporta conexão com serviços OpenList implantados pelo usuário. Adicione a configuração aqui para habilitar a integração da unidade de nuvem.",
+
+
+  // Disclaimer
+  disclaimerTitle: "Isenção de responsabilidade",
+  disclaimerText:
+    "1. Objetivo e Restrições\nEste software (incluindo código e documentação) destina-se exclusivamente a aprendizagem pessoal, pesquisa e intercâmbio técnico. É estritamente proibido usar este software para fins comerciais ou para quaisquer atividades ilegais que violem as leis e regulamentos locais.\n\n2. Responsabilidade\nO desenvolvedor desconhece e não tem controle sobre como os usuários utilizam este software. Quaisquer responsabilidades legais, disputas ou danos decorrentes do uso ilegal ou impróprio deste software (incluindo, mas não se limitando a violação de direitos autorais) serão de responsabilidade exclusiva do usuário. O desenvolvedor não assume nenhuma responsabilidade direta, indireta ou conjunta.\n\n3. Modificações e Distribuição\nEste projeto é de código aberto. Qualquer indivíduo ou organização que modifique ou faça fork deste código deve cumprir a licença de código aberto. Importante: Se um terceiro modificar o código para contornar ou remover os mecanismos originais de autenticação/segurança do usuário e distribuir tais versões, o modificador/distribuidor assume total responsabilidade por quaisquer consequências. Desaconselhamos fortemente contornar ou adulterar quaisquer mecanismos de verificação de segurança.\n\n4. Declaração Sem Fins Lucrativos\nEste é um projeto de código aberto totalmente gratuito. O desenvolvedor não aceita doações e nunca publicou páginas de doação. O software em si não permite cobranças e não oferece serviços pagos. Por favor, esteja vigilante e cuidado com quaisquer golpes ou informações enganosas que aleguem cobrar taxas em nome deste projeto.",
+  history: "Histórico",
+
+
+  // Existing Video Detection
+  existingVideoDetected: "Vídeo existente detectado",
+  videoAlreadyDownloaded: "Este vídeo já foi baixado.",
+  viewVideo: "Ver vídeo",
+  previouslyDeletedVideo: "Vídeo Anteriormente Excluído",
+  previouslyDeleted: "Anteriormente excluído",
+  videoWasDeleted: "Este vídeo foi baixado anteriormente, mas foi excluído.",
+  downloadAgain: "Baixar novamente",
+  downloadedOn: "Baixado em",
+  deletedOn: "Excluído em",
+  existingVideo: "Vídeo existente",
+  skipped: "Pular",
+  videoSkippedExists: "Vídeo já existe, download pulado",
+  videoSkippedDeleted: "Vídeo foi excluído anteriormente, download pulado",
+  downloading: "Baixando...",
+  poweredBy: "Com tecnologia de Videleum",
+  changeSettings: "Alterar configurações",
+
+
+  // Sorting
+  select: "Selecionar",
+  sort: "Ordenar",
+  sortBy: "Ordenar por",
+  dateDesc: "Data de adição (Mais recente)",
+  dateAsc: "Data de adição (Mais antigo)",
+  viewsDesc: "Visualizações (Decrescente)",
+  viewsAsc: "Visualizações (Crescente)",
+  nameAsc: "Nome (A-Z)",
+  videoDateDesc: "Data de criação do vídeo (mais recente)",
+  videoDateAsc: "Data de criação do vídeo (mais antigo)",
+  random: "Aleatório",
+
+
+  // yt-dlp Configuration
+  ytDlpConfiguration: "Configuração do yt-dlp",
+  ytDlpConfigurationDescription:
+    "Configure as opções de download do yt-dlp. Veja",
+  ytDlpConfigurationDocs: "documentação",
+  ytDlpConfigurationDescriptionEnd: "para mais informações.",
+  ytDlpConfigurationPolicyNotice:
+    "A configuração bruta do yt-dlp é desativada pela política de segurança da implantação no modo de confiança application.",
+  ytDlpVersion: "Versão do yt-dlp:",
+  ytDlpVersionUnknown: "desconhecida",
+  ytDlpVersionUnavailable: "yt-dlp não está disponível",
+  ytDlpVersionCheckFailed: "Falha ao ler a versão do yt-dlp.",
+  ytDlpBinaryPath: "Binário: {path}",
+  ytDlpCheckUpdate: "Verificar atualizações",
+  ytDlpUpdate: "Atualizar yt-dlp",
+  ytDlpUpdateAvailable: "Atualização disponível: {version}",
+  ytDlpUpToDate: "Atualizado",
+  ytDlpUpdateInProgress: "Atualizando o yt-dlp. Isso pode levar alguns minutos.",
+  ytDlpUpdateSuccess: "yt-dlp atualizado para {version}.",
+  ytDlpUpdateNoChange: "O yt-dlp já está na versão mais recente disponível.",
+  ytDlpUpdateFailed: "Falha ao atualizar o yt-dlp.",
+  ytDlpUpdateCustomPathNotice:
+    "O YT_DLP_PATH fixa um binário específico, então o Videleum não pode atualizá-lo. Atualize esse binário você mesmo ou remova o YT_DLP_PATH.",
+  ytDlpUpdatePolicyNotice:
+    "A atualização do yt-dlp é desativada pela política de segurança da implantação no modo de confiança application.",
+  mountDirectoriesPolicyNotice:
+    "Diretórios montados exigem confiança de administrador no nível do host.",
+  customize: "Personalizar",
+  hide: "Ocultar",
+  reset: "Redefinir",
+  more: "Mais",
+  proxyOnlyApplyToYoutube: "Proxy aplica-se apenas ao Youtube",
+  proxyBypassHosts: "Ignorar o proxy para estes hosts",
+  proxyBypassHostsHelp:
+    "Nomes de host separados por vírgulas que o yt-dlp acede diretamente em vez de passarem pelo HTTP_PROXY do contentor. Os subdomínios são incluídos automaticamente (surrit.com abrange também cdn.surrit.com). Aplica-se apenas aos downloads do yt-dlp; para que todos os pedidos do Videleum ignorem um host, defina o NO_PROXY do próprio contentor. Não tem efeito quando --proxy está definido abaixo, que substitui por completo o proxy do ambiente.",
+  moveSubtitlesToVideoFolder: "Localização das legendas",
+  moveSubtitlesToVideoFolderOn: "Junto com o vídeo",
+  moveSubtitlesToVideoFolderOff: "Na pasta de legendas isolada",
+  moveSubtitlesToVideoFolderDescription:
+    "Quando ativado, os arquivos de legenda serão movidos para a mesma pasta do arquivo de vídeo. Quando desativado, eles serão movidos para a pasta de legendas isolada.",
+  moveThumbnailsToVideoFolder: "Localização da miniatura",
+  moveThumbnailsToVideoFolderOn: "Junto com o vídeo",
+  moveThumbnailsToVideoFolderOff: "Em pasta de imagens isolada",
+  moveThumbnailsToVideoFolderDescription:
+    "Quando ativado, os arquivos de miniatura em tamanho completo serão movidos para a mesma pasta do arquivo de vídeo. Quando desativado, eles serão movidos para a pasta de imagens isolada. O Videleum também mantém um pequeno cache interno de pré-visualização em `images-small/` que espelha a estrutura das pastas de miniaturas; ele pode ser ignorado ou excluído das bibliotecas do servidor de mídia.",
+  uploadFilenameMode: "Nomes dos arquivos enviados",
+  uploadFilenameModeOriginal: "Manter o nome de arquivo original",
+  uploadFilenameModeGenerated: "Usar nome de arquivo gerado",
+  uploadFilenameModeDescription:
+    "Quando ativado, os vídeos enviados mantêm o nome de arquivo original. Se já existir um arquivo com esse nome, um ID curto é adicionado, por exemplo \"My Video [3f9a2c1b].mp4\". Afeta apenas novos envios; os arquivos existentes não são renomeados.",
+
+  saveAuthorFilesToCollection: "Salvar Arquivos do Autor na Coleção",
+  saveAuthorFilesToCollectionOn: "Ativado",
+  saveAuthorFilesToCollectionOff: "Desativado",
+  saveAuthorFilesToCollectionDescription:
+    "Salvar automaticamente os arquivos do autor em uma coleção separada.",
+  authorOrganizationMode: "Organizacao por autor",
+  authorOrganizationModeDescription:
+    "Escolha se o nome do autor afeta as pastas fisicas, as colecoes logicas ou nenhuma das duas.",
+  authorOrganizationModeRoot: "Manter nas pastas raiz",
+  authorOrganizationModeRootDescription:
+    "Nao crie pastas nem colecoes de autor. Apenas colecoes manuais e de playlist se aplicam.",
+  authorOrganizationModeAuthorFolderOnly: "Somente pastas de autor",
+  authorOrganizationModeAuthorFolderOnlyDescription:
+    "Com nomes de arquivo legacy, mova os arquivos para pastas com nome do autor sem vincular uma colecao de autor.",
+  authorOrganizationModeAuthorCollectionLinked: "Colecao de autor + pasta",
+  authorOrganizationModeAuthorCollectionLinkedDescription:
+    "Vincula os videos a uma colecao de autor. Com nomes de arquivo legacy, os arquivos tambem sao movidos para a pasta do autor.",
+  authorOrganizationModeRecommendation:
+    "Se voce quer pastas por autor sem colecoes de autor duplicadas no Videleum, use Somente pastas de autor.",
+  authorOrganizationModeTemplateNote:
+    "As pastas de autor agora se aplicam a presets legacy e nao legacy. As subpastas do template sao criadas dentro da pasta do autor quando um modo de pasta de autor esta ativo.",
+  cleanupAuthorCollections: "Limpar colecoes de autor existentes",
+  cleanupAuthorCollectionsDescription:
+    "Depois de mudar para Somente pastas de autor, remova links redundantes de colecoes de autor de videos que ja pertencem a outra colecao. Os arquivos no disco nao serao movidos.",
+  cleanupAuthorCollectionsButton: "Remover links redundantes",
+  cleanupAuthorCollectionsConfirmTitle: "Remover links redundantes de colecoes de autor",
+  cleanupAuthorCollectionsConfirmMessage:
+    "Isso desvinculara colecoes de autor de videos que ja pertencem a outra colecao. Colecoes de autor vazias serao excluidas. Os arquivos no disco permanecerao onde estao.",
+  cleanupAuthorCollectionsSuccess:
+    "Removeu {links} links em {videos} videos. Excluiu {collections} colecoes de autor vazias.",
+  cleanupAuthorCollectionsNothingToDo:
+    "Nao havia links redundantes de colecoes de autor para limpar.",
+  cleanupAuthorCollectionsFailed:
+    "Falha ao limpar colecoes de autor",
+
+  // Cloudflare Tunnel
+  cloudflaredTunnel: "Túnel Cloudflare",
+  enableCloudflaredTunnel: "Habilitar Túnel Cloudflare",
+  cloudflaredToken: "Token do Túnel (Opcional)",
+  cloudflaredTokenHelper:
+    "Cole o token do túnel aqui, ou deixe em branco para usar um Túnel Rápido aleatório.",
+  allowedHosts: "Rotas de Aplicação Publicadas",
+  allowedHostsHelper:
+    "Lista de hosts permitidos para o servidor de desenvolvimento Vite (separados por vírgulas). Lista de permissões de domínio para Cloudflare Tunnel.",
+  allowedHostsRequired:
+    "As Rotas de Aplicação Publicadas são obrigatórias quando um token de túnel é fornecido.",
+  waitingForUrl: "Aguardando URL do Túnel Rápido...",
+  running: "Executando",
+  stopped: "Parado",
+  tunnelId: "ID do Túnel",
+  accountTag: "Tag da Conta",
+  copied: "Copiado!",
+  clickToCopy: "Clique para copiar",
+  quickTunnelWarning:
+    "URLs de Túnel Rápido mudam toda vez que o túnel é reiniciado.",
+  managedInDashboard:
+    "O nome do host público é gerenciado no painel Cloudflare Zero Trust.",
+
+
+  // Database Export/Import
+  exportImportDatabase: "Exportar/Importar Banco de Dados",
+  exportImportDatabaseDescription:
+    "Exporte seu banco de dados como arquivo de backup ou importe um backup previamente exportado. A importação substituirá os dados existentes pelos dados de backup.",
+  exportDatabase: "Exportar Banco de Dados",
+  importDatabase: "Importar Banco de Dados",
+  mergeDatabase: "Mesclar Banco de Dados",
+  onlyDbFilesAllowed: "Apenas arquivos .db são permitidos",
+  importDatabaseWarning:
+    "Aviso: Importar um banco de dados substituirá todos os dados existentes. Certifique-se de exportar primeiro seu banco de dados atual como backup.",
+  mergeDatabaseWarning:
+    "Mescle outro backup do Videleum nesta instância. Os registros existentes são mantidos e apenas os registros ausentes do backup enviado são adicionados.",
+  mergeDatabaseContentsVideos:
+    "Os vídeos são correspondidos pela URL de origem, e os vídeos existentes são mantidos.",
+  mergeDatabaseContentsCollections:
+    "As coleções e os vínculos com vídeos são mesclados em coleções com o mesmo nome.",
+  mergeDatabaseContentsSubscriptions:
+    "As inscrições são mescladas pela URL da inscrição, mantendo as inscrições existentes.",
+  mergeDatabaseContentsHistory:
+    "O histórico de downloads e o rastreamento de downloads são adicionados quando uma entrada equivalente ainda não existe.",
+  mergeDatabaseContentsTags:
+    "As configurações de tags também são mescladas para que as tags importadas continuem disponíveis na interface.",
+  mergeDatabaseKeepsCurrentData:
+    "As configurações atuais, senhas, downloads ativos e o estado de execução das tarefas não são substituídos.",
+  mergeDatabaseStatisticsNotice:
+    "As estatísticas coletadas por esta instância permanecem locais e não são mescladas do banco de dados enviado.",
+  mergeDatabasePreviewScanning: "Analisando o banco de dados enviado...",
+  mergeDatabasePreviewResults: "Prévia da mesclagem",
+  mergeDatabasePreviewConfirmHint: "Continue apenas se essas contagens corresponderem ao esperado.",
+  mergeDatabasePreviewFailed: "Falha ao analisar o banco de dados enviado: {error}",
+  mergeDatabasePreviewErrorDefault: "Não foi possível analisar o banco de dados enviado.",
+  mergeDatabaseMergedCount: "Mesclados: {count}",
+  mergeDatabaseSkippedCount: "Ignorados: {count}",
+  mergeDatabasePreviewVideos: "Vídeos",
+  mergeDatabasePreviewCollections: "Coleções",
+  mergeDatabasePreviewCollectionLinks: "Vínculos de coleção",
+  mergeDatabasePreviewSubscriptions: "Inscrições",
+  mergeDatabasePreviewDownloadHistory: "Histórico de Downloads",
+  mergeDatabasePreviewVideoDownloads: "Rastreamento de downloads",
+  mergeDatabasePreviewTags: "Tags",
+  mergeDatabasePreviewFavoriteCollections: "Coleções favoritas",
+  mergeDatabasePreviewFavoriteAuthors: "Autores favoritos",
+  selectDatabaseFile: "Selecionar Arquivo de Banco de Dados",
+  databaseExportedSuccess: "Banco de dados exportado com sucesso",
+  databaseExportFailed: "Falha ao exportar banco de dados",
+  databaseImportedSuccess:
+    "Banco de dados importado com sucesso. Os dados existentes foram substituídos pelos dados de backup.",
+  databaseImportFailed: "Falha ao importar banco de dados",
+  databaseMergedSuccess:
+    "Banco de dados mesclado com sucesso. Os dados existentes foram mantidos e os dados ausentes do backup foram adicionados.",
+  databaseMergeFailed: "Falha ao mesclar banco de dados",
+  cleanupBackupDatabases: "Limpar Bancos de Dados de Backup",
+  cleanupBackupDatabasesWarning:
+    "Aviso: Isso excluirá permanentemente todos os arquivos de banco de dados de backup (videleum-backup-*.db.backup) que foram criados durante importações anteriores. Esta ação não pode ser desfeita. Tem certeza de que deseja continuar?",
+  backupDatabasesCleanedUp: "Bancos de dados de backup limpos com sucesso",
+
+  // Media Integrity Audit
+  mediaIntegrityAudit: "Verificação de integridade de mídia",
+  mediaIntegrityAuditDescription:
+    "Verifica os vídeos que já estão na sua biblioteca em busca de arquivos ausentes, truncados ou ilegíveis. Nada é alterado; cada problema vem com uma correção recomendada para você decidir.",
+  mediaIntegrityAuditCheckTimeline:
+    "Procurar também conteúdo ausente no meio do arquivo (mais lento; pode levar vários minutos em uma biblioteca grande)",
+  mediaIntegrityAuditRun: "Executar verificação",
+  mediaIntegrityAuditRunning:
+    "Verificando sua biblioteca. Isso pode levar vários minutos; você pode trocar de aba enquanto ela é executada.",
+  mediaIntegrityAuditTimeout:
+    "A verificação demorou mais do que o servidor permite para uma única solicitação. Ela continua em segundo plano e lembra os arquivos já concluídos, então execute-a novamente em alguns minutos para continuar de onde parou.",
+  mediaIntegrityAuditFailed: "A verificação de integridade falhou.",
+  mediaIntegrityAuditSummaryClean:
+    "{checked} vídeo(s) verificado(s); nenhum problema encontrado.",
+  mediaIntegrityAuditSummaryProblems:
+    "{checked} vídeo(s) verificado(s); {count} precisam de atenção.",
+  mediaIntegrityAuditTimelineNotChecked:
+    "O conteúdo ausente no meio dos arquivos não foi verificado. Marque a opção acima para incluí-lo.",
+  mediaIntegrityAuditTimelineIncomplete:
+    "A verificação do conteúdo intermediário foi inconclusiva para {count} arquivo(s). Inspecione-os manualmente ou repita uma análise interrompida.",
+  mediaIntegrityAuditActionRedownload:
+    "Recomendado: baixar este vídeo novamente.",
+  mediaIntegrityAuditActionRefreshDuration:
+    "Recomendado: atualizar a duração armazenada. O arquivo em si parece intacto.",
+  mediaIntegrityAuditActionManualReview:
+    "Recomendado: verificar este arquivo manualmente.",
+
+  // History Filter
+  filterAll: "Todos",
+  backupDatabasesCleanupFailed: "Falha ao limpar bancos de dados de backup",
+  restoreFromLastBackup: "Restaurar do Último Backup",
+  restoreFromLastBackupWarning:
+    "Aviso: Isso restaurará o banco de dados do último arquivo de backup automático. Todos os dados atuais serão substituídos pelos dados de backup. Esta ação não pode ser desfeita. Tem certeza de que deseja continuar?",
+  restoreFromLastBackupSuccess:
+    "Banco de dados restaurado com sucesso do backup",
+  restoreFromLastBackupFailed: "Falha ao restaurar do backup",
+  lastBackupDate: "Data do último backup",
+  noBackupAvailable: "Nenhum backup disponível",
+  failedToDownloadVideo: "Falha ao baixar o vídeo. Por favor, tente novamente.",
+  failedToDownload: "Falha ao baixar. Por favor, tente novamente.",
+  openFolder: "Abrir Pasta",
+  openInNewTab: "Abrir em Nova Aba",
+  copyLink: "Copiar Link",
+  refresh: "Atualizar",
+  showSensitiveContent: "Mostrar Conteúdo Sensível",
+  hideSensitiveContent: "Ocultar Conteúdo Sensível",
+  sensitiveContentWarning:
+    "Este vídeo pode conter conteúdo sensível. Clique para ver.",
+  soundNone: "Nenhum",
+  soundBell: "Sino",
+  soundMessage: "Mensagem recebida",
+  soundMicrowave: "Sino de micro-ondas",
+  soundNotification: "Nova notificação",
+  soundDrop: "Objeto caindo na água",
+  soundWater: "Gota d'água no metal",
+  videoLoadTimeout:
+    "O vídeo está demorando muito para carregar. Tente novamente ou verifique sua conexão.",
+  failedToLoadVideo: "Falha ao carregar o vídeo.",
+  videoLoadingAborted: "O carregamento do vídeo foi cancelado.",
+  videoLoadNetworkError:
+    "Erro de rede ao carregar o vídeo. Verifique sua conexão.",
+  safariWebmLimitedSupportError:
+    "O Safari tem suporte limitado ao codec WebM/VP9, especialmente para vídeos em 4K. Baixe novamente o vídeo no formato H.264/MP4 para melhor compatibilidade com o Safari.",
+  safariVideoDecodeError:
+    "Erro de decodificação de vídeo. O Safari pode não oferecer suporte a este codec de vídeo. Tente baixar novamente no formato H.264/MP4.",
+  videoDecodeError:
+    "Erro de decodificação de vídeo. O arquivo pode estar corrompido ou usar um codec não compatível.",
+  safariVideoFormatNotSupported:
+    "Formato de vídeo não compatível com o Safari. O Safari funciona melhor com vídeos H.264/MP4. Baixe novamente com o codec H.264 ou tente outro navegador como o Chrome.",
+  browserVideoFormatNotSupported:
+    "O formato de vídeo não é compatível com seu navegador.",
+
+  // Erros do middleware de configurações baseado em funções
+  // RSS Feed Settings
+  rssFeedSettings: "RSS Feeds",
+  rssFeedSettingsDescription: "Manage private RSS feed links for external readers. RSS links must be accessed over HTTPS.",
+  rssCreateToken: "Create RSS link",
+  rssEditToken: "Edit RSS link",
+  rssCopyLink: "Copy link",
+  rssLinkCopied: "Link copied",
+  rssResetLink: "Reset link",
+  rssResetLinkConfirm: "The old link will stop working immediately.",
+  rssDisableLink: "Disable",
+  rssEnableLink: "Enable",
+  rssDeleteLink: "Delete RSS link",
+  rssDeleteLinkConfirm: "This RSS link will be permanently deleted.",
+  rssAdminRoleWarning: "Admin RSS links can include hidden videos. Treat the URL like a password.",
+  rssPublicAggregatorWarning: "Do not share this URL or paste it into public feed directories.",
+  rssFilterAllVideos: "All videos",
+  rssFilterAllSources: "All sources (no limit)",
+  rssFilterChannels: "Channels",
+  rssFilterAuthors: "Authors",
+  rssFilterTags: "Tags",
+  rssFilterSources: "Sources",
+  rssFilterRecentDays: "Recent days",
+  rssFilterMaxItems: "Max items",
+  rssLoadTokensError: "Failed to load RSS tokens. Please try again.",
+  rssNoFeeds: "No RSS feeds yet. Create one to get started.",
+  rssNoLabel: "(no label)",
+  rssActive: "Active",
+  rssDisabled: "Disabled",
+  rssAccessCount: "Created {date} - {count} access(es)",
+  rssFiltersSummary: "Filters: {filters} - Max {maxItems} items",
+  rssAuthorsSummary: "authors: {authors}",
+  rssChannelsSummary: "{count} channel(s)",
+  rssTagsSummary: "tags: {tags}",
+  rssRecentDaysSummary: "last {days} days",
+  rssEditAction: "Edit",
+  rssLabel: "Label",
+  rssLabelPlaceholder: "e.g. All Videos",
+  rssRole: "Role",
+  rssRoleCannotChange: "Role: {role} (cannot be changed - delete and recreate to change)",
+  rssRoleDescription: "visitor mostra apenas vídeos públicos; admin também inclui vídeos ocultos. A função não pode ser alterada após a criação.",
+  rssFilters: "Filters",
+  rssChannelsSelectedAuthorDisabled: "Channel selected - author filter disabled",
+  rssDays: "{days} days",
+
+  settingsApiKeyForbidden:
+    "A autenticação por chave API não pode acessar os endpoints de configurações.",
+  settingsVisitorAccessRestricted:
+    "Função de visitante: O acesso a este recurso é restrito.",
+  settingsVisitorWriteRestricted:
+    "Função de visitante: Operações de escrita não são permitidas. Apenas acesso de leitura.",
+  settingsVisitorWriteForbidden:
+    "Função de visitante: Operações de escrita não são permitidas.",
+  settingsAuthRequired:
+    "Autenticação necessária. Faça login para acessar este recurso.",
+
+  // Filename template
+  filenameTemplate: "Nomenclatura de arquivos",
+  filenameTemplateDescription:
+    "Escolha como os arquivos baixados serão nomeados. Modos não legados habilitam estruturas de pastas mais adequadas para centrais de mídia.",
+  filenamePresetLabel: "Modo de nomenclatura",
+  filenamePresetLegacy: "Modo compatível atual (Título-Autor-Ano)",
+  filenamePresetMediaCenterDateIndex:
+    "Central de mídia – Temporada/Episódio por data e índice",
+  filenamePresetChannelYearDateIndex:
+    "Canal – Temporada/Episódio por ano e data",
+  filenamePresetPlaylistStaticIndex:
+    "Playlist – Temporada 1 / Episódio por índice",
+  filenamePresetPlaylistStaticDate:
+    "Playlist – Temporada 1 / Episódio por data",
+  filenamePresetSourceDateFlat: "Fonte – data e depois título",
+  filenamePresetSourceDateId: "Fonte - data, titulo e ID da fonte",
+  filenamePresetCustom: "Modelo personalizado",
+  filenameCustomTemplateLabel: "Modelo personalizado",
+  filenameCustomTemplatePlaceholder: "{{ source_collection_name }}/{{ season_by_year__episode_by_date_and_index }} - {{ title }}.{{ ext }}",
+  filenamePreviewTitle: "Prévia",
+  filenamePreviewVideo: "Vídeo",
+  filenamePreviewThumbnail: "Miniatura",
+  filenamePreviewSubtitle: "Legenda",
+  filenamePreviewScenarioChannel: "Canal",
+  filenamePreviewScenarioPlaylist: "Playlist",
+  filenamePreviewScenarioSingle: "Vídeo único",
+  filenameWarningMediaPlaylistIndexUnavailable:
+    "media_playlist_index não está disponível para fontes que não sejam playlists e voltará para 00.",
+  filenameWarningSourceCollectionMetadataMayBeEmpty:
+    "source_collection_name/id pode ficar vazio em downloads de vídeo único.",
+  filenameWarningIdSourceSemanticsV2:
+    "id agora significa sempre o ID do video na plataforma de origem. Antes, a renomeacao em lote da biblioteca existente usava o ID de linha local do Videleum. Use local_video_id se precisar desse valor anterior.",
+  filenameValidating: "Validando…",
+  filenameValidationError: "Erro de modelo",
+  filenameBatchRenameButton:
+    "Renomear arquivos existentes para corresponder ao padrão atual",
+  filenameBatchRenameDescription:
+    "Renomeie todos os arquivos locais de vídeo, imagem e legenda para corresponder ao padrão de nomenclatura atual exibido acima. Salvar altera apenas o padrão para downloads futuros. Os downloads ficam pausados durante a renomeação.",
+  filenameBatchRenameDisabledRunning:
+    "Já existe uma tarefa de renomeação em execução.",
+  filenameBatchRenameDisabledInvalidTemplate:
+    "Corrija o modelo personalizado antes de executar a renomeação.",
+  filenameBatchRenameConfirmTitle: "Renomear todos os arquivos locais?",
+  filenameBatchRenameConfirmBody:
+    "Isso renomeará todos os arquivos locais de vídeo, miniatura e legenda para corresponder ao padrão de nomenclatura atual exibido acima, mesmo que você ainda não tenha salvo as configurações. A operação não pode ser desfeita automaticamente. Se for interrompida, os arquivos já renomeados manterão seus novos nomes.",
+  filenameBatchRenameConfirm: "Iniciar renomeação",
+  filenameBatchRenameRunning: "Renomeando arquivos…",
+  filenameBatchRenamePaused:
+    "Os downloads ficam pausados enquanto a renomeação está em andamento.",
+  filenameBatchRenameComplete: "Renomeação concluída",
+  filenameBatchRenameSummary:
+    "{succeeded} renomeados, {skipped} ignorados, {failed} com falha.",
+  filenameBatchRenameError: "Falha ao renomear",
+  // Filename template reference (information panel)
+  filenameRefInformationTitle: 'Informações',
+  filenameRefInfoLiquid:
+    'Use a sintaxe Liquid como {{ title }} para aliases de nomenclatura do Videleum e campos de metadados yt-dlp de uma palavra.',
+  filenameRefInfoYtdlp:
+    'Use a sintaxe yt-dlp como %(upload_date>%Y-%m-%d)s ou %(subtitles.en.-1.ext)s para datas formatadas, durações e caminhos de metadados brutos aninhados.',
+  filenameRefInfoExtension:
+    'O segmento final do nome do arquivo deve terminar com .{{ ext }}, .%(ext)s ou .%(ext)S.',
+  filenameRefInfoFallbacks:
+    'source_collection_name/id pode estar vazio para downloads de vídeo único, e media_playlist_index reverte para 00 fora de fontes de lista de reprodução.',
+  filenameRefSectionCoreTitle: 'Campos principais',
+  filenameRefSectionUploadTitle: 'Espaço de nomes upload_*',
+  filenameRefSectionSourceTitle: 'Espaço de nomes source_*',
+  filenameRefSectionPlaylistTitle: 'Espaço de nomes de lista de reprodução',
+  filenameRefSectionSeasonTitle: 'Aliases season_*',
+  filenameRefSectionStaticTitle: 'Aliases static_*',
+  filenameRefSectionRawMetadataTitle: 'Metadados brutos do yt-dlp',
+  filenameRefSectionRawMetadataDescription: 'Esses padrões expõem metadados do yt-dlp além dos aliases integrados.',
+  filenameRefItemTitleDesc: 'Título do vídeo.',
+  filenameRefItemIdDesc: "Alias do ID estavel do video na plataforma de origem.",
+  filenameRefItemSourceVideoIdDesc: "ID estavel do video na plataforma de origem.",
+  filenameRefItemLocalVideoIdDesc: "ID de linha local do Videleum na biblioteca.",
+  filenameRefItemDownloadDatetimeDesc: "Instante do download em UTC no formato YYYY-MM-DD_HH-MM-SS.",
+  filenameRefItemExtDesc: 'Extensão de arquivo final sem o ponto.',
+  filenameRefItemUploaderDesc: 'Nome do carregador ou autor.',
+  filenameRefItemChannelDesc: 'Nome do canal, com fallback para o carregador.',
+  filenameRefItemDurationStringDesc: 'Duração no formato HH-MM-SS ou MM-SS.',
+  filenameRefItemArtistNameDesc: 'Cadeia de fallback estilo artista para nomenclatura de centro de mídia.',
+  filenameRefItemUploadDateDesc: 'Data de upload no formato AAAAMMDD.',
+  filenameRefItemUploadYyyyMmDdDesc: 'Data de upload no formato AAAA-MM-DD.',
+  filenameRefItemUploadYearDesc: 'Ano de upload.',
+  filenameRefItemUploadMonthDesc: 'Mês de upload.',
+  filenameRefItemUploadDayDesc: 'Dia do mês de upload.',
+  filenameRefItemSourceCustomNameDesc:
+    'Nome de fonte ou assinatura definido pelo usuário. Downloads diretos revertem para o carregador ou canal quando não há valor personalizado.',
+  filenameRefItemSourceCollectionNameDesc: 'Nome do canal, lista de reprodução ou coleção quando disponível.',
+  filenameRefItemSourceCollectionIdDesc: 'ID do canal, lista de reprodução ou coleção quando disponível.',
+  filenameRefItemSourceCollectionTypeDesc: 'Um de: channel, playlist, single ou unknown.',
+  filenameRefItemMediaPlaylistIndexDesc: 'Índice de lista de reprodução preenchido com dois dígitos.',
+  filenameRefItemSeasonFromDateDesc: 'Ano de upload.',
+  filenameRefItemSeasonEpisodeFromDateDesc: 'Chave de episódio baseada em data.',
+  filenameRefItemSeasonEpisodeIndexFromDateDesc: 'Chave de episódio baseada em data com sufixo de índice diário de dois dígitos.',
+  filenameRefItemSeasonByYearEpisodeByDateDesc: 'Pasta de temporada mais chave de episódio baseada em data.',
+  filenameRefItemSeasonByYearEpisodeByDateAndIndexDesc:
+    'Pasta de temporada mais chave de episódio baseada em data com sufixo de índice diário.',
+  filenameRefItemStaticSeasonEpisodeByIndexDesc:
+    'Pasta Temporada 1 mais número de episódio de dois dígitos segundo a ordem da lista de reprodução.',
+  filenameRefItemStaticSeasonEpisodeByDateDesc: 'Pasta Temporada 1 mais chave de episódio baseada em data.',
+  filenameRefItemGenericSingleWordDesc:
+    'Qualquer campo de metadados yt-dlp de uma palavra pode ser referenciado com sintaxe Liquid quando existir nos metadados brutos.',
+  filenameRefItemBasicYtdlpDesc:
+    'A sintaxe de espaço reservado yt-dlp é suportada para title, id, channel, uploader, upload_date e ext.',
+  filenameRefItemFormattedUploadDateDesc: 'Formata upload_date com a formatação de data do yt-dlp.',
+  filenameRefItemFormattedDurationDesc: 'Formata a duração com a formatação de tempo do yt-dlp.',
+  filenameRefItemNestedPathDesc:
+    'Lê caminhos de metadados brutos aninhados, incluindo índices de array, através da sintaxe de espaço reservado yt-dlp.',
+
+  // Statistics
+  statisticsTitle: "Estatísticas",
+  statisticsSection: "Estatísticas",
+  statisticsHelper: "As estatísticas são armazenadas apenas localmente no Videleum.",
+  statisticsEnableLabel: "Ativar coleta de estatísticas",
+  statisticsRetentionLabel: "Manter dados detalhados de eventos",
+  statisticsRetention90: "90 dias",
+  statisticsRetention365: "365 dias",
+  statisticsRetentionForever: "Para sempre",
+  statisticsCaptureSearchTextLabel:
+    "Incluir texto bruto de busca nos relatórios",
+  statisticsTrackVisitorLabel: "Rastrear uso de visitantes",
+  statisticsKeepDataLabel: "Manter dados ao desativar a coleta",
+  statisticsClear: "Limpar estatísticas coletadas",
+  statisticsClearConfirm: "Limpar todos os dados de estatísticas coletados?",
+  statisticsClearSuccess: "Dados de estatísticas limpos.",
+  statisticsAdminOnly: "Estatísticas são apenas para administradores.",
+  statisticsDisabledNotice:
+    "A coleta de estatísticas está desativada. Ative em Configurações → Avançado → Estatísticas.",
+  statisticsDisabledKeepVisibleNotice:
+    "A coleta de estatísticas está desativada. Os relatórios existentes permanecem disponíveis até você limpá-los.",
+  statisticsDisabledOpenSettings: "Alterar em Configurações",
+  statisticsHealth: "Saúde das estatísticas",
+  statisticsLastRunAt: "Última execução {date}",
+  statisticsWorkerNotRunYet: "O processo ainda não foi executado",
+  statisticsDirtyDays: "Dias pendentes de recálculo: {count}",
+  statisticsSealedDays: "Dias selados: {count}",
+  statisticsLastHourAccepted: "Aceitos na última hora: {count}",
+  statisticsDropped: "Descartados: {count}",
+  statisticsErrors: "Erros: {count}",
+  statisticsSealedDayDrops: "Descartes em dias selados: {count}",
+  statisticsCompletedCount: "{count} concluídos",
+  statisticsFailedCount: "{count} com falha",
+  statisticsNotEnoughHistoricalDataYet:
+    "Ainda não há dados históricos suficientes",
+  statisticsNoData: "Sem dados",
+  statisticsItem: "Elemento",
+  statisticsValue: "Valor",
+  statisticsDaysRemaining: "{count} dias",
+  statisticsDiskRunwayUnavailable: "Indisponível para este modo de armazenamento",
+  statisticsDiskRunwayInsufficientActivity: "Atividade recente insuficiente",
+  statisticsFailureBucket_auth_required: "Autenticação necessária",
+  statisticsFailureBucket_source_unavailable: "Fonte indisponível",
+  statisticsFailureBucket_geo_or_network_blocked: "Bloqueio geográfico ou de rede",
+  statisticsFailureBucket_extractor_changed: "Extrator alterado",
+  statisticsFailureBucket_filesystem_error: "Erro no sistema de arquivos",
+  statisticsFailureBucket_cloud_upload_failed: "Falha no upload para a nuvem",
+  statisticsFailureBucket_unknown: "Desconhecido",
+  totalVideos: "Total de vídeos",
+  totalStorage: "Armazenamento total",
+  downloadSuccessRate: "Taxa de sucesso dos downloads",
+  netNewVideos: "Vídeos líquidos adicionados",
+  downloadVolume: "Volume de downloads",
+  watchTime: "Tempo de reprodução",
+  diskRunway: "Autonomia de disco",
+  activeSubscriptions: "Assinaturas ativas",
+  activeRssTokens: "Tokens RSS ativos",
+  watchTimeByDay: "Tempo de reprodução por dia",
+  completedVsFailedByDay: "Downloads concluídos vs. com falha",
+  libraryAdditionsByDay: "Adições à biblioteca por dia",
+  topWatchedVideos: "Vídeos mais assistidos",
+  mostProductiveSubscriptions: "Assinaturas mais produtivas",
+  mostAccessedRssFeeds: "Feeds RSS mais acessados",
+  mostCommonFailures: "Categorias de falha mais comuns",
+  largestNeverWatched: "Maiores itens nunca assistidos",
+  last7Days: "Últimos 7 dias",
+  last30Days: "Últimos 30 dias",
+  last90Days: "Últimos 90 dias",
+  last365Days: "Últimos 365 dias",
+  exportCsv: "Exportar CSV",
+  exportJson: "Exportar JSON",
+  recomputeStatistics: "Recalcular",
+  favorite: "Favorito",
+  favoritesEmptyTitle: "Nenhum favorito ainda",
+  favoritesEmptySubtitle: "Marque coleções e autores com estrela para fixá-los aqui.",
+  favoriteCollection: "Favoritar coleção",
+  favoriteAuthor: "Favoritar autor",
+  unfavorite: "Remover dos favoritos",
+  favoriteCollections: "Coleções favoritas",
+  favoriteAuthors: "Autores favoritos",
+  topRated: "Mais bem avaliados",
+  topRatedSubtitle: "Vídeos mais bem avaliados da biblioteca",
+  featured: "Destaque",
+  continueWatching: "Continuar assistindo",
+  browseCollections: "Explorar coleções",
+  findAuthors: "Encontrar autores",
+  favoritesUpdateFailed: "Não foi possível atualizar os favoritos",
+  favoriteUnavailable: "Indisponível",
+  favoritesLoadFailed: "Não foi possível carregar alguns favoritos",
+  stars: "estrelas",
+  play: "Reproduzir",
+  openCollection: "Abrir coleção",
+
+  // Gesture Login (admin only)
+  or: "OU",
+  gestureLogin: "Login por gesto",
+  gestureLoginHelper: "Desenhe um padrão 3x3 para entrar como administrador. O login por senha continua disponível como recuperação após três gestos incorretos.",
+  gestureLoginConvenienceWarning: "Um gesto é uma conveniência, não um substituto da sua senha. Use HTTPS sempre que possível.",
+  gestureLoginPasswordRequired: "Ative e salve primeiro o login por senha.",
+  gestureLoginSavePrerequisitesFirst: "Salve as configurações de login e senha antes de ativar o login por gesto.",
+  gestureLoginDisablePasswordBlocked: "Desative o login por gesto antes de desabilitar o login por senha.",
+  gestureLoginSetUpTitle: "Configurar login por gesto",
+  gestureLoginChange: "Alterar gesto",
+  gestureLoginChangeTitle: "Alterar gesto",
+  gestureLoginSetNew: "Definir novo gesto",
+  gestureLoginRemoveTitle: "Desativar login por gesto",
+  gestureLoginRemoveMessage: "Isto exclui o gesto salvo imediatamente. Esta ação não pode ser desfeita.",
+  gestureLoginRemoveFailed: "Não foi possível remover o login por gesto. Tente novamente.",
+  gestureLoginStep: "Etapa {current} de {total}",
+  gestureLoginDrawInstruction: "Desenhe um gesto conectando pelo menos 3 pontos.",
+  gestureLoginConfirmInstruction: "Desenhe o mesmo gesto novamente para confirmar.",
+  gestureLoginReleaseInstruction: "Pressione e arraste para desenhar. Solte para confirmar esta etapa.",
+  gestureLoginSignInInstruction: "Pressione e arraste para desenhar; solte para entrar.",
+  gestureLoginStepTwoAnnouncement: "Desenhe o mesmo gesto novamente para confirmar.",
+  gestureLoginMinimumDots: "Desenhe um gesto conectando pelo menos 3 pontos.",
+  gestureLoginMismatch: "Os gestos não coincidem. Comece de novo.",
+  gestureLoginSaveFailed: "Não foi possível salvar o login por gesto. Tente novamente.",
+  gestureLoginLockedSettings: "Bloqueado temporariamente. Saia e faça um login com a senha de administrador para restaurá-lo.",
+  gestureLoginLockedPasswordRecovery: "O login por gesto está bloqueado após 3 tentativas incorretas. Entre uma vez com sua senha de administrador para restaurá-lo.",
+  gestureLoginIncorrectAttemptsRemaining: "Gesto incorreto. Restam {count} tentativas.",
+  gestureLoginStateUnavailable: "Não foi possível verificar o estado do login por gesto, portanto o login por senha não pode ser desativado agora.",
+  gestureLoginUnavailable: "O login por gesto não está disponível.",
+  gestureLoginResetRequired: "Seu gesto salvo não pode mais ser verificado neste servidor. Defina um novo.",
+  gestureLoginStatusFailed: "Não foi possível carregar o status do login por gesto.",
+  gestureLoginRetryStatus: "Tentar novamente",
+};

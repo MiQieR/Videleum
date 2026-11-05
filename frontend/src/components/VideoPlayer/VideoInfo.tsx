@@ -1,0 +1,168 @@
+import { Alert, Box, Divider, Stack } from '@mui/material';
+import React, { useEffect } from 'react';
+import { useCloudStorageUrl } from '../../hooks/useCloudStorageUrl';
+import { useVideoResolution } from '../../hooks/useVideoResolution';
+import { Collection, Video } from '../../types';
+import EditableTitle from './VideoInfo/EditableTitle';
+import VideoActionButtons from './VideoInfo/VideoActionButtons';
+import VideoAuthorInfo from './VideoInfo/VideoAuthorInfo';
+import VideoDescription from './VideoInfo/VideoDescription';
+import VideoMetadata from './VideoInfo/VideoMetadata';
+import VideoRating from './VideoInfo/VideoRating';
+import VideoTags from './VideoInfo/VideoTags';
+
+interface VideoInfoProps {
+    video: Video;
+    onTitleSave: (newTitle: string) => Promise<void>;
+    onRatingChange: (newRating: number) => Promise<void>;
+    onAuthorClick: () => void;
+    onAvatarClick?: () => void;
+    onAddToCollection: () => void;
+    onDelete: () => void;
+    isDeleting: boolean;
+    isSavingTitle?: boolean;
+    isTogglingVisibility?: boolean;
+    isTogglingLock?: boolean;
+    deleteError: string | null;
+    videoCollections: Collection[];
+    onCollectionClick: (id: string) => void;
+    availableTags: string[];
+    onTagsUpdate: (tags: string[]) => Promise<void>;
+    isSubscribed?: boolean;
+    onSubscribe?: () => void;
+    onUnsubscribe?: () => void;
+    onToggleVisibility?: () => void;
+    onToggleLock?: () => void;
+    onSeek?: (seconds: number) => void;
+}
+
+const VideoInfo: React.FC<VideoInfoProps> = ({
+    video,
+    onTitleSave,
+    onRatingChange,
+    onAuthorClick,
+    onAvatarClick,
+    onAddToCollection,
+    onDelete,
+    isDeleting,
+    isSavingTitle = false,
+    isTogglingVisibility = false,
+    isTogglingLock = false,
+    deleteError,
+    videoCollections,
+    onCollectionClick,
+    availableTags,
+    onTagsUpdate,
+    isSubscribed,
+    onSubscribe,
+    onUnsubscribe,
+    onToggleVisibility,
+    onToggleLock,
+    onSeek
+}) => {
+    const { videoRef, videoResolution, needsDetection } = useVideoResolution(video);
+    const videoUrl = useCloudStorageUrl(
+        video.videoPath,
+        video.mediaType === 'audio' ? 'audio' : 'video',
+    );
+
+    // Cleanup video element on unmount or when video changes
+    useEffect(() => {
+        const videoElement = videoRef.current;
+        return () => {
+            if (videoElement) {
+                // Pause and clear video source to free memory
+                videoElement.pause();
+                videoElement.src = '';
+                videoElement.load();
+            }
+        };
+    }, [video.id, videoRef]); // Clean up when video ID changes
+
+    return (
+        <Box sx={{ mt: 2 }}>
+            {/* Hidden video element to get resolution - only create if needed */}
+            {needsDetection && (videoUrl || video.sourceUrl) && (
+                <video
+                    ref={videoRef}
+                    style={{
+                        position: 'absolute',
+                        width: '1px',
+                        height: '1px',
+                        opacity: 0,
+                        pointerEvents: 'none',
+                        zIndex: -1
+                    }}
+                    preload="metadata"
+                    muted
+                    crossOrigin="anonymous"
+                />
+            )}
+
+            <EditableTitle title={video.title} onSave={onTitleSave} isSaving={isSavingTitle} />
+
+            <VideoRating
+                rating={video.rating}
+                viewCount={video.viewCount}
+                onRatingChange={onRatingChange}
+            />
+
+            <VideoTags
+                videoId={video.id}
+                tags={video.tags}
+                availableTags={availableTags}
+                onTagsUpdate={onTagsUpdate}
+            />
+
+            <Stack
+                direction="row"
+                justifyContent="space-between"
+                alignItems="center"
+                spacing={2}
+                sx={{ mb: 2 }}
+            >
+                <VideoAuthorInfo
+                    author={video.author}
+                    date={video.date}
+                    onAuthorClick={onAuthorClick}
+                    onAvatarClick={onAvatarClick}
+                    source={video.source}
+                    isSubscribed={isSubscribed}
+                    onSubscribe={onSubscribe}
+                    onUnsubscribe={onUnsubscribe}
+                    authorAvatarPath={video.authorAvatarPath}
+                />
+
+                <VideoActionButtons
+                    video={video}
+                    onAddToCollection={onAddToCollection}
+                    onDelete={onDelete}
+                    isDeleting={isDeleting}
+                    isTogglingVisibility={isTogglingVisibility}
+                    onToggleVisibility={onToggleVisibility}
+                    isTogglingLock={isTogglingLock}
+                    onToggleLock={onToggleLock}
+                />
+            </Stack>
+
+            {deleteError && (
+                <Alert severity="error" sx={{ mb: 2 }}>
+                    {deleteError}
+                </Alert>
+            )}
+
+            <VideoDescription description={video.description} duration={video.duration} onSeek={onSeek} />
+
+            <Divider sx={{ my: 2 }} />
+
+            <VideoMetadata
+                video={video}
+                videoCollections={videoCollections}
+                onCollectionClick={onCollectionClick}
+                videoResolution={videoResolution}
+            />
+        </Box>
+    );
+};
+
+export default VideoInfo;

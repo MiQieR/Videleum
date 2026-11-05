@@ -1,0 +1,322 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { db } from '../../../db';
+import { continuousDownloadTasks } from '../../../db/schema';
+import { TaskRepository } from '../../../services/continuousDownload/taskRepository';
+import { ContinuousDownloadTask } from '../../../services/continuousDownload/types';
+
+// Mock DB
+vi.mock('../../../db', () => ({
+  db: {
+    select: vi.fn(),
+    insert: vi.fn(),
+    delete: vi.fn(),
+    update: vi.fn(),
+  }
+}));
+
+vi.mock('../../../db/schema', () => ({
+  continuousDownloadTasks: {
+    id: 'id',
+    authorUrl: 'authorUrl',
+    subscriptionId: 'subscriptionId',
+    collectionId: 'collectionId',
+    status: 'status',
+    createdAt: 'createdAt',
+    // ... other fields for referencing
+  },
+  collections: {
+    id: 'id',
+    name: 'name'
+  },
+  subscriptions: {
+    id: 'sub.id',
+    collectionId: 'sub.collectionId',
+    authorUrl: 'sub.authorUrl'
+  }
+}));
+
+vi.mock('../../../utils/logger', () => ({
+  logger: {
+    info: vi.fn(),
+    error: vi.fn(),
+  }
+}));
+
+describe('TaskRepository', () => {
+  let taskRepository: TaskRepository;
+  let mockBuilder: any;
+
+  // Chainable builder mock
+  const createMockQueryBuilder = (result: any) => {
+    const builder: any = {
+      from: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      values: vi.fn().mockReturnThis(),
+      set: vi.fn().mockReturnThis(),
+      leftJoin: vi.fn().mockReturnThis(),
+      orderBy: vi.fn().mockReturnThis(),
+      then: (resolve: any) => Promise.resolve(result).then(resolve)
+    };
+    return builder;
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    taskRepository = new TaskRepository();
+    
+    // Default empty result
+    mockBuilder = createMockQueryBuilder([]);
+    
+    (db.select as any).mockReturnValue(mockBuilder);
+    (db.insert as any).mockReturnValue(mockBuilder);
+    (db.delete as any).mockReturnValue(mockBuilder);
+    (db.update as any).mockReturnValue(mockBuilder);
+  });
+
+  it('createTask should insert task', async () => {
+    const task: ContinuousDownloadTask = { 
+        id: 'task-1', 
+        author: 'Author', 
+        authorUrl: 'url',
+        platform: 'YouTube',
+        status: 'active',
+        createdAt: 0,
+        currentVideoIndex: 0,
+        totalVideos: 0,
+        downloadedCount: 0,
+        skippedCount: 0,
+        failedCount: 0
+    };
+    
+    await taskRepository.createTask(task);
+    
+    expect(db.insert).toHaveBeenCalledWith(continuousDownloadTasks);
+    expect(mockBuilder.values).toHaveBeenCalled();
+  });
+
+  it('getAllTasks should select tasks with playlist names', async () => {
+    const mockData = [
+        { 
+            task: { id: '1', status: 'active', author: 'A' }, 
+            playlistName: 'My Playlist' 
+        }
+    ];
+    mockBuilder.then = (cb: any) => Promise.resolve(mockData).then(cb);
+    
+    const tasks = await taskRepository.getAllTasks();
+    
+    expect(db.select).toHaveBeenCalled();
+    expect(mockBuilder.from).toHaveBeenCalledWith(continuousDownloadTasks);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].id).toBe('1');
+    expect(tasks[0].playlistName).toBe('My Playlist');
+  });
+
+  it('getTaskById should return task if found', async () => {
+    const mockData = [
+        { 
+            task: {
+              id: '1',
+              status: 'active',
+              author: 'A',
+              downloadOrder: 'viewsDesc',
+              frozenVideoListPath: '/tmp/frozen/1.json',
+            }, 
+            playlistName: 'My Playlist' 
+        }
+    ];
+    mockBuilder.then = (cb: any) => Promise.resolve(mockData).then(cb);
+
+    const task = await taskRepository.getTaskById('1');
+    
+    expect(db.select).toHaveBeenCalled();
+    expect(mockBuilder.where).toHaveBeenCalled();
+    expect(task).toBeDefined();
+    expect(task?.id).toBe('1');
+    expect(task?.downloadOrder).toBe('viewsDesc');
+    expect(task?.frozenVideoListPath).toBe('/tmp/frozen/1.json');
+  });
+
+  it('getTaskById should return null if not found', async () => {
+    mockBuilder.then = (cb: any) => Promise.resolve([]).then(cb);
+    
+    const task = await taskRepository.getTaskById('non-existent');
+    
+    expect(task).toBeNull();
+  });
+
+  it('getTaskStatus should return status when task exists', async () => {
+    mockBuilder.then = (cb: any) =>
+      Promise.resolve([{ status: 'paused' }]).then(cb);
+
+    const status = await taskRepository.getTaskStatus('1');
+
+    expect(status).toBe('paused');
+  });
+
+  it('getTaskStatus should return null when task not found', async () => {
+    mockBuilder.then = (cb: any) => Promise.resolve([]).then(cb);
+
+    const status = await taskRepository.getTaskStatus('missing');
+
+    expect(status).toBeNull();
+  });
+
+  it('getBlockingPlaylistTaskByDestination should return matching active task', async () => {
+    const mockData = [
+      {
+        task: {
+          id: 'active-task',
+          status: 'active',
+          author: 'A',
+          authorUrl: 'https://youtube.com/playlist?list=PL123',
+          subscriptionId: 'sub-1',
+          collectionId: 'col-1',
+          createdAt: 10,
+        },
+        playlistName: 'Playlist',
+      },
+    ];
+    mockBuilder.then = (cb: any) => Promise.resolve(mockData).then(cb);
+
+    const task = await taskRepository.getBlockingPlaylistTaskByDestination(
+      'https://youtube.com/playlist?list=PL123',
+      'sub-1',
+      'col-1'
+    );
+
+    expect(db.select).toHaveBeenCalled();
+    expect(mockBuilder.where).toHaveBeenCalled();
+    expect(mockBuilder.orderBy).toHaveBeenCalled();
+    expect(task).toEqual(
+      expect.objectContaining({
+        id: 'active-task',
+        status: 'active',
+        subscriptionId: 'sub-1',
+        collectionId: 'col-1',
+        playlistName: 'Playlist',
+      })
+    );
+  });
+
+  it('updateProgress should update stats', async () => {
+    await taskRepository.updateProgress('1', { downloadedCount: 5 });
+    
+    expect(db.update).toHaveBeenCalledWith(continuousDownloadTasks);
+    expect(mockBuilder.set).toHaveBeenCalledWith(expect.objectContaining({
+        downloadedCount: 5
+    }));
+    expect(mockBuilder.where).toHaveBeenCalled();
+  });
+
+  it('completeTask should set status to completed', async () => {
+    await taskRepository.completeTask('1');
+    
+    expect(db.update).toHaveBeenCalledWith(continuousDownloadTasks);
+    expect(mockBuilder.set).toHaveBeenCalledWith(expect.objectContaining({
+        status: 'completed'
+    }));
+  });
+
+  it('deleteTask should delete task', async () => {
+    await taskRepository.deleteTask('1');
+    
+    expect(db.delete).toHaveBeenCalledWith(continuousDownloadTasks);
+    expect(mockBuilder.where).toHaveBeenCalled();
+  });
+
+  it('updateFrozenVideoListPath should persist path and updatedAt', async () => {
+    await taskRepository.updateFrozenVideoListPath('1', '/tmp/frozen/1.json');
+
+    expect(db.update).toHaveBeenCalledWith(continuousDownloadTasks);
+    expect(mockBuilder.set).toHaveBeenCalledWith(
+      expect.objectContaining({
+        frozenVideoListPath: '/tmp/frozen/1.json',
+      })
+    );
+    expect(mockBuilder.where).toHaveBeenCalled();
+  });
+
+  describe('getSubscriptionForTask', () => {
+    const subRow = { id: 'sub-1', author: 'Test Author', subscriptionType: 'author' };
+
+    it('resolves channel tasks by subscriptionId when there is no collection (Shorts bulk task)', async () => {
+      // The Shorts bulk task appends "/shorts" to the channel URL, so the
+      // authorUrl lookup can never match; the subscriptionId lookup must win.
+      const bySubscriptionId = createMockQueryBuilder([subRow]);
+      (db.select as any).mockReturnValueOnce(bySubscriptionId);
+
+      const result = await taskRepository.getSubscriptionForTask({
+        collectionId: undefined,
+        subscriptionId: 'sub-1',
+        authorUrl: 'https://youtube.com/channel/test/shorts',
+      });
+
+      expect(result).toEqual(subRow);
+      expect(db.select).toHaveBeenCalledTimes(1);
+    });
+
+    it('resolves playlist tasks by authorUrl before consulting a shared collection', async () => {
+      // Playlist backfill tasks carry only a collectionId, which two playlist
+      // subscriptions can share. Matching the task URL first avoids applying the
+      // wrong subscription's yt-dlp override, so the collection is never queried
+      // when the authorUrl uniquely identifies the subscription (issue #345).
+      const byAuthorUrl = createMockQueryBuilder([subRow]);
+      (db.select as any).mockReturnValueOnce(byAuthorUrl);
+
+      const result = await taskRepository.getSubscriptionForTask({
+        collectionId: 'shared-col',
+        subscriptionId: undefined,
+        authorUrl: 'https://youtube.com/playlist?list=PL123',
+      });
+
+      expect(result).toEqual(subRow);
+      expect(db.select).toHaveBeenCalledTimes(1);
+    });
+
+    it('falls back to collectionId only when subscription and authorUrl lookups miss', async () => {
+      const bySubscriptionId = createMockQueryBuilder([]);
+      const byAuthorUrl = createMockQueryBuilder([]);
+      const byCollection = createMockQueryBuilder([subRow]);
+      (db.select as any)
+        .mockReturnValueOnce(bySubscriptionId)
+        .mockReturnValueOnce(byAuthorUrl)
+        .mockReturnValueOnce(byCollection);
+
+      const result = await taskRepository.getSubscriptionForTask({
+        collectionId: 'col-1',
+        subscriptionId: 'sub-gone',
+        authorUrl: 'https://youtube.com/channel/test',
+      });
+
+      expect(result).toEqual(subRow);
+      expect(db.select).toHaveBeenCalledTimes(3);
+    });
+
+    it('returns null when no subscription matches', async () => {
+      const byAuthorUrl = createMockQueryBuilder([]);
+      (db.select as any).mockReturnValueOnce(byAuthorUrl);
+
+      const result = await taskRepository.getSubscriptionForTask({
+        collectionId: undefined,
+        subscriptionId: undefined,
+        authorUrl: 'https://youtube.com/channel/orphan',
+      });
+
+      expect(result).toBeNull();
+    });
+  });
+
+  it('clearFrozenVideoListPath should set path to null and update updatedAt', async () => {
+    await taskRepository.clearFrozenVideoListPath('1');
+
+    expect(db.update).toHaveBeenCalledWith(continuousDownloadTasks);
+    expect(mockBuilder.set).toHaveBeenCalledWith(
+      expect.objectContaining({
+        frozenVideoListPath: null,
+      })
+    );
+    expect(mockBuilder.where).toHaveBeenCalled();
+  });
+});

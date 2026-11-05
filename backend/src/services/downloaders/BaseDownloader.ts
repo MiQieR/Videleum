@@ -1,0 +1,196 @@
+import axios from "axios";
+import path from "path";
+import { AVATARS_DIR, IMAGES_DIR, VIDEOS_DIR } from "../../config/paths";
+import { DownloadCancelledError } from "../../errors/DownloadErrors";
+import { regenerateSmallThumbnailForThumbnailPath } from "../thumbnailMirrorService";
+import {
+  isCancellationError,
+  isDownloadActive,
+} from "../../utils/downloadUtils";
+import { formatVideoFilename } from "../../utils/helpers";
+import { logger } from "../../utils/logger";
+import {
+  createWriteStreamSafe,
+  ensureDirSafeSync,
+  isPathWithinDirectories,
+  resolveSafePathInDirectories,
+  validateUrl,
+} from "../../utils/security";
+import { Video } from "../storageService";
+import type { AudioFormat } from "../../types/settings";
+
+export interface VideoInfo {
+  title: string;
+  author: string;
+  date: string;
+  thumbnailUrl: string | null;
+  description?: string;
+  duration?: string;
+}
+
+export interface DownloadModeOptions {
+  downloadId?: string;
+  onStart?: (cancel: () => void) => void;
+  filenameTemplateSourceOptions?: import("../filenameTemplate/types").FilenameTemplateSourceOptions;
+  audioOnly?: boolean;
+  audioFormat?: AudioFormat;
+  existingLocalVideoId?: string;
+  // Per-subscription yt-dlp config override (issue #345). Raw free-text snippet
+  // from subscriptions.ytdlp_config; null/undefined = use the global config.
+  subscriptionYtdlpConfig?: string | null;
+  // Validated template from subscriptions.filename_template (issue #368).
+  // null/undefined = use the global filename naming settings.
+  subscriptionFilenameTemplate?: string | null;
+}
+
+export interface DownloadOptions extends DownloadModeOptions {
+  // Generic key-value store for specific downloader options
+  [key: string]: any;
+}
+
+export interface IDownloader {
+  getVideoInfo(url: string): Promise<VideoInfo>;
+  downloadVideo(url: string, options?: DownloadOptions): Promise<Video>;
+  search?(query: string, limit?: number, offset?: number): Promise<any[]>;
+  getLatestVideoUrl?(url: string): Promise<string | null>;
+}
+
+export abstract class BaseDownloader implements IDownloader {
+  abstract getVideoInfo(url: string): Promise<VideoInfo>;
+
+  abstract downloadVideo(
+    url: string,
+    options?: DownloadOptions
+  ): Promise<Video>;
+
+  // Default timeout for thumbnail downloads (60 seconds)
+  protected static readonly THUMBNAIL_DOWNLOAD_TIMEOUT = 60000;
+
+  private validateThumbnailRedirect(options: Record<string, unknown>): void {
+    const protocol = typeof options.protocol === "string" ? options.protocol : "";
+    const hostname = typeof options.hostname === "string" ? options.hostname : "";
+    const pathValue = typeof options.path === "string" ? options.path : "/";
+
+    validateUrl(`${protocol}//${hostname}${pathValue}`);
+  }
+
+  /**
+   * Common helper to download a thumbnail
+   */
+  protected async downloadThumbnail(
+    thumbnailUrl: string,
+    savePath: string,
+    axiosConfig: any = {}
+  ): Promise<boolean> {
+    try {
+      const validatedThumbnailUrl = validateUrl(thumbnailUrl);
+      const safeSavePath = resolveSafePathInDirectories(savePath, [
+        VIDEOS_DIR,
+        IMAGES_DIR,
+        AVATARS_DIR,
+      ]);
+      logger.info("Downloading thumbnail from:", thumbnailUrl);
+      if (axiosConfig.proxy || axiosConfig.httpAgent) {
+        logger.debug("Using proxy for thumbnail download");
+      }
+
+      // Ensure directory exists
+      ensureDirSafeSync(path.dirname(safeSavePath), [
+        VIDEOS_DIR,
+        IMAGES_DIR,
+        AVATARS_DIR,
+      ]);
+
+      const allowedThumbnailUrls = new Set([validatedThumbnailUrl]);
+      if (allowedThumbnailUrls.has(validatedThumbnailUrl)) {
+        const response = await axios.get(validatedThumbnailUrl, {
+          ...axiosConfig,
+          responseType: "stream",
+          timeout: BaseDownloader.THUMBNAIL_DOWNLOAD_TIMEOUT,
+          beforeRedirect: this.validateThumbnailRedirect,
+        });
+
+        const writer = createWriteStreamSafe(safeSavePath, [
+          VIDEOS_DIR,
+          IMAGES_DIR,
+          AVATARS_DIR,
+        ]);
+        response.data.pipe(writer);
+
+        return new Promise<boolean>((resolve, reject) => {
+          writer.on("finish", async () => {
+            logger.info("Thumbnail saved to:", safeSavePath);
+
+            if (
+              isPathWithinDirectories(safeSavePath, [IMAGES_DIR, VIDEOS_DIR])
+            ) {
+              try {
+                await regenerateSmallThumbnailForThumbnailPath(safeSavePath);
+              } catch (error) {
+                logger.warn(
+                  "Failed to regenerate small thumbnail mirror after download:",
+                  error,
+                );
+              }
+            }
+
+            resolve(true);
+          });
+          writer.on("error", (err) => {
+            logger.error("Error writing thumbnail file:", err);
+            reject(err);
+          });
+        });
+      }
+
+      throw new Error("Thumbnail URL is not allowed.");
+    } catch (error) {
+      logger.error("Error downloading thumbnail:", error);
+      return false;
+    }
+  }
+
+  /**
+   * Helper to format filename using the standard utility
+   */
+  protected getSafeFilename(
+    title: string,
+    author: string,
+    date: string
+  ): string {
+    return formatVideoFilename(title, author, date);
+  }
+
+  /**
+   * Check if download was cancelled and throw if so
+   * Common cancellation check used across all downloaders
+   * @param downloadId - The download ID to check
+   * @throws DownloadCancelledError if download was cancelled
+   */
+  protected throwIfCancelled(downloadId?: string): void {
+    if (!isDownloadActive(downloadId)) {
+      logger.info("Download was cancelled (no longer in active downloads)");
+      throw DownloadCancelledError.create();
+    }
+  }
+
+  /**
+   * Handle cancellation errors consistently
+   * Checks if error is a cancellation error and throws DownloadCancelledError
+   * @param error - The error to check
+   * @param cleanupFn - Optional cleanup function to call before throwing
+   * @throws DownloadCancelledError if error is a cancellation error
+   */
+  protected async handleCancellationError(
+    error: unknown,
+    cleanupFn?: () => void | Promise<void>
+  ): Promise<void> {
+    if (isCancellationError(error)) {
+      logger.info("Download was cancelled");
+      if (cleanupFn) {
+        await cleanupFn();
+      }
+      throw DownloadCancelledError.create();
+    }
+  }
+}

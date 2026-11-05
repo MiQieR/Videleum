@@ -1,0 +1,72 @@
+import crypto from "crypto";
+import { NotFoundError } from "../errors/DownloadErrors";
+import { executeYtDlpJson } from "../utils/ytDlpUtils";
+import * as storageService from "./storageService";
+import { logger } from "../utils/logger";
+
+export interface Comment {
+  id: string;
+  author: string;
+  content: string;
+  date: string;
+  avatar?: string;
+}
+
+function resolveCommentId(comment: Record<string, unknown>): string {
+  if (typeof comment.id === "string" && comment.id.trim()) {
+    return comment.id;
+  }
+  if (typeof comment.comment_id === "string" && comment.comment_id.trim()) {
+    return comment.comment_id;
+  }
+  return crypto.randomUUID();
+}
+
+// Fetch comments for a video
+export const getComments = async (videoId: string): Promise<Comment[]> => {
+  try {
+    const video = storageService.getVideoById(videoId);
+    if (!video) {
+      throw NotFoundError.video(videoId);
+    }
+
+    // Use yt-dlp for both Bilibili and YouTube as it's more reliable
+    return await getCommentsWithYtDlp(video.sourceUrl);
+  } catch (error) {
+    logger.error("Error fetching comments:", error);
+    return [];
+  }
+};
+
+// Fetch comments using yt-dlp (works for YouTube and Bilibili)
+const getCommentsWithYtDlp = async (url: string): Promise<Comment[]> => {
+  try {
+    logger.info(`[CommentService] Fetching comments using yt-dlp for: ${url}`);
+    const info = await executeYtDlpJson(url, {
+      writeComments: true, // Include comments in JSON output
+      noWarnings: true,
+      playlistEnd: 1, // Ensure we only process one video
+      extractorArgs: "youtube:max_comments=20,all_comments=false",
+    });
+
+    if (info.comments) {
+      // Sort by date (newest first) and take top 10
+      // Note: yt-dlp comments structure might vary
+      return info.comments.slice(0, 10).map((comment: any) => ({
+        id: resolveCommentId(comment),
+        author: comment.author?.startsWith("@")
+          ? comment.author.substring(1)
+          : comment.author || "Unknown",
+        content: comment.text || comment.content || "",
+        date: comment.timestamp
+          ? new Date(comment.timestamp * 1000).toISOString().split("T")[0]
+          : comment.time || "Unknown",
+      }));
+    }
+
+    return [];
+  } catch (error) {
+    logger.error("Error fetching comments with yt-dlp:", error);
+    return [];
+  }
+};

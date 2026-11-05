@@ -1,0 +1,260 @@
+/**
+ * Video upload operations (handles video, thumbnail, and metadata uploads)
+ */
+
+import path from "path";
+import { getErrorMessage } from "../../utils/errors";
+import { logger } from "../../utils/logger";
+import { updateVideo } from "../storageService";
+import { clearFileListCache } from "./fileLister";
+import { uploadFile, UploadResult } from "./fileUploader";
+import {
+  normalizeUploadPath,
+  resolveAbsolutePath,
+  sanitizeFilename,
+} from "./pathUtils";
+import { CloudDriveConfig } from "./types";
+import { clearSignedUrlCache } from "./urlSigner";
+import {
+  ensureDirSafeSync,
+  pathExistsTrustedSync,
+  resolveSafeChildPath,
+  unlinkSafeSync,
+  unlinkTrustedSync,
+  writeFileSafeSync,
+} from "../../utils/security";
+
+function stripManagedWebPrefix(
+  mediaPath: string | null | undefined,
+  prefixes: string[]
+): string | null {
+  if (!mediaPath || typeof mediaPath !== "string") {
+    return null;
+  }
+  if (
+    mediaPath.startsWith("mount:") ||
+    mediaPath.startsWith("http://") ||
+    mediaPath.startsWith("https://")
+  ) {
+    return null;
+  }
+
+  const cleanPath = mediaPath
+    .split("?")[0]
+    .replace(/^cloud:/, "")
+    .replace(/\\/g, "/")
+    .replace(/^\/+/, "");
+
+  if (
+    !cleanPath ||
+    cleanPath.includes("\0") ||
+    cleanPath.split("/").some((segment) => segment === "." || segment === "..")
+  ) {
+    return null;
+  }
+
+  for (const prefix of prefixes) {
+    const normalizedPrefix = prefix.replace(/^\/+/, "").replace(/\/+$/, "");
+    if (cleanPath === normalizedPrefix) {
+      return null;
+    }
+    if (cleanPath.startsWith(`${normalizedPrefix}/`)) {
+      return cleanPath.slice(normalizedPrefix.length + 1);
+    }
+  }
+
+  return cleanPath;
+}
+
+function replaceExtension(relativePath: string, extension: string): string {
+  const parsed = path.posix.parse(relativePath.replace(/\\/g, "/"));
+  const basename = parsed.name ? `${parsed.name}${extension}` : `${parsed.base}${extension}`;
+  return parsed.dir ? `${parsed.dir}/${basename}` : basename;
+}
+
+/**
+ * Upload video, thumbnail, and metadata to cloud storage
+ * @param videoData - Video data object
+ * @param config - Cloud drive configuration
+ */
+export async function uploadVideo(
+  videoData: any,
+  config: CloudDriveConfig
+): Promise<void> {
+  logger.info(`[CloudStorage] Starting upload for video: ${videoData.title}`);
+
+  const uploadedFiles: string[] = []; // Track successfully uploaded files for deletion
+  const filesToUpdate: string[] = []; // Track files that should update database (uploaded or skipped)
+  const videoRemotePath =
+    stripManagedWebPrefix(videoData.videoPath, ["videos"]) ??
+    stripManagedWebPrefix(videoData.videoFilename, []);
+  const thumbnailRemotePath =
+    stripManagedWebPrefix(videoData.thumbnailPath, ["images", "videos"]) ??
+    stripManagedWebPrefix(videoData.thumbnailFilename, []);
+  let videoAvailableInCloud = false;
+  let thumbnailAvailableInCloud = false;
+
+  try {
+    // Upload Video File
+    if (videoData.videoPath) {
+      const absoluteVideoPath = resolveAbsolutePath(videoData.videoPath);
+      if (absoluteVideoPath && pathExistsTrustedSync(absoluteVideoPath)) {
+        const uploadResult: UploadResult = await uploadFile(
+          absoluteVideoPath,
+          config,
+          videoRemotePath ?? undefined
+        );
+        if (uploadResult.uploaded) {
+          uploadedFiles.push(absoluteVideoPath);
+        }
+        // Track file for database update whether uploaded or skipped
+        if (uploadResult.uploaded || uploadResult.skipped) {
+          filesToUpdate.push(absoluteVideoPath);
+          videoAvailableInCloud = true;
+        }
+      } else {
+        logger.error(
+          `[CloudStorage] Video file not found: ${videoData.videoPath}`
+        );
+        // Don't throw - continue with other files
+      }
+    }
+
+    // Upload Thumbnail
+    if (videoData.thumbnailPath) {
+      const absoluteThumbPath = resolveAbsolutePath(videoData.thumbnailPath);
+      if (absoluteThumbPath && pathExistsTrustedSync(absoluteThumbPath)) {
+        const uploadResult: UploadResult = await uploadFile(
+          absoluteThumbPath,
+          config,
+          thumbnailRemotePath ?? undefined
+        );
+        if (uploadResult.uploaded) {
+          uploadedFiles.push(absoluteThumbPath);
+        }
+        // Track file for database update whether uploaded or skipped
+        if (uploadResult.uploaded || uploadResult.skipped) {
+          filesToUpdate.push(absoluteThumbPath);
+          thumbnailAvailableInCloud = true;
+        }
+      }
+    }
+
+    // Upload Metadata (JSON). The incomplete-download note belongs to one
+    // attempt's history row, not to the video's persistent metadata.
+    const { incompleteDownloadNote: _incompleteDownloadNote, ...persistedVideo } = videoData;
+    const metadata = {
+      title: videoData.title,
+      description: videoData.description,
+      author: videoData.author,
+      sourceUrl: videoData.sourceUrl,
+      tags: videoData.tags,
+      createdAt: videoData.createdAt,
+      ...persistedVideo,
+    };
+
+    // Keep metadata in the same remote directory and basename as the media.
+    const metadataRemotePath = videoRemotePath
+      ? replaceExtension(videoRemotePath, ".json")
+      : thumbnailRemotePath
+        ? replaceExtension(thumbnailRemotePath, ".json")
+        : `${sanitizeFilename(videoData.title)}.json`;
+    const tempMetadataDir = path.join(process.cwd(), "temp_metadata");
+    const metadataFileName = metadataRemotePath;
+    const metadataPath = resolveSafeChildPath(tempMetadataDir, metadataFileName);
+    ensureDirSafeSync(path.dirname(metadataPath), tempMetadataDir);
+    writeFileSafeSync(
+      metadataPath,
+      tempMetadataDir,
+      JSON.stringify(metadata, null, 2)
+    );
+
+    const metadataUploadResult: UploadResult = await uploadFile(
+      metadataPath,
+      config,
+      metadataRemotePath
+    );
+
+    // Cleanup temp metadata (always delete temp file)
+    unlinkSafeSync(metadataPath, tempMetadataDir);
+
+    logger.info(`[CloudStorage] Upload completed for: ${videoData.title}`);
+
+    // Delete local files after successful upload (only for files that were actually uploaded)
+    if (uploadedFiles.length > 0) {
+      logger.info(
+        `[CloudStorage] Deleting ${uploadedFiles.length} local file(s) after successful upload...`
+      );
+
+      // Track which files were successfully deleted
+      const deletedFiles: string[] = [];
+      for (const filePath of uploadedFiles) {
+        try {
+          if (pathExistsTrustedSync(filePath)) {
+            unlinkTrustedSync(filePath);
+            deletedFiles.push(filePath);
+            logger.info(`[CloudStorage] Deleted local file: ${filePath}`);
+          }
+        } catch (deleteError: unknown) {
+          logger.error(
+            `[CloudStorage] Failed to delete local file ${filePath}:`,
+            deleteError instanceof Error
+              ? deleteError
+              : new Error(getErrorMessage(deleteError))
+          );
+          // Don't throw - continue with other files
+        }
+      }
+      logger.info(`[CloudStorage] Local file cleanup completed`);
+    }
+
+    // Update video record to point to cloud storage (store only filename, not full URL with sign)
+    // Sign will be retrieved dynamically when needed
+    // Update database if files were uploaded OR skipped (already in cloud)
+    if (videoData.id && filesToUpdate.length > 0) {
+      try {
+        const updates: any = {};
+
+        if (videoAvailableInCloud && videoRemotePath) {
+          updates.videoPath = `cloud:${videoRemotePath}`;
+        }
+
+        if (thumbnailAvailableInCloud && thumbnailRemotePath) {
+          updates.thumbnailPath = `cloud:${thumbnailRemotePath}`;
+        }
+
+        if (Object.keys(updates).length > 0) {
+          updateVideo(videoData.id, updates);
+          logger.info(
+            `[CloudStorage] Updated video record ${videoData.id} with cloud storage indicators`
+          );
+
+          // Clear cache for uploaded files to ensure fresh URLs
+          if (videoRemotePath) {
+            clearSignedUrlCache(videoRemotePath, "video");
+          }
+          if (thumbnailRemotePath) {
+            clearSignedUrlCache(thumbnailRemotePath, "thumbnail");
+          }
+          // Also clear file list cache since new files were added
+          const uploadPath = normalizeUploadPath(config.uploadPath);
+          clearFileListCache(uploadPath);
+        }
+      } catch (updateError: unknown) {
+        logger.error(
+          `[CloudStorage] Failed to update video record with cloud paths:`,
+          updateError instanceof Error
+            ? updateError
+            : new Error(getErrorMessage(updateError))
+        );
+        // Don't throw - file deletion was successful
+      }
+    }
+  } catch (error) {
+    logger.error(
+      `[CloudStorage] Upload failed for ${videoData.title}:`,
+      error instanceof Error ? error : new Error(String(error))
+    );
+    // If upload failed, don't delete local files
+  }
+}

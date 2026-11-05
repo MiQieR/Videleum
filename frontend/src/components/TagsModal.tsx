@@ -1,0 +1,219 @@
+import { getApiErrorMessage } from '../utils/errors';
+import {
+    Box,
+    Button,
+    Chip,
+    Dialog,
+    DialogActions,
+    DialogContent,
+    DialogTitle,
+    Stack,
+    TextField,
+    Typography
+} from '@mui/material';
+import React, { useState } from 'react';
+import { useLanguage } from '../contexts/LanguageContext';
+import { useSnackbar } from '../contexts/SnackbarContext';
+import { useSettings } from '../hooks/useSettings';
+import { useSettingsMutations } from '../hooks/useSettingsMutations';
+
+interface TagsModalProps {
+    open: boolean;
+    onClose: () => void;
+    identityKey?: string;
+    videoTags: string[];
+    availableTags: string[];
+    onSave: (tags: string[]) => Promise<void>;
+}
+
+const getTagsModalKey = (videoTags: string[], identityKey?: string) =>
+    JSON.stringify({
+        identityKey: identityKey ?? null,
+        videoTags: [...videoTags].sort(),
+    });
+
+const TagsModalContent: React.FC<TagsModalProps> = ({
+    open,
+    onClose,
+    videoTags,
+    availableTags = [],
+    onSave
+}) => {
+    const { t } = useLanguage();
+    const { showSnackbar } = useSnackbar();
+    const { data: globalSettings } = useSettings();
+    const { saveMutation } = useSettingsMutations({
+        setMessage: (msg) => msg && showSnackbar(msg.text, msg.type),
+        setInfoModal: () => { /* No-op: TagsModal doesn't use info modals */ }
+    });
+
+    // State for selected tags (starts with videoTags)
+    const [selectedTags, setSelectedTags] = useState<string[]>(() => videoTags || []);
+    const [newTag, setNewTag] = useState('');
+    const [saving, setSaving] = useState(false);
+
+    const handleToggleTag = (tag: string) => {
+        setSelectedTags(prev =>
+            prev.includes(tag)
+                ? prev.filter(t => t !== tag)
+                : [...prev, tag]
+        );
+    };
+
+    const tagExistsCaseInsensitive = (tag: string, list: string[]) =>
+        list.some((t) => t.toLowerCase() === tag.toLowerCase());
+
+    const handleAddNewTag = () => {
+        const trimmedTag = newTag.trim();
+        if (!trimmedTag) return;
+        if (selectedTags.includes(trimmedTag)) {
+            setNewTag('');
+            return;
+        }
+        if (tagExistsCaseInsensitive(trimmedTag, selectedTags)) {
+            showSnackbar(t('tagConflictCaseInsensitive'), 'error');
+            return;
+        }
+        const effectiveList = globalSettings?.tags && Array.isArray(globalSettings.tags) ? globalSettings.tags : availableTags;
+        if (tagExistsCaseInsensitive(trimmedTag, effectiveList) && !effectiveList.includes(trimmedTag)) {
+            showSnackbar(t('tagConflictCaseInsensitive'), 'error');
+            return;
+        }
+        setSelectedTags(prev => [...prev, trimmedTag]);
+        setNewTag('');
+    };
+
+    const handleSave = async () => {
+        setSaving(true);
+
+        try {
+            const newGlobalTags = selectedTags.filter(tag =>
+                !availableTags.some(availableTag => availableTag.toLowerCase() === tag.toLowerCase())
+            );
+            if (newGlobalTags.length > 0 && globalSettings) {
+                const currentTags = globalSettings.tags || [];
+                const updatedTags = Array.from(new Set([...currentTags, ...newGlobalTags])).sort();
+                const newSettings = {
+                    ...globalSettings,
+                    tags: updatedTags
+                };
+                await saveMutation.mutateAsync(newSettings);
+            }
+            await onSave(selectedTags);
+            handleClose();
+        } catch (error: unknown) {
+            // Extract error message from various error formats
+            const errorMessage = getApiErrorMessage(error) ||
+                t('failedToSaveTags') ||
+                'Failed to save tags';
+            showSnackbar(errorMessage, 'error');
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const handleClose = () => {
+        if (!saving) {
+            setSelectedTags(videoTags || []);
+            setNewTag('');
+            setSaving(false);
+            onClose();
+        }
+    };
+
+    // Combine available tags with any newly added selected tags that aren't in availableTags yet
+    const effectiveAvailableTags = globalSettings?.tags && Array.isArray(globalSettings.tags)
+        ? globalSettings.tags
+        : (Array.isArray(availableTags) ? availableTags : []);
+
+    // Deduplicate case-insensitively for display
+    // If "tag1" is available, and "TAG1" is selected, we want to show "TAG1" (as selected).
+    // If "tag1" is available and nothing selected, show "tag1".
+    const uniqueTagsMap = new Map<string, string>();
+
+    // Add available tags first
+    effectiveAvailableTags.forEach(tag => {
+        uniqueTagsMap.set(tag.toLowerCase(), tag);
+    });
+
+    // Override with selected tags (to preserve casing of what's on the video)
+    selectedTags.forEach(tag => {
+        uniqueTagsMap.set(tag.toLowerCase(), tag);
+    });
+
+    const displayTags = Array.from(uniqueTagsMap.values()).sort((a, b) => a.localeCompare(b));
+
+    return (
+        <Dialog
+            open={open}
+            onClose={handleClose}
+            maxWidth="sm"
+            fullWidth
+        >
+            <DialogTitle>{t('selectTags')}</DialogTitle>
+            <DialogContent dividers>
+                <Box sx={{ mb: 3 }}>
+                    <Stack direction="row" spacing={1} alignItems="center">
+                        <TextField
+                            fullWidth
+                            size="small"
+                            label={t('newTag') || 'New Tag'}
+                            value={newTag}
+                            onChange={(e) => setNewTag(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && handleAddNewTag()}
+                        />
+                        <Button
+                            variant="contained"
+                            onClick={handleAddNewTag}
+                            disabled={!newTag.trim()}
+                        >
+                            {t('add') || 'Add'}
+                        </Button>
+                    </Stack>
+                </Box>
+
+                <Box>
+                    <Typography variant="subtitle2" gutterBottom>{t('tags')}</Typography>
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                        {displayTags.map(tag => (
+                            <Chip
+                                key={tag}
+                                label={tag}
+                                onClick={() => handleToggleTag(tag)}
+                                color={selectedTags.includes(tag) ? 'primary' : 'default'}
+                                variant={selectedTags.includes(tag) ? 'filled' : 'outlined'}
+                                sx={{ cursor: 'pointer' }}
+                            />
+                        ))}
+                        {displayTags.length === 0 && (
+                            <Typography variant="body2" color="text.secondary">
+                                {t('noTagsAvailable') || 'No tags available'}
+                            </Typography>
+                        )}
+                    </Box>
+                </Box>
+            </DialogContent>
+            <DialogActions>
+                <Button onClick={handleClose} color="inherit" disabled={saving}>{t('cancel')}</Button>
+                <Button onClick={handleSave} variant="contained" loading={saving} loadingPosition="start">
+                    {t('save')}
+                </Button>
+            </DialogActions>
+        </Dialog>
+    );
+};
+
+const TagsModal: React.FC<TagsModalProps> = (props) => {
+    if (!props.open) {
+        return null;
+    }
+
+    return (
+        <TagsModalContent
+            key={getTagsModalKey(props.videoTags || [], props.identityKey)}
+            {...props}
+        />
+    );
+};
+
+export default TagsModal;

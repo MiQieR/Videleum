@@ -1,0 +1,139 @@
+import { ClearAll as ClearAllIcon } from '@mui/icons-material';
+import {
+    Box,
+    Button,
+    List,
+    MenuItem,
+    Pagination,
+    Select,
+    Typography,
+    useMediaQuery,
+    useTheme
+} from '@mui/material';
+import React, { useMemo, useState } from 'react';
+import { useLanguage } from '../../contexts/LanguageContext';
+import { DownloadHistoryItem, HistoryItem } from './HistoryItem';
+import { isIncompleteSave } from './historyStatus';
+
+import { usePaginationSwipeNavigation } from '../../hooks/usePaginationSwipeNavigation';
+import { useSettings } from '../../hooks/useSettings';
+
+interface HistoryTabProps {
+    history: DownloadHistoryItem[];
+    onRemove: (id: string) => void;
+    onCancelRetry: (id: string) => void;
+    onClear: () => void;
+    onRetry: (sourceUrl: string) => void;
+    onReDownload: (sourceUrl: string, mediaType?: 'video' | 'audio') => void;
+    onViewVideo: (videoId: string) => void;
+    isDownloadInProgress: (sourceUrl: string) => boolean;
+    removingId?: string | null;
+    cancellingRetryId?: string | null;
+    clearing?: boolean;
+}
+
+const ITEMS_PER_PAGE = 20;
+
+export function HistoryTab({
+    history,
+    onRemove,
+    onCancelRetry,
+    onClear,
+    onRetry,
+    onReDownload,
+    onViewVideo,
+    isDownloadInProgress,
+    removingId = null,
+    cancellingRetryId = null,
+    clearing = false
+}: HistoryTabProps) {
+    const { t } = useLanguage();
+    const theme = useTheme();
+    const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+    const [page, setPage] = useState(1);
+    const [filterType, setFilterType] = useState('all');
+    const { data: settings } = useSettings();
+
+    const filteredHistory = useMemo(() => {
+        return history.filter((item) => {
+            if (filterType === 'all') return true;
+            // Filter by what the row shows: a save with content missing is
+            // listed as incomplete, not as a success.
+            const shownStatus = isIncompleteSave(item) ? 'partial' : item.status;
+            return shownStatus === filterType;
+        });
+    }, [history, filterType]);
+
+    const totalPages = Math.ceil(filteredHistory.length / ITEMS_PER_PAGE);
+    const swipeHandlers = usePaginationSwipeNavigation({ page, totalPages, onPageChange: setPage });
+
+    return (
+        <>
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2, gap: 2, flexWrap: 'wrap' }}>
+                <Select
+                    size="small"
+                    value={filterType}
+                    onChange={(e) => {
+                        setFilterType(e.target.value);
+                        setPage(1);
+                    }}
+                    sx={{ minWidth: 150 }}
+                >
+                    <MenuItem value="all">{t('filterAll') || 'All'}</MenuItem>
+                    <MenuItem value="success">{t('success') || 'Success'}</MenuItem>
+                    <MenuItem value="failed">{t('failed') || 'Failed'}</MenuItem>
+                    <MenuItem value="partial">{t('partialDownload') || 'Incomplete'}</MenuItem>
+                    <MenuItem value="pending_retry">{t('pendingRetry') || 'Pending Retry'}</MenuItem>
+                    <MenuItem value="skipped">{t('skipped') || 'Skipped'}</MenuItem>
+                    <MenuItem value="deleted">{t('previouslyDeleted') || 'Previously Deleted'}</MenuItem>
+                </Select>
+                <Button
+                    variant="outlined"
+                    startIcon={<ClearAllIcon />}
+                    onClick={onClear}
+                    disabled={history.length === 0}
+                    loading={clearing}
+                    loadingPosition="start"
+                >
+                    {t('clearHistory') || 'Clear History'}
+                </Button>
+            </Box>
+            {filteredHistory.length === 0 ? (
+                <Typography color="textSecondary">{t('noDownloadHistory') || 'No download history'}</Typography>
+            ) : (
+                <>
+                    <List {...swipeHandlers}>
+                        {filteredHistory
+                            .slice((page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE)
+                            .map((item) => (
+                                <HistoryItem
+                                    key={item.id}
+                                    item={item}
+                                    onRemove={onRemove}
+                                    onCancelRetry={onCancelRetry}
+                                    onRetry={onRetry}
+                                    onReDownload={onReDownload}
+                                    onViewVideo={onViewVideo}
+                                    isDownloadInProgress={isDownloadInProgress}
+                                    isRemoving={removingId === item.id}
+                                    isCancellingRetry={cancellingRetryId === item.id}
+                                    dontSkipDeletedVideo={settings?.dontSkipDeletedVideo}
+                                />
+                            ))}
+                    </List>
+                    {filteredHistory.length > ITEMS_PER_PAGE && (
+                        <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
+                            <Pagination
+                                count={totalPages}
+                                page={page}
+                                onChange={(_: React.ChangeEvent<unknown>, newPage: number) => setPage(newPage)}
+                                color="primary"
+                                siblingCount={isMobile ? 0 : 1}
+                            />
+                        </Box>
+                    )}
+                </>
+            )}
+        </>
+    );
+}

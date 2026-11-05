@@ -1,0 +1,392 @@
+import { QueryClient, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useAuth } from "../contexts/AuthContext";
+import { Video } from "../types";
+import { api, sendVideoProgressWithKeepalive } from "../utils/apiClient";
+import { parseDuration } from "../utils/formatUtils";
+import {
+  getBestVideoResumeProgress,
+  readVideoResumeProgress,
+  writeVideoResumeProgress,
+} from "../utils/videoResumeProgress";
+
+interface UseVideoProgressProps {
+  videoId: string | undefined;
+  video: Video | undefined;
+  videoElement?: HTMLVideoElement | null;
+}
+
+interface ViewedState {
+  videoId: string | undefined;
+  visitId: number;
+  viewedVisitId: number | null;
+}
+
+const PROGRESS_SAVE_INTERVAL_MS = 5000;
+const LOCAL_PROGRESS_SAMPLE_INTERVAL_MS = 1000;
+const RESTORE_GUARD_MIN_PROGRESS_SECONDS = 30;
+const RESTORE_GUARD_TOLERANCE_SECONDS = 2;
+
+function getViewThreshold(duration: string | undefined): number {
+  const durationSeconds = parseDuration(duration);
+  return durationSeconds > 0 && durationSeconds < 20 ? 4 : 10;
+}
+
+function getResumeProgress(currentTime: number, duration: string | undefined): number {
+  const progress = Math.max(0, Math.floor(currentTime));
+  const durationSeconds = parseDuration(duration);
+
+  if (durationSeconds > 1 && progress >= Math.floor(durationSeconds)) {
+    return Math.max(0, Math.floor(durationSeconds) - 1);
+  }
+
+  return progress;
+}
+
+function syncVideoPlaybackCache(
+  queryClient: QueryClient,
+  videoId: string,
+  updates: Partial<Video>,
+  options: {
+    syncList?: boolean;
+    syncDetail?: boolean;
+  } = {}
+) {
+  const { syncList = true, syncDetail = true } = options;
+
+  if (syncList) {
+    queryClient.setQueryData(["videos"], (old: Video[] | undefined) =>
+      Array.isArray(old)
+        ? old.map((item) =>
+            item.id === videoId ? { ...item, ...updates } : item
+          )
+        : old
+    );
+  }
+
+  if (syncDetail) {
+    queryClient.setQueryData(["video", videoId], (old: Video | undefined) =>
+      old ? { ...old, ...updates } : old
+    );
+  }
+}
+
+/**
+ * Custom hook to manage video progress tracking and view counting
+ */
+export function useVideoProgress({ videoId, video, videoElement }: UseVideoProgressProps) {
+  const { userRole } = useAuth();
+  const isVisitor = userRole === "visitor";
+  const queryClient = useQueryClient();
+  const [viewedState, setViewedState] = useState<ViewedState>(() => ({
+    videoId,
+    visitId: 0,
+    viewedVisitId: null,
+  }));
+  const lastProgressSave = useRef<number>(0);
+  const currentTimeRef = useRef<number>(0);
+  const isDeletingRef = useRef<boolean>(false);
+  const durationRef = useRef<string | undefined>(undefined);
+  const videoElementRef = useRef<HTMLVideoElement | null>(null);
+  const resumeGuardTargetRef = useRef<number>(0);
+  const resumeGuardObservedRef = useRef<boolean>(true);
+  const videoDuration = video?.duration;
+  let currentViewedState = viewedState;
+  if (currentViewedState.videoId !== videoId) {
+    currentViewedState = {
+      videoId,
+      visitId: currentViewedState.visitId + 1,
+      viewedVisitId: null,
+    };
+    setViewedState(currentViewedState);
+  }
+
+  useEffect(() => {
+    const storedProgress = readVideoResumeProgress(videoId)?.progress ?? 0;
+    currentTimeRef.current = storedProgress;
+    resumeGuardTargetRef.current =
+      storedProgress > RESTORE_GUARD_MIN_PROGRESS_SECONDS ? storedProgress : 0;
+    resumeGuardObservedRef.current =
+      resumeGuardTargetRef.current <= RESTORE_GUARD_MIN_PROGRESS_SECONDS;
+    // Start the periodic-save throttle now: with the initial 0 the very
+    // first timeupdate saved immediately, racing the saved-progress
+    // restore and overwriting the stored position with ~0.
+    lastProgressSave.current = Date.now();
+  }, [videoId]);
+
+  useEffect(() => {
+    const resumeProgress = getBestVideoResumeProgress(
+      videoId,
+      video?.progress,
+      video?.progressUpdatedAt ?? video?.lastPlayedAt
+    );
+
+    if (
+      currentTimeRef.current <= 0 ||
+      currentTimeRef.current < resumeProgress ||
+      !resumeGuardObservedRef.current
+    ) {
+      currentTimeRef.current = resumeProgress;
+      resumeGuardTargetRef.current =
+        resumeProgress > RESTORE_GUARD_MIN_PROGRESS_SECONDS
+          ? resumeProgress
+          : 0;
+      resumeGuardObservedRef.current =
+        resumeGuardTargetRef.current <= RESTORE_GUARD_MIN_PROGRESS_SECONDS;
+    }
+  }, [video?.lastPlayedAt, video?.progress, video?.progressUpdatedAt, videoId]);
+
+  useEffect(() => {
+    durationRef.current = videoDuration;
+  }, [videoDuration]);
+
+  useEffect(() => {
+    videoElementRef.current = videoElement ?? null;
+  }, [videoElement]);
+
+  const getTrustedPlaybackTime = useCallback((playbackTime: number) => {
+    if (typeof playbackTime !== "number" || !Number.isFinite(playbackTime)) {
+      return null;
+    }
+
+    const safeTime = Math.max(0, playbackTime);
+    const resumeTarget = resumeGuardTargetRef.current;
+
+    if (
+      resumeTarget > RESTORE_GUARD_MIN_PROGRESS_SECONDS &&
+      !resumeGuardObservedRef.current
+    ) {
+      if (safeTime + RESTORE_GUARD_TOLERANCE_SECONDS >= resumeTarget) {
+        resumeGuardObservedRef.current = true;
+      } else {
+        return null;
+      }
+    }
+
+    return safeTime;
+  }, []);
+
+  const samplePlaybackTime = useCallback(() => {
+    const mediaElement = videoElementRef.current;
+    const sampledTime = mediaElement?.currentTime;
+    const trustedTime =
+      typeof sampledTime === "number" && Number.isFinite(sampledTime)
+        ? getTrustedPlaybackTime(sampledTime)
+        : null;
+
+    if (trustedTime === null) {
+      return currentTimeRef.current;
+    }
+
+    if (trustedTime <= 0 && currentTimeRef.current > 0) {
+      return currentTimeRef.current;
+    }
+
+    currentTimeRef.current = trustedTime;
+    return currentTimeRef.current;
+  }, [getTrustedPlaybackTime]);
+
+  const cacheProgressLocally = useCallback((playbackTime: number) => {
+    const progress = getResumeProgress(playbackTime, durationRef.current);
+    if (progress > 0) {
+      writeVideoResumeProgress(videoId, progress);
+    }
+    return progress;
+  }, [videoId]);
+
+  const saveProgress = useCallback((
+    playbackTime: number,
+    options: { keepalive?: boolean } = {}
+  ) => {
+    if (!videoId || isDeletingRef.current || isVisitor) {
+      return;
+    }
+
+    const progress = cacheProgressLocally(playbackTime);
+
+    if (progress <= 0) {
+      return;
+    }
+
+    const progressUpdatedAt = Date.now();
+    syncVideoPlaybackCache(queryClient, videoId, {
+      progress,
+      progressUpdatedAt,
+    });
+
+    if (options.keepalive) {
+      sendVideoProgressWithKeepalive(videoId, progress);
+      return;
+    }
+
+    api
+      .put(`/videos/${videoId}/progress`, {
+        progress,
+      })
+      .catch((err) => {
+        console.error("Error saving progress:", err);
+      });
+  }, [cacheProgressLocally, isVisitor, queryClient, videoId]);
+
+  const flushSampledProgress = useCallback((options: { keepalive?: boolean } = {}) => {
+    const playbackTime = samplePlaybackTime();
+    saveProgress(playbackTime, options);
+  }, [samplePlaybackTime, saveProgress]);
+
+  useEffect(() => {
+    if (!videoId || isVisitor || !videoElement) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      const playbackTime = samplePlaybackTime();
+      cacheProgressLocally(playbackTime);
+
+      const now = Date.now();
+      if (now - lastProgressSave.current <= PROGRESS_SAVE_INTERVAL_MS) {
+        return;
+      }
+
+      lastProgressSave.current = now;
+      saveProgress(playbackTime);
+    }, LOCAL_PROGRESS_SAMPLE_INTERVAL_MS);
+
+    return () => window.clearInterval(timer);
+  }, [
+    cacheProgressLocally,
+    isVisitor,
+    samplePlaybackTime,
+    saveProgress,
+    videoElement,
+    videoId,
+  ]);
+
+  useEffect(() => {
+    if (!videoId || isVisitor || !videoElement) {
+      return;
+    }
+
+    const sampleAndCache = () => {
+      cacheProgressLocally(samplePlaybackTime());
+    };
+    const sampleAndSave = () => {
+      flushSampledProgress();
+    };
+
+    // The React onTimeUpdate handler already caches on every "timeupdate", so we
+    // do not listen for it again here (doing so double-wrote localStorage on each
+    // tick). "playing" backfills the cache when playback resumes, and the 1s
+    // interval covers Safari's deferred-timeupdate case.
+    videoElement.addEventListener("playing", sampleAndCache);
+    videoElement.addEventListener("seeked", sampleAndSave);
+    videoElement.addEventListener("pause", sampleAndSave);
+
+    return () => {
+      videoElement.removeEventListener("playing", sampleAndCache);
+      videoElement.removeEventListener("seeked", sampleAndSave);
+      videoElement.removeEventListener("pause", sampleAndSave);
+    };
+  }, [
+    cacheProgressLocally,
+    flushSampledProgress,
+    isVisitor,
+    samplePlaybackTime,
+    videoElement,
+    videoId,
+  ]);
+
+  // Save progress when the page is hidden or discarded. Safari can defer
+  // timeupdate events for very large WebM files, so sample the media element.
+  useEffect(() => {
+    if (!videoId || isVisitor) {
+      return;
+    }
+
+    const flushWithKeepalive = () => {
+      flushSampledProgress({ keepalive: true });
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        flushWithKeepalive();
+      }
+    };
+
+    window.addEventListener("pagehide", flushWithKeepalive);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener("pagehide", flushWithKeepalive);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [flushSampledProgress, isVisitor, videoId]);
+
+  // Save progress on unmount
+  useEffect(() => {
+    return () => {
+      flushSampledProgress({ keepalive: true });
+    };
+  }, [flushSampledProgress]);
+
+  const handleTimeUpdate = (currentTime: number) => {
+    // The player suppresses onTimeUpdate while a saved-progress seek is still
+    // pending, so any value delivered here is authoritative: the restore has
+    // completed, or the user seeked/started somewhere else. Release the sampling
+    // guard so the deferred-sample paths (native events, interval, pagehide)
+    // track the live position instead of holding the previous resume point.
+    resumeGuardObservedRef.current = true;
+
+    const trustedCurrentTime = getTrustedPlaybackTime(currentTime);
+    if (trustedCurrentTime === null) {
+      return;
+    }
+
+    currentTimeRef.current = trustedCurrentTime;
+    cacheProgressLocally(trustedCurrentTime);
+
+    // Increment views and refresh watch history at the same threshold.
+    const viewThreshold = getViewThreshold(videoDuration);
+    const visitId = currentViewedState.visitId;
+    const hasViewed =
+      currentViewedState.videoId === videoId &&
+      currentViewedState.viewedVisitId === visitId;
+    if (trustedCurrentTime >= viewThreshold && !hasViewed && videoId && !isVisitor) {
+      setViewedState((state) =>
+        state.videoId === videoId && state.visitId === visitId
+          ? { ...state, viewedVisitId: visitId }
+          : state
+      );
+      const lastPlayedAt = Date.now();
+      api
+        .post(`/videos/${videoId}/view`)
+        .then((res) => {
+          if (res.data.success) {
+            syncVideoPlaybackCache(queryClient, videoId, {
+              viewCount: res.data.viewCount,
+              lastPlayedAt,
+            });
+          }
+        })
+        .catch((err) => {
+          console.error("Error incrementing view count:", err);
+        });
+    }
+
+    // Save progress every 5 seconds
+    const now = Date.now();
+    if (now - lastProgressSave.current > PROGRESS_SAVE_INTERVAL_MS && videoId && !isVisitor) {
+      lastProgressSave.current = now;
+      saveProgress(trustedCurrentTime);
+    }
+  };
+
+  const setIsDeleting = (value: boolean) => {
+    isDeletingRef.current = value;
+  };
+
+  return {
+    handleTimeUpdate,
+    setIsDeleting,
+    /** Ref holding the latest playback time; use for startTime when remounting the player (e.g. cinema mode toggle). */
+    currentTimeRef,
+  };
+}

@@ -1,0 +1,1235 @@
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, useNavigate } from 'react-router';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { overlay } from '../../theme/colors';
+import SettingsPage from '../SettingsPage';
+
+let mockIsDesktop = false;
+let mockRealCollapsibleSections = false;
+let mockIsSticky = false;
+let mockUserRole: string | undefined = 'admin';
+let mockSettingsData: any = {};
+let saveIsPending = false;
+let saveShouldError = false;
+let scanIsPending = false;
+
+const mockSetLanguage = vi.fn();
+const mockSetPreference = vi.fn();
+const mockApiPost = vi.fn();
+
+const mockSaveMutate = vi.fn();
+const mockMigrateMutate = vi.fn();
+const mockCleanupMutate = vi.fn();
+const mockCleanupAuthorCollectionsMutate = vi.fn();
+const mockDeleteLegacyMutate = vi.fn();
+const mockExportDatabaseMutate = vi.fn();
+const mockImportDatabaseMutate = vi.fn();
+const mockPreviewMergeDatabaseMutateAsync = vi.fn();
+const mockMergeDatabaseMutate = vi.fn();
+const mockCleanupBackupDatabasesMutate = vi.fn();
+const mockRestoreFromLastBackupMutate = vi.fn();
+const mockRenameTagMutate = vi.fn();
+const mockUpdateTagsMutate = vi.fn();
+
+const mockSetShowDeleteLegacyModal = vi.fn();
+const mockSetShowCleanupAuthorCollectionsModal = vi.fn();
+const mockSetShowMigrateConfirmModal = vi.fn();
+const mockSetShowCleanupTempFilesModal = vi.fn();
+const mockSetInfoModal = vi.fn();
+
+let modalState = {
+  showCleanupAuthorCollectionsModal: false,
+  showDeleteLegacyModal: false,
+  showMigrateConfirmModal: false,
+  showCleanupTempFilesModal: false,
+  infoModal: { isOpen: false, title: '', message: '', type: 'info' as 'info' | 'error' },
+};
+
+vi.mock('@mui/material', async () => {
+  const actual = await vi.importActual<any>('@mui/material');
+  return {
+    ...actual,
+    useMediaQuery: () => mockIsDesktop,
+  };
+});
+
+vi.mock('@tanstack/react-query', () => ({
+  // Scan status poll: idle unless a test says otherwise.
+  useQuery: () => ({ data: { scanning: false, scanType: null, startedAt: null } }),
+  useMutation: (options: any) => ({
+    isPending: scanIsPending,
+    mutate: (variables: any) => {
+      Promise.resolve()
+        .then(() => options.mutationFn(variables))
+        .then((data) => options.onSuccess?.(data))
+        .catch((error) => options.onError?.(error));
+    },
+  }),
+}));
+
+vi.mock('../../utils/apiClient', () => ({
+  api: {
+    post: (...args: any[]) => mockApiPost(...args),
+  },
+  getApiErrorMessage: async (error: any) =>
+    error?.response?.data?.error ||
+    error?.response?.data?.details ||
+    error?.response?.data?.message ||
+    error?.message,
+}));
+
+vi.mock('../../hooks/useSettings', () => ({
+  useSettings: () => ({ data: mockSettingsData, isFetching: false }),
+}));
+
+vi.mock('../../contexts/LanguageContext', () => ({
+  useLanguage: () => ({
+    t: (key: string) => key,
+    setLanguage: mockSetLanguage,
+  }),
+}));
+
+vi.mock('../../contexts/ThemeContext', () => ({
+  useThemeContext: () => ({
+    setPreference: mockSetPreference,
+  }),
+}));
+
+vi.mock('../../contexts/DownloadContext', () => ({
+  useDownload: () => ({
+    activeDownloads: ['a', 'b'],
+  }),
+}));
+
+vi.mock('../../contexts/AuthContext', () => ({
+  useAuth: () => ({
+    userRole: mockUserRole,
+  }),
+}));
+
+vi.mock('../../hooks/useSettingsModals', () => ({
+  useSettingsModals: () => ({
+    showCleanupAuthorCollectionsModal: modalState.showCleanupAuthorCollectionsModal,
+    setShowCleanupAuthorCollectionsModal: mockSetShowCleanupAuthorCollectionsModal,
+    showDeleteLegacyModal: modalState.showDeleteLegacyModal,
+    setShowDeleteLegacyModal: mockSetShowDeleteLegacyModal,
+    showMigrateConfirmModal: modalState.showMigrateConfirmModal,
+    setShowMigrateConfirmModal: mockSetShowMigrateConfirmModal,
+    showCleanupTempFilesModal: modalState.showCleanupTempFilesModal,
+    setShowCleanupTempFilesModal: mockSetShowCleanupTempFilesModal,
+    infoModal: modalState.infoModal,
+    setInfoModal: mockSetInfoModal,
+  }),
+}));
+
+vi.mock('../../hooks/useSettingsMutations', () => ({
+  useSettingsMutations: () => ({
+    saveMutation: {
+      isPending: saveIsPending,
+      mutate: (payload: any, options?: any) => {
+        mockSaveMutate(payload, options);
+        if (!options) return;
+        if (saveShouldError) {
+          options.onError?.({ response: { data: { message: 'save failed' } } });
+        } else {
+          options.onSuccess?.();
+        }
+      },
+    },
+    migrateMutation: { isPending: false, mutate: (...args: any[]) => mockMigrateMutate(...args) },
+    cleanupMutation: { isPending: false, mutate: (...args: any[]) => mockCleanupMutate(...args) },
+    cleanupAuthorCollectionsMutation: { isPending: false, mutate: (...args: any[]) => mockCleanupAuthorCollectionsMutate(...args) },
+    deleteLegacyMutation: { isPending: false, mutate: (...args: any[]) => mockDeleteLegacyMutate(...args) },
+    exportDatabaseMutation: { isPending: false, mutate: (...args: any[]) => mockExportDatabaseMutate(...args) },
+    importDatabaseMutation: { isPending: false, mutate: (...args: any[]) => mockImportDatabaseMutate(...args) },
+    previewMergeDatabaseMutation: {
+      isPending: false,
+      mutateAsync: (...args: any[]) => mockPreviewMergeDatabaseMutateAsync(...args),
+    },
+    mergeDatabaseMutation: { isPending: false, mutate: (...args: any[]) => mockMergeDatabaseMutate(...args) },
+    cleanupBackupDatabasesMutation: { isPending: false, mutate: (...args: any[]) => mockCleanupBackupDatabasesMutate(...args) },
+    restoreFromLastBackupMutation: { isPending: false, mutate: (...args: any[]) => mockRestoreFromLastBackupMutate(...args) },
+    renameTagMutation: { isPending: false, mutate: (...args: any[]) => mockRenameTagMutate(...args) },
+    updateTagsMutation: {
+      isPending: false,
+      mutate: (...args: any[]) => mockUpdateTagsMutate(...args),
+      mutateAsync: (...args: any[]) => {
+        mockUpdateTagsMutate(...args);
+        return Promise.resolve();
+      },
+    },
+    lastBackupInfo: null,
+    isSaving: false,
+  }),
+}));
+
+vi.mock('../../hooks/useStickyButton', () => ({
+  useStickyButton: () => mockIsSticky,
+}));
+
+vi.mock('../../components/CollapsibleSection', async () => {
+  const { default: CollapsibleSection } = await vi.importActual<typeof import('../../components/CollapsibleSection')>('../../components/CollapsibleSection');
+  return { default: (props: React.ComponentProps<typeof CollapsibleSection>) => mockRealCollapsibleSections ? <CollapsibleSection {...props} /> : (
+    <div data-testid={`section-${props.title}`}>
+      <h3>{props.title}</h3>
+      {props.children}
+    </div>
+  ) };
+});
+
+vi.mock('../../components/Settings/BasicSettings', () => ({
+  default: ({ onChange }: any) => (
+    <div data-testid="basic-settings">
+      <button onClick={() => onChange('language', 'zh')}>basic-change-language</button>
+      <button onClick={() => onChange('theme', 'dark')}>basic-change-theme</button>
+    </div>
+  ),
+}));
+
+vi.mock('../../components/Settings/InterfaceDisplaySettings', () => ({
+  default: ({ onChange }: any) => (
+    <div data-testid="interface-display-settings">
+      <button onClick={() => onChange('itemsPerPage', 24)}>interface-change</button>
+    </div>
+  ),
+}));
+
+vi.mock('../../components/Settings/SecuritySettings', () => ({
+  default: ({ onChange }: any) => (
+    <div data-testid="security-settings">
+      <div id="security-access-target" />
+      <button onClick={() => onChange('loginEnabled', true)}>security-change</button>
+    </div>
+  ),
+}));
+
+vi.mock('../../components/Settings/CookieSettings', () => ({
+  default: ({ onSuccess, onError }: any) => (
+    <div data-testid="cookie-settings">
+      <button onClick={() => onSuccess('cookie-success')}>cookie-success</button>
+      <button onClick={() => onError('cookie-error')}>cookie-error</button>
+    </div>
+  ),
+}));
+
+vi.mock('../../components/Settings/CloudflareSettings', () => ({
+  default: ({ onChange }: any) => (
+    <div data-testid="cloudflare-settings">
+      <button onClick={() => onChange('allowedHosts', 'a.com')}>cloudflare-change</button>
+    </div>
+  ),
+}));
+
+vi.mock('../../components/Settings/RssFeedSettings', () => ({
+  default: () => <div data-testid="rss-feed-settings">rssFeedSettings</div>,
+}));
+
+vi.mock('../../components/Settings/VideoDefaultSettings', () => ({
+  default: ({ onChange, onSeekIntervalsValidityChange }: any) => (
+    <div data-testid="video-default-settings">
+      <button onClick={() => onChange('defaultAutoPlay', true)}>video-default-change</button>
+      <button onClick={() => onChange('playerSeekShortSeconds', 15)}>seek-short-change</button>
+      <button onClick={() => onChange('playerSeekMediumSeconds', 120)}>seek-medium-change</button>
+      <button onClick={() => onChange('playerSeekLongSeconds', 900)}>seek-long-change</button>
+      <button onClick={() => onSeekIntervalsValidityChange(false)}>seek-invalid</button>
+      <button
+        onClick={() => {
+          onChange('playerSeekShortSeconds', 120);
+          onSeekIntervalsValidityChange(false);
+        }}
+      >
+        seek-order-invalid
+      </button>
+      <button onClick={() => onSeekIntervalsValidityChange(true)}>seek-valid</button>
+    </div>
+  ),
+}));
+
+vi.mock('../../components/Settings/DownloadSettings', () => ({
+  default: ({ onChange, onCleanup, onAutoDeleteValidityChange }: any) => (
+    <div data-testid="download-settings">
+      {/* Real anchor target of the "Change Settings" link in download history. */}
+      <div id="dontSkipDeletedVideo-setting" />
+      <button onClick={() => onChange('maxConcurrentDownloads', 5)}>download-change</button>
+      <button
+        onClick={() => {
+          onChange('autoDeleteEnabled', true);
+          onChange('autoDeleteIntervalDays', 0);
+          onAutoDeleteValidityChange(false);
+        }}
+      >
+        auto-delete-invalid
+      </button>
+      <button
+        onClick={() => {
+          onChange('autoDeleteIntervalDays', 30);
+          onAutoDeleteValidityChange(true);
+        }}
+      >
+        auto-delete-valid
+      </button>
+      <button onClick={onCleanup}>download-cleanup</button>
+    </div>
+  ),
+}));
+
+vi.mock('../../components/Settings/CloudDriveSettings', () => ({
+  default: ({ onChange }: any) => (
+    <div data-testid="cloud-drive-settings">
+      <button onClick={() => onChange('cloudDriveEnabled', true)}>cloud-drive-change</button>
+    </div>
+  ),
+}));
+
+vi.mock('../../components/Settings/YtDlpSettings', () => ({
+  default: ({ onChange, onProxyOnlyYoutubeChange }: any) => (
+    <div data-testid="ytdlp-settings">
+      <button onClick={() => onChange('best')}>ytdlp-change</button>
+      <button onClick={() => onProxyOnlyYoutubeChange(true)}>proxy-youtube-change</button>
+    </div>
+  ),
+}));
+
+vi.mock('../../components/Settings/YtDlpVersionSettings', () => ({
+  default: ({ canUpdate }: any) => (
+    <div data-testid="ytdlp-version-settings" data-can-update={String(canUpdate)} />
+  ),
+}));
+
+vi.mock('../../components/Settings/TagsSettings', () => ({
+  default: ({ onTagsChange, onRenameTag, onTagConflict }: any) => (
+    <div data-testid="tags-settings">
+      <button onClick={() => onTagsChange(['a', 'b'])}>tags-change</button>
+      <button onClick={() => onRenameTag('old', 'new')}>tags-rename-valid</button>
+      <button onClick={() => onRenameTag('same', 'same')}>tags-rename-same</button>
+      <button onClick={onTagConflict}>tags-conflict</button>
+    </div>
+  ),
+}));
+
+vi.mock('../../components/Settings/DatabaseSettings', () => ({
+  default: ({
+    onMigrate,
+    onDeleteLegacy,
+    onExportDatabase,
+    onImportDatabase,
+    onPreviewMergeDatabase,
+    onMergeDatabase,
+    onCleanupBackupDatabases,
+    onRestoreFromLastBackup,
+  }: any) => (
+    <div data-testid="database-settings">
+      <button onClick={onMigrate}>open-migrate-modal</button>
+      <button onClick={onDeleteLegacy}>open-delete-legacy-modal</button>
+      <button onClick={onExportDatabase}>export-db</button>
+      <button onClick={() => onImportDatabase(new File(['db'], 'db.zip'))}>import-db</button>
+      <button onClick={() => onPreviewMergeDatabase(new File(['db'], 'merge-preview.db'))}>preview-merge-db</button>
+      <button onClick={() => onMergeDatabase(new File(['db'], 'merge.db'))}>merge-db</button>
+      <button onClick={onCleanupBackupDatabases}>cleanup-backups</button>
+      <button onClick={onRestoreFromLastBackup}>restore-last-backup</button>
+    </div>
+  ),
+}));
+
+vi.mock('../../components/Settings/MediaIntegrityAuditSettings', () => ({
+  default: () => <div data-testid="media-integrity-audit-settings" />,
+}));
+
+vi.mock('../../components/Settings/FileOrganizationSettings', () => ({
+  default: ({
+    onCleanupAuthorCollections,
+    onMoveSubtitlesToVideoFolderChange,
+    onMoveThumbnailsToVideoFolderChange,
+    onAuthorOrganizationModeChange,
+  }: any) => (
+    <div data-testid="file-organization-settings">
+      <button onClick={onCleanupAuthorCollections}>open-author-cleanup-modal</button>
+      <button onClick={() => onMoveSubtitlesToVideoFolderChange(true)}>move-subtitles</button>
+      <button onClick={() => onMoveThumbnailsToVideoFolderChange(true)}>move-thumbnails</button>
+      <button onClick={() => onAuthorOrganizationModeChange('author_collection_linked')}>save-author-files</button>
+    </div>
+  ),
+}));
+
+vi.mock('../../components/Settings/AdvancedSettings', () => ({
+  default: ({ onDebugModeChange, onChange }: any) => (
+    <div data-testid="advanced-settings">
+      <button onClick={() => onDebugModeChange(true)}>debug-change</button>
+      <button onClick={() => onChange('telegramEnabled', true)}>telegram-change</button>
+    </div>
+  ),
+}));
+
+vi.mock('../../components/Settings/HookSettings', () => ({
+  default: ({ onChange }: any) => (
+    <div data-testid="hook-settings">
+      <button onClick={() => onChange('hooks', { postDownload: 'echo ok' })}>hook-change</button>
+    </div>
+  ),
+}));
+
+vi.mock('../../components/ConfirmationModal', () => ({
+  default: ({ isOpen, title, onClose, onConfirm }: any) =>
+    isOpen ? (
+      <div data-testid={`confirmation-${title}`}>
+        <button onClick={onClose}>{`close-${title}`}</button>
+        <button onClick={onConfirm}>{`confirm-${title}`}</button>
+      </div>
+    ) : null,
+}));
+
+const renderPage = (path = '/settings') =>
+  render(
+    <MemoryRouter initialEntries={[path]}>
+      <SettingsPage />
+    </MemoryRouter>
+  );
+
+const SettingsPageWithNavigation = () => {
+  const navigate = useNavigate();
+
+  return (
+    <>
+      <button onClick={() => navigate('/settings?tab=downloads#dontSkipDeletedVideo-setting')}>
+        go-downloads-hash
+      </button>
+      <button onClick={() => navigate('/settings?tab=security#security-access-target')}>
+        go-security-hash
+      </button>
+      <button onClick={() => navigate(-1)}>go-back</button>
+      <button onClick={() => navigate(1)}>go-forward</button>
+      <SettingsPage />
+    </>
+  );
+};
+
+describe('SettingsPage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useRealTimers();
+
+    mockIsDesktop = false;
+    mockRealCollapsibleSections = false;
+    mockIsSticky = false;
+    mockUserRole = 'admin';
+    mockSettingsData = {};
+    saveIsPending = false;
+    saveShouldError = false;
+    scanIsPending = false;
+
+    modalState = {
+      showCleanupAuthorCollectionsModal: false,
+      showDeleteLegacyModal: false,
+      showMigrateConfirmModal: false,
+      showCleanupTempFilesModal: false,
+      infoModal: { isOpen: false, title: '', message: '', type: 'info' },
+    };
+
+    mockApiPost.mockImplementation((url: string) => {
+      if (url === '/settings/tmdb/test') {
+        return Promise.resolve({
+          data: {
+            success: true,
+            authType: 'apiKey',
+            messageKey: 'tmdbCredentialValidApiKey',
+          },
+        });
+      }
+
+      return Promise.resolve({ data: { addedCount: 2, deletedCount: 1 } });
+    });
+    mockPreviewMergeDatabaseMutateAsync.mockResolvedValue({
+      videos: { merged: 1, skipped: 0 },
+      collections: { merged: 0, skipped: 0 },
+      collectionLinks: { merged: 0, skipped: 0 },
+      subscriptions: { merged: 0, skipped: 0 },
+      downloadHistory: { merged: 0, skipped: 0 },
+      videoDownloads: { merged: 0, skipped: 0 },
+      tags: { merged: 0, skipped: 0 },
+    });
+
+    document.body.innerHTML = '';
+  });
+
+  it('renders visitor desktop view with only the interface tab and no non-basic content', async () => {
+    mockIsDesktop = true;
+    mockUserRole = 'visitor';
+
+    renderPage('/settings?tab=downloads');
+
+    const tabs = screen.getAllByRole('tab');
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0]).toHaveTextContent('interfaceDisplay');
+    expect(screen.queryByTestId('interface-display-settings')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('security-settings')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('rss-feed-settings')).not.toBeInTheDocument();
+  });
+
+  it('opens the media integrity audit from a library deep link for admins only', () => {
+    mockIsDesktop = true;
+
+    const { unmount } = renderPage('/settings?tab=library');
+    expect(screen.getByTestId('media-integrity-audit-settings')).toBeInTheDocument();
+    unmount();
+
+    mockUserRole = 'visitor';
+    renderPage('/settings?tab=library');
+    expect(screen.queryByTestId('media-integrity-audit-settings')).not.toBeInTheDocument();
+  });
+
+  it('renders RSS settings for admin and login-disabled access models', () => {
+    mockIsDesktop = true;
+
+    const { rerender } = render(
+      <MemoryRouter initialEntries={['/settings?tab=integrations']}>
+        <SettingsPage />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByTestId('rss-feed-settings')).toBeInTheDocument();
+
+    mockUserRole = undefined;
+    rerender(
+      <MemoryRouter initialEntries={['/settings?tab=integrations']}>
+        <SettingsPage />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByTestId('rss-feed-settings')).toBeInTheDocument();
+  });
+
+  it('applies tab query and hash scrolling/highlight behavior', async () => {
+    mockIsDesktop = true;
+    vi.useFakeTimers();
+
+    const target = document.createElement('div');
+    target.id = 'focus-target';
+    target.style.backgroundColor = '';
+    target.scrollIntoView = vi.fn();
+    document.body.appendChild(target);
+
+    renderPage('/settings?tab=interface#focus-target');
+
+    vi.advanceTimersByTime(500);
+
+    expect(target.scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
+    expect(target.style.backgroundColor).toBe(overlay.highlightYellow);
+    expect(screen.getByTestId('basic-settings')).toBeInTheDocument();
+
+    vi.advanceTimersByTime(2000);
+    expect(target.style.backgroundColor).toBe('');
+  });
+
+  it('opens deferred mobile sections for URL and history navigation while retaining mounted content', async () => {
+    mockRealCollapsibleSections = true;
+    vi.useFakeTimers();
+    render(
+      <MemoryRouter initialEntries={['/settings?tab=interface']}>
+        <SettingsPageWithNavigation />
+      </MemoryRouter>
+    );
+    const downloads = screen.getByRole('button', { name: 'downloadsFiles' });
+    expect(downloads).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTestId('download-settings')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('go-downloads-hash'));
+    expect(downloads).toHaveAttribute('aria-expanded', 'true');
+    const target = document.getElementById('dontSkipDeletedVideo-setting')!;
+    target.scrollIntoView = vi.fn();
+    vi.advanceTimersByTime(500);
+    expect(target.scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
+
+    fireEvent.click(downloads);
+    expect(downloads).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(screen.getByText('go-security-hash'));
+    const security = screen.getByRole('button', { name: 'securityAccess' });
+    expect(security).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(security);
+    fireEvent.click(screen.getByText('go-back'));
+    expect(downloads).toHaveAttribute('aria-expanded', 'true');
+    expect(document.getElementById('dontSkipDeletedVideo-setting')).toBe(target);
+    fireEvent.click(screen.getByText('go-forward'));
+    expect(security).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('reopens a collapsed mobile section when only the URL hash changes', () => {
+    mockRealCollapsibleSections = true;
+    vi.useFakeTimers();
+    render(
+      <MemoryRouter initialEntries={['/settings?tab=security']}>
+        <SettingsPageWithNavigation />
+      </MemoryRouter>
+    );
+    const security = screen.getByRole('button', { name: 'securityAccess' });
+    fireEvent.click(security);
+    expect(security).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(screen.getByText('go-security-hash'));
+    expect(security).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('resynchronizes the selected desktop tab when the URL query changes on the mounted route', async () => {
+    mockIsDesktop = true;
+    vi.useFakeTimers();
+
+    render(
+      <MemoryRouter initialEntries={['/settings?tab=security']}>
+        <SettingsPageWithNavigation />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByTestId('security-settings')).toBeInTheDocument();
+    expect(screen.queryByTestId('database-settings')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('go-downloads-hash'));
+
+    expect(screen.getByTestId('download-settings')).toBeInTheDocument();
+    expect(screen.queryByTestId('security-settings')).not.toBeInTheDocument();
+
+    const target = document.getElementById('dontSkipDeletedVideo-setting')!;
+    target.scrollIntoView = vi.fn();
+
+    vi.advanceTimersByTime(500);
+
+    expect(target.scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
+    expect(target.style.backgroundColor).toBe(overlay.highlightYellow);
+  });
+
+  it('resynchronizes the selected desktop tab when only the URL hash changes', async () => {
+    mockIsDesktop = true;
+    vi.useFakeTimers();
+
+    render(
+      <MemoryRouter initialEntries={['/settings?tab=security']}>
+        <SettingsPageWithNavigation />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByTestId('security-settings')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'libraryStorage' }));
+
+    expect(screen.getByTestId('database-settings')).toBeInTheDocument();
+    expect(screen.queryByTestId('security-settings')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('go-security-hash'));
+
+    expect(screen.getByTestId('security-settings')).toBeInTheDocument();
+    expect(screen.queryByTestId('database-settings')).not.toBeInTheDocument();
+
+    const target = document.getElementById('security-access-target')!;
+    target.scrollIntoView = vi.fn();
+
+    vi.advanceTimersByTime(500);
+
+    expect(target.scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
+    expect(target.style.backgroundColor).toBe(overlay.highlightYellow);
+  });
+
+  it.each([
+    ['interfaceDisplay', 'basic-settings'],
+    ['downloadsFiles', 'download-settings'],
+  ])('expands the selected %s section after resizing from desktop to mobile', (label, contentId) => {
+    mockIsDesktop = true;
+    mockRealCollapsibleSections = true;
+    const { rerender } = renderPage('/settings?tab=security');
+    fireEvent.click(screen.getByRole('tab', { name: label }));
+    expect(screen.getByTestId(contentId)).toBeInTheDocument();
+
+    mockIsDesktop = false;
+    rerender(
+      <MemoryRouter initialEntries={['/settings?tab=security']}>
+        <SettingsPage />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByRole('button', { name: label })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId(contentId)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'securityAccess' })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTestId('security-settings')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'integrationsAdvanced' })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTestId('rss-feed-settings')).not.toBeInTheDocument();
+  });
+
+  it('preserves mobile-expanded sections without mounting tabs visited only on desktop', () => {
+    mockRealCollapsibleSections = true;
+    vi.useFakeTimers();
+    const page = (
+      <MemoryRouter initialEntries={['/settings']}>
+        <SettingsPageWithNavigation />
+      </MemoryRouter>
+    );
+    const { rerender } = render(page);
+    fireEvent.click(screen.getByRole('button', { name: 'videoPlayback' }));
+
+    mockIsDesktop = true;
+    rerender(
+      <MemoryRouter initialEntries={['/settings']}>
+        <SettingsPageWithNavigation />
+      </MemoryRouter>
+    );
+    fireEvent.click(screen.getByRole('tab', { name: 'libraryStorage' }));
+    expect(screen.getByTestId('database-settings')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('go-security-hash'));
+    fireEvent.click(screen.getByRole('tab', { name: 'downloadsFiles' }));
+
+    mockIsDesktop = false;
+    rerender(page);
+
+    for (const label of ['interfaceDisplay', 'videoPlayback', 'downloadsFiles']) {
+      expect(screen.getByRole('button', { name: label })).toHaveAttribute('aria-expanded', 'true');
+    }
+    for (const label of ['libraryStorage', 'securityAccess', 'integrationsAdvanced']) {
+      expect(screen.getByRole('button', { name: label })).toHaveAttribute('aria-expanded', 'false');
+    }
+    expect(screen.getByTestId('video-default-settings')).toBeVisible();
+    expect(screen.getByTestId('download-settings')).toBeVisible();
+    expect(screen.queryByTestId('database-settings')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('security-settings')).not.toBeInTheDocument();
+  });
+
+  it('switches desktop tabs and renders each tab content', () => {
+    mockIsDesktop = true;
+
+    renderPage('/settings');
+
+    // Interface tab: appearance plus the list/grid display options.
+    expect(screen.getByTestId('basic-settings')).toBeInTheDocument();
+    expect(screen.getByTestId('interface-display-settings')).toBeInTheDocument();
+    expect(screen.queryByTestId('video-default-settings')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'videoPlayback' }));
+    expect(screen.getByTestId('video-default-settings')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'downloadsFiles' }));
+    expect(screen.getByTestId('download-settings')).toBeInTheDocument();
+    expect(screen.getByTestId('file-organization-settings')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'libraryStorage' }));
+    expect(screen.getByTestId('tags-settings')).toBeInTheDocument();
+    expect(screen.getByTestId('cloud-drive-settings')).toBeInTheDocument();
+    expect(screen.getByTestId('database-settings')).toBeInTheDocument();
+    expect(screen.getByTestId('media-integrity-audit-settings')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'securityAccess' }));
+    expect(screen.getByTestId('security-settings')).toBeInTheDocument();
+    expect(screen.queryByTestId('rss-feed-settings')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'integrationsAdvanced' }));
+    expect(screen.getByTestId('advanced-settings')).toBeInTheDocument();
+    expect(screen.getByTestId('rss-feed-settings')).toBeInTheDocument();
+  });
+
+  it('updates settings through child callbacks and triggers glow animation', async () => {
+    vi.useFakeTimers();
+    mockSettingsData = {
+      deploymentSecurity: {
+        adminTrustLevel: 'container',
+        adminTrustedWithContainer: true,
+        adminTrustedWithHost: false,
+        source: 'env',
+      },
+    };
+    renderPage('/settings');
+
+    fireEvent.click(screen.getByText('basic-change-language'));
+    fireEvent.click(screen.getByText('basic-change-theme'));
+    fireEvent.click(screen.getByText('interface-change'));
+    fireEvent.click(screen.getByText('security-change'));
+    fireEvent.click(screen.getByText('cloudflare-change'));
+    fireEvent.click(screen.getByText('video-default-change'));
+    fireEvent.click(screen.getByText('download-change'));
+    fireEvent.click(screen.getByText('cloud-drive-change'));
+    fireEvent.click(screen.getByText('ytdlp-change'));
+    fireEvent.click(screen.getByText('proxy-youtube-change'));
+    fireEvent.click(screen.getByText('tags-change'));
+    fireEvent.click(screen.getByText('debug-change'));
+    fireEvent.click(screen.getByText('telegram-change'));
+    fireEvent.click(screen.getByText('hook-change'));
+
+    expect(mockSetLanguage).toHaveBeenCalledWith('zh');
+    expect(mockSetPreference).toHaveBeenCalledWith('dark');
+
+    const saveButton = screen.getAllByRole('button', { name: 'save' })[0];
+
+    vi.advanceTimersByTime(20);
+    fireEvent.animationEnd(saveButton);
+  });
+
+  it('runs save action when not pending and blocks when pending', async () => {
+    renderPage('/settings');
+    fireEvent.click(screen.getAllByRole('button', { name: 'save' })[0]);
+    expect(mockSaveMutate).toHaveBeenCalled();
+
+    saveIsPending = true;
+    renderPage('/settings');
+
+    const disabledSaveButton = screen
+      .getAllByRole('button', { name: 'save' })
+      .find((button) => button.hasAttribute('disabled'));
+    expect(disabledSaveButton).toBeDefined();
+    expect(disabledSaveButton).toBeDisabled();
+    expect(screen.getByRole('progressbar')).toBeInTheDocument();
+  });
+
+  it('blocks save while seek interval drafts are invalid', () => {
+    renderPage('/settings');
+
+    fireEvent.click(screen.getByText('seek-invalid'));
+    const saveButton = screen.getAllByRole('button', { name: 'save' })[0];
+    expect(saveButton).toBeDisabled();
+
+    fireEvent.click(saveButton);
+    expect(mockSaveMutate).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText('seek-valid'));
+    expect(saveButton).not.toBeDisabled();
+  });
+
+  it('blocks save while the auto-delete interval is invalid', () => {
+    renderPage('/settings');
+
+    fireEvent.click(screen.getByText('auto-delete-invalid'));
+    const saveButton = screen.getAllByRole('button', { name: 'save' })[0];
+    expect(saveButton).toBeDisabled();
+
+    fireEvent.click(saveButton);
+    expect(mockSaveMutate).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText('auto-delete-valid'));
+    expect(saveButton).not.toBeDisabled();
+  });
+
+  it('clears discarded seek-field invalidity when leaving the desktop playback tab', () => {
+    mockIsDesktop = true;
+    renderPage('/settings?tab=playback');
+
+    fireEvent.click(screen.getByText('seek-invalid'));
+    expect(screen.getAllByRole('button', { name: 'save' })[0]).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'securityAccess' }));
+
+    expect(screen.getAllByRole('button', { name: 'save' })[0]).not.toBeDisabled();
+  });
+
+  it('keeps save disabled after leaving the tab when persisted intervals are unordered', () => {
+    mockIsDesktop = true;
+    renderPage('/settings?tab=playback');
+
+    fireEvent.click(screen.getByText('seek-order-invalid'));
+    fireEvent.click(screen.getByRole('tab', { name: 'securityAccess' }));
+
+    expect(screen.getAllByRole('button', { name: 'save' })[0]).toBeDisabled();
+  });
+
+  it('keeps save disabled after leaving the tab with an invalid auto-delete draft', () => {
+    mockIsDesktop = true;
+    renderPage('/settings');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'downloadsFiles' }));
+    fireEvent.click(screen.getByText('auto-delete-invalid'));
+    fireEvent.click(screen.getByRole('tab', { name: 'securityAccess' }));
+
+    expect(screen.getAllByRole('button', { name: 'save' })[0]).toBeDisabled();
+  });
+
+  it('includes changed seek intervals in the settings save payload', () => {
+    renderPage('/settings');
+
+    fireEvent.click(screen.getByText('seek-short-change'));
+    fireEvent.click(screen.getByText('seek-medium-change'));
+    fireEvent.click(screen.getByText('seek-long-change'));
+    fireEvent.click(screen.getAllByRole('button', { name: 'save' })[0]);
+
+    expect(mockSaveMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        playerSeekShortSeconds: 15,
+        playerSeekMediumSeconds: 120,
+        playerSeekLongSeconds: 900,
+      }),
+      expect.objectContaining({ onSuccess: expect.any(Function) })
+    );
+  });
+
+  it('disables live translation when clearing a configured API key before save', async () => {
+    mockSettingsData = {
+      liveTranslationEnabled: true,
+      liveTranslationModel: 'gemini-3.5-live-translate-preview',
+      liveTranslationTargetLanguage: 'en',
+      liveTranslationApiKeyConfigured: true,
+    };
+
+    renderPage('/settings');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'liveTranslationClearApiKey' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'save' })[0]);
+
+    expect(mockSaveMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        liveTranslationEnabled: false,
+        liveTranslationApiKey: '',
+      }),
+      expect.objectContaining({ onSuccess: expect.any(Function) })
+    );
+  });
+
+  it('renders Twitch credential fields and includes them in the save payload', async () => {
+    renderPage('/settings');
+
+    expect(screen.getByText('twitchSubscriptionDescription')).toBeInTheDocument();
+    expect(screen.getByText('twitchClientHelpLink')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('twitchClientHelpLink'));
+
+    expect(screen.getByText('twitchClientHelpTitle')).toBeInTheDocument();
+    expect(screen.getByText('twitchClientHelpStep1')).toBeInTheDocument();
+    expect(screen.getByText('twitchDeveloperConsole')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'close' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText('twitchClientId'), {
+      target: { value: 'client-id' },
+    });
+    fireEvent.change(screen.getByLabelText('twitchClientSecret'), {
+      target: { value: 'client-secret' },
+    });
+    fireEvent.click(screen.getAllByRole('button', { name: 'save' })[0]);
+
+    expect(mockSaveMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        twitchClientId: 'client-id',
+        twitchClientSecret: 'client-secret',
+      }),
+      expect.objectContaining({ onSuccess: expect.any(Function) })
+    );
+  });
+
+  it('disables save when Twitch credentials are incomplete or invalid', () => {
+    renderPage('/settings');
+
+    const saveButton = screen.getAllByRole('button', { name: 'save' })[0];
+    expect(saveButton).not.toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('twitchClientId'), {
+      target: { value: 'bad' },
+    });
+    expect(saveButton).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('twitchClientId'), {
+      target: { value: '' },
+    });
+    fireEvent.change(screen.getByLabelText('twitchClientSecret'), {
+      target: { value: 'client-secret' },
+    });
+    expect(saveButton).toBeDisabled();
+  });
+
+  it('shows mount directory empty message when scan is triggered with no directories', async () => {
+    mockSettingsData = {
+      mountDirectories: '',
+      deploymentSecurity: {
+        adminTrustLevel: 'host',
+        adminTrustedWithContainer: true,
+        adminTrustedWithHost: true,
+        source: 'env',
+      },
+    };
+    renderPage('/settings');
+
+    fireEvent.click(screen.getByRole('button', { name: 'scanFiles' }));
+
+    expect(await screen.findByText('mountDirectoriesEmptyError')).toBeInTheDocument();
+    expect(mockApiPost).not.toHaveBeenCalled();
+  });
+
+  it('saves the mount directories as the scan starts', async () => {
+    mockSettingsData = {
+      mountDirectories: '/a\n/b',
+      deploymentSecurity: {
+        adminTrustLevel: 'host',
+        adminTrustedWithContainer: true,
+        adminTrustedWithHost: true,
+        source: 'env',
+      },
+    };
+    renderPage('/settings');
+
+    fireEvent.click(screen.getByRole('button', { name: 'scanFiles' }));
+
+    await waitFor(() => {
+      expect(mockApiPost).toHaveBeenCalledWith(
+        '/scan-mount-directories',
+        { directories: ['/a', '/b'] },
+        { timeout: 0 }
+      );
+    });
+
+    // The save no longer waits on the scan, so the success message reports the
+    // scan alone; a failed save is appended to it instead (covered below).
+    expect(mockSaveMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ mountDirectories: '/a\n/b' }),
+      expect.anything()
+    );
+    expect(await screen.findByText('scanMountDirectoriesSuccess')).toBeInTheDocument();
+  });
+
+  it('shows warning snackbar when scan succeeds but saving settings fails', async () => {
+    mockSettingsData = {
+      mountDirectories: '/tmp/videos',
+      deploymentSecurity: {
+        adminTrustLevel: 'host',
+        adminTrustedWithContainer: true,
+        adminTrustedWithHost: true,
+        source: 'env',
+      },
+    };
+    saveShouldError = true;
+
+    renderPage('/settings');
+
+    fireEvent.click(screen.getByRole('button', { name: 'scanFiles' }));
+
+    expect(await screen.findByText('scanMountDirectoriesSuccess Warning: save failed')).toBeInTheDocument();
+  });
+
+  it('shows error snackbar when scan request fails', async () => {
+    mockSettingsData = {
+      mountDirectories: '/tmp/videos',
+      deploymentSecurity: {
+        adminTrustLevel: 'host',
+        adminTrustedWithContainer: true,
+        adminTrustedWithHost: true,
+        source: 'env',
+      },
+    };
+    mockApiPost.mockRejectedValueOnce({ response: { data: { details: 'scan failed details' } } });
+
+    renderPage('/settings');
+
+    fireEvent.click(screen.getByRole('button', { name: 'scanFiles' }));
+
+    expect(await screen.findByText('scanFilesFailed: scan failed details')).toBeInTheDocument();
+  });
+
+  it('tests TMDB credentials successfully from the integrations tab', async () => {
+    mockIsDesktop = true;
+    mockSettingsData = {
+      tmdbApiKey: 'tmdb-key',
+    };
+
+    renderPage('/settings');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'integrationsAdvanced' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Test Credential' }));
+
+    await waitFor(() => {
+      expect(mockApiPost).toHaveBeenCalledWith('/settings/tmdb/test', {
+        tmdbApiKey: 'tmdb-key',
+      });
+    });
+
+    expect(await screen.findByText('TMDB API key is valid.')).toBeInTheDocument();
+  });
+
+  it('shows TMDB credential test errors inline', async () => {
+    mockIsDesktop = true;
+    mockSettingsData = {
+      tmdbApiKey: 'bad-key',
+    };
+    mockApiPost.mockImplementation((url: string) => {
+      if (url === '/settings/tmdb/test') {
+        return Promise.reject({
+          response: {
+            data: {
+              errorKey: 'tmdbCredentialInvalid',
+              error: 'Invalid API key: You must be granted a valid key.',
+            },
+          },
+        });
+      }
+
+      return Promise.resolve({ data: { addedCount: 2, deletedCount: 1 } });
+    });
+
+    renderPage('/settings');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'integrationsAdvanced' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Test Credential' }));
+
+    expect(
+      await screen.findByText(
+        'TMDB credential is invalid. Check whether it is a valid API key or Read Access Token.'
+      )
+    ).toBeInTheDocument();
+  });
+
+  it('does not render raw TMDB server error text for unknown errors', async () => {
+    mockIsDesktop = true;
+    mockSettingsData = {
+      tmdbApiKey: 'bad-key',
+    };
+    mockApiPost.mockImplementation((url: string) => {
+      if (url === '/settings/tmdb/test') {
+        return Promise.reject({
+          response: {
+            data: {
+              error: 'Sensitive backend failure details',
+            },
+          },
+        });
+      }
+
+      return Promise.resolve({ data: { addedCount: 2, deletedCount: 1 } });
+    });
+
+    renderPage('/settings');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'integrationsAdvanced' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Test Credential' }));
+
+    expect(await screen.findByText('Failed to test TMDB credential.')).toBeInTheDocument();
+    expect(screen.queryByText('Sensitive backend failure details')).not.toBeInTheDocument();
+  });
+
+  it('hides mount directory controls unless deployment trust is host', () => {
+    renderPage('/settings');
+
+    expect(screen.queryByRole('button', { name: 'scanFiles' })).not.toBeInTheDocument();
+    expect(screen.getByText('Mount directories require host-level admin trust.')).toBeInTheDocument();
+  });
+
+  it('hides container-only features in application trust mode', () => {
+    mockSettingsData = {
+      deploymentSecurity: {
+        adminTrustLevel: 'application',
+        adminTrustedWithContainer: false,
+        adminTrustedWithHost: false,
+        source: 'env',
+      },
+    };
+
+    renderPage('/settings');
+
+    expect(screen.queryByTestId('ytdlp-settings')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('hook-settings')).not.toBeInTheDocument();
+    expect(screen.getByText('Raw yt-dlp configuration is disabled by deployment security policy in application trust mode.')).toBeInTheDocument();
+    expect(screen.getByText('Task hooks are disabled by deployment security policy in application trust mode.')).toBeInTheDocument();
+  });
+
+  it('opens deployment security details modal', () => {
+    mockSettingsData = {
+      deploymentSecurity: {
+        adminTrustLevel: 'container',
+        adminTrustedWithContainer: true,
+        adminTrustedWithHost: false,
+        source: 'env',
+      },
+    };
+
+    renderPage('/settings');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Deployment Security Details' }));
+
+    expect(screen.getByText('Deployment Security Details')).toBeInTheDocument();
+    expect(screen.getByText('Capability / Feature')).toBeInTheDocument();
+    expect(screen.getByText('Task hooks upload/delete/execute')).toBeInTheDocument();
+    expect(screen.getByText('Scan files from configured mount directories')).toBeInTheDocument();
+    expect(screen.getByText('How to configure')).toBeInTheDocument();
+    expect(screen.getByText('Docker / Docker Compose')).toBeInTheDocument();
+    expect(screen.getByText('Local source run')).toBeInTheDocument();
+    expect(screen.getByText('VIDELEUM_ADMIN_TRUST_LEVEL=application npm run dev')).toBeInTheDocument();
+  });
+
+  it('fails closed for container-only features until deployment security is loaded', () => {
+    mockSettingsData = {};
+
+    renderPage('/settings');
+
+    expect(screen.queryByTestId('ytdlp-settings')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('hook-settings')).not.toBeInTheDocument();
+    expect(screen.getByText('Deployment security policy is loading. Restricted features remain hidden until the policy is available.')).toBeInTheDocument();
+  });
+
+  it('triggers data management callbacks and modal openers', async () => {
+    renderPage('/settings');
+
+    fireEvent.click(screen.getByText('open-migrate-modal'));
+    fireEvent.click(screen.getByText('open-delete-legacy-modal'));
+    fireEvent.click(screen.getByText('open-author-cleanup-modal'));
+    fireEvent.click(screen.getByText('export-db'));
+    fireEvent.click(screen.getByText('import-db'));
+    fireEvent.click(screen.getByText('preview-merge-db'));
+    fireEvent.click(screen.getByText('merge-db'));
+    fireEvent.click(screen.getByText('cleanup-backups'));
+    fireEvent.click(screen.getByText('restore-last-backup'));
+    fireEvent.click(screen.getByText('move-subtitles'));
+    fireEvent.click(screen.getByText('move-thumbnails'));
+    fireEvent.click(screen.getByText('save-author-files'));
+    fireEvent.click(screen.getByText('tags-rename-same'));
+    fireEvent.click(screen.getByText('tags-rename-valid'));
+    fireEvent.click(screen.getByText('tags-conflict'));
+    fireEvent.click(screen.getByText('cookie-success'));
+    fireEvent.click(screen.getByText('cookie-error'));
+    fireEvent.click(screen.getByText('download-cleanup'));
+
+    expect(mockSetShowMigrateConfirmModal).toHaveBeenCalledWith(true);
+    expect(mockSetShowDeleteLegacyModal).toHaveBeenCalledWith(true);
+    expect(mockSetShowCleanupAuthorCollectionsModal).toHaveBeenCalledWith(true);
+    expect(mockExportDatabaseMutate).toHaveBeenCalled();
+    expect(mockImportDatabaseMutate).toHaveBeenCalled();
+    expect(mockPreviewMergeDatabaseMutateAsync).toHaveBeenCalled();
+    expect(mockMergeDatabaseMutate).toHaveBeenCalled();
+    expect(mockCleanupBackupDatabasesMutate).toHaveBeenCalled();
+    expect(mockRestoreFromLastBackupMutate).toHaveBeenCalled();
+    expect(mockRenameTagMutate).toHaveBeenCalledTimes(1);
+    expect(mockSetShowCleanupTempFilesModal).toHaveBeenCalledWith(true);
+  });
+
+  it('persists tag changes immediately via updateTagsMutation', async () => {
+    renderPage('/settings');
+
+    fireEvent.click(screen.getByText('tags-change'));
+
+    // Saves are serialized through a promise chain, so the PATCH fires on a
+    // microtask rather than synchronously.
+    await waitFor(() => {
+      expect(mockUpdateTagsMutate).toHaveBeenCalledWith(['a', 'b']);
+    });
+  });
+
+  it('handles sticky save button and confirmation modal confirm/close actions', async () => {
+    mockIsSticky = true;
+    modalState = {
+      showCleanupAuthorCollectionsModal: true,
+      showDeleteLegacyModal: true,
+      showMigrateConfirmModal: true,
+      showCleanupTempFilesModal: true,
+      infoModal: { isOpen: true, title: 'info-title', message: 'info-message', type: 'error' },
+    };
+
+    renderPage('/settings');
+
+    expect(screen.getByTestId('confirmation-removeLegacyDataConfirmTitle')).toBeInTheDocument();
+    expect(screen.getByTestId('confirmation-cleanupAuthorCollectionsConfirmTitle')).toBeInTheDocument();
+    expect(screen.getByTestId('confirmation-migrateDataButton')).toBeInTheDocument();
+    expect(screen.getByTestId('confirmation-cleanupTempFilesConfirmTitle')).toBeInTheDocument();
+    expect(screen.getByTestId('confirmation-info-title')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('confirm-cleanupAuthorCollectionsConfirmTitle'));
+    fireEvent.click(screen.getByText('confirm-removeLegacyDataConfirmTitle'));
+    fireEvent.click(screen.getByText('confirm-migrateDataButton'));
+    fireEvent.click(screen.getByText('confirm-cleanupTempFilesConfirmTitle'));
+    fireEvent.click(screen.getByText('close-info-title'));
+    fireEvent.click(screen.getByText('confirm-info-title'));
+
+    expect(mockCleanupAuthorCollectionsMutate).toHaveBeenCalled();
+    expect(mockDeleteLegacyMutate).toHaveBeenCalled();
+    expect(mockMigrateMutate).toHaveBeenCalled();
+    expect(mockCleanupMutate).toHaveBeenCalled();
+    expect(mockSetInfoModal).toHaveBeenCalled();
+
+    const stickySaveButton = screen.getByRole('button', { name: 'save' });
+    fireEvent.animationEnd(stickySaveButton);
+  });
+});

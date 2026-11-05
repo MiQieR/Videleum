@@ -1,0 +1,701 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useLanguage } from "../contexts/LanguageContext";
+import { Settings } from "../types";
+import { api, getApiErrorData, getApiErrorMessage } from "../utils/apiClient";
+import { generateTimestamp } from "../utils/formatUtils";
+import { GESTURE_LOGIN_STATUS_QUERY_KEY } from "../utils/gestureLogin";
+import { InfoModalState } from "./useSettingsModals";
+import { SUBSCRIPTIONS_QUERY_KEY } from "./useSubscriptions";
+
+interface UseSettingsMutationsProps {
+  setMessage: (
+    message: {
+      text: string;
+      type: "success" | "error" | "warning" | "info";
+    } | null
+  ) => void;
+  setInfoModal: (modal: InfoModalState) => void;
+}
+
+interface SaveSettingsMutationResult {
+  skipped: boolean;
+  patchPayload: Partial<Settings>;
+}
+
+type SettingsPatchInput = Settings & {
+  authenticatedRole?: string;
+};
+
+interface MigrationCategoryResult {
+  found: boolean;
+  count: number;
+  path: string;
+}
+
+interface MigrationResults {
+  warnings?: string[];
+  errors?: string[];
+  videos?: MigrationCategoryResult;
+  collections?: MigrationCategoryResult;
+  settings?: MigrationCategoryResult;
+  downloads?: MigrationCategoryResult;
+}
+
+interface CleanupAuthorCollectionsResults {
+  scannedCollections: number;
+  matchedAuthorCollections: number;
+  removedMemberships: number;
+  affectedVideos: number;
+  deletedCollections: string[];
+  skippedCollections: string[];
+  details: string[];
+}
+
+export interface MergePreviewSummary {
+  videos: { merged: number; skipped: number };
+  collections: { merged: number; skipped: number };
+  collectionLinks: { merged: number; skipped: number };
+  subscriptions: { merged: number; skipped: number };
+  downloadHistory: { merged: number; skipped: number };
+  videoDownloads: { merged: number; skipped: number };
+  tags: { merged: number; skipped: number };
+  favoriteCollections?: { merged: number; skipped: number };
+  favoriteAuthors?: { merged: number; skipped: number };
+}
+
+const areSettingValuesEqual = (a: unknown, b: unknown): boolean => {
+  if (a === b) {
+    return true;
+  }
+
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+
+  if (
+    typeof a === "object" &&
+    a !== null &&
+    typeof b === "object" &&
+    b !== null
+  ) {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+
+  return false;
+};
+
+const normalizeSettingsPatchInput = (
+  newSettings: SettingsPatchInput,
+): Partial<Settings> => {
+  const {
+    password,
+    visitorPassword,
+    isPasswordSet: _isPasswordSet,
+    isVisitorPasswordSet: _isVisitorPasswordSet,
+    deploymentSecurity: _deploymentSecurity,
+    authenticatedRole: _authenticatedRole,
+    ...rest
+  } = newSettings;
+  const normalized: Partial<Settings> = { ...rest };
+
+  // Empty password means unchanged in current UI behavior.
+  if (password) {
+    normalized.password = password;
+  }
+  if (visitorPassword) {
+    normalized.visitorPassword = visitorPassword;
+  }
+
+  const normalizedEntries = Object.entries(normalized) as Array<
+    [keyof Settings, Settings[keyof Settings] | undefined]
+  >;
+
+  return Object.fromEntries(
+    normalizedEntries.flatMap(([key, value]) =>
+      typeof value === "undefined" ? [] : ([[key, value]] as const),
+    ),
+  ) as Partial<Settings>;
+};
+
+const buildSettingsPatchPayload = (
+  newSettings: SettingsPatchInput,
+  currentSettings?: Settings,
+): Partial<Settings> => {
+  if (!currentSettings) {
+    return {};
+  }
+
+  const normalized = normalizeSettingsPatchInput(newSettings);
+  const currentValues = new Map(
+    Object.entries(currentSettings) as Array<[string, unknown]>,
+  );
+
+  return Object.fromEntries(
+    (Object.entries(normalized) as Array<[string, unknown]>).filter(
+      ([key, value]) => !areSettingValuesEqual(value, currentValues.get(key)),
+    ),
+  ) as Partial<Settings>;
+};
+
+const hasLiveTranslationSettingsChange = (settings: Partial<Settings>): boolean =>
+  Object.keys(settings).some((key) => key.startsWith("liveTranslation"));
+
+/**
+ * Custom hook to manage all settings-related API mutations
+ */
+export function useSettingsMutations({
+  setMessage,
+  setInfoModal,
+}: UseSettingsMutationsProps) {
+  const { t } = useLanguage();
+  const queryClient = useQueryClient();
+
+  const invalidateDatabaseQueries = () => {
+    void queryClient.invalidateQueries({ queryKey: ["settings"] });
+    void queryClient.invalidateQueries({ queryKey: ["videos"] });
+    void queryClient.invalidateQueries({ queryKey: ["collections"] });
+    void queryClient.invalidateQueries({ queryKey: SUBSCRIPTIONS_QUERY_KEY });
+    void queryClient.invalidateQueries({ queryKey: ["subscriptionTasks"] });
+    void queryClient.invalidateQueries({ queryKey: ["downloadHistory"] });
+  };
+
+  const formatErrorText = (fallback: string, detail?: string) =>
+    detail ? `${fallback}: ${detail}` : fallback;
+
+  // Save settings mutation
+  const saveMutation = useMutation({
+    mutationFn: async (newSettings: Settings): Promise<SaveSettingsMutationResult> => {
+      let currentSettings = queryClient.getQueryData<Settings>(["settings"]);
+      if (!currentSettings) {
+        const latestSettings = await api.get("/settings");
+        currentSettings = latestSettings.data as Settings;
+        queryClient.setQueryData(["settings"], currentSettings);
+      }
+
+      const patchPayload = buildSettingsPatchPayload(newSettings, currentSettings);
+
+      if (Object.keys(patchPayload).length === 0) {
+        return {
+          skipped: true,
+          patchPayload,
+        };
+      }
+
+      await api.patch("/settings", patchPayload);
+
+      return {
+        skipped: false,
+        patchPayload,
+      };
+    },
+    onSuccess: (result, newSettings) => {
+      setMessage({ text: t("settingsSaved"), type: "success" });
+      const liveTranslationSettingsChanged = hasLiveTranslationSettingsChange(
+        result.patchPayload
+      );
+
+      // The Gemini key is a hidden secret and must never sit in the React Query
+      // settings cache, even transiently. Strip it from both the patch merge and
+      // the no-cache fallback; the invalidate/refetch below re-fetches the safe,
+      // key-free payload.
+      const { liveTranslationApiKey: _changedApiKey, ...changedSettings } =
+        result.patchPayload;
+      const { liveTranslationApiKey: _submittedApiKey, ...safeNewSettings } =
+        newSettings;
+      // Update settings cache immediately so Header and other consumers react without waiting for refetch
+      queryClient.setQueryData(["settings"], (old: Settings | undefined) =>
+        old ? { ...old, ...changedSettings } : ({ ...safeNewSettings } as Settings)
+      );
+      // Skip refetch when no fields changed.
+      if (!result.skipped) {
+        void queryClient.invalidateQueries({ queryKey: ["settings"] });
+      }
+      if (liveTranslationSettingsChanged) {
+        void queryClient.invalidateQueries({ queryKey: ["liveTranslationConfig"] });
+      }
+      if (changedSettings.tags !== undefined) {
+        void queryClient.invalidateQueries({ queryKey: ["videos"] });
+      }
+      // Gesture Login availability is derived server-side from the persisted
+      // loginEnabled and passwordLoginAllowed. Saving either changes the
+      // answer, and without this the Security page keeps showing the status it
+      // fetched on mount - so the toggle stays disabled telling the admin to
+      // save settings they just saved, until a reload or window refocus.
+      if (
+        changedSettings.loginEnabled !== undefined ||
+        changedSettings.passwordLoginAllowed !== undefined
+      ) {
+        void queryClient.invalidateQueries({
+          queryKey: GESTURE_LOGIN_STATUS_QUERY_KEY,
+        });
+      }
+    },
+    onError: async (error: unknown) => {
+      const msg = await getApiErrorMessage(error, t);
+      setMessage({
+        text: typeof msg === "string" && msg ? msg : t("settingsFailed"),
+        type: "error",
+      });
+    },
+  });
+
+  // Migrate data mutation
+  const migrateMutation = useMutation({
+    mutationFn: async () => {
+      const res = await api.post("/settings/migrate");
+      return res.data.results;
+    },
+    onSuccess: (results: MigrationResults) => {
+      const warnings = results.warnings ?? [];
+      const errors = results.errors ?? [];
+      const hasErrors = errors.length > 0;
+      const categoryResults: Array<[string, MigrationCategoryResult | undefined]> = [
+        ["videos", results.videos],
+        ["collections", results.collections],
+        ["settings", results.settings],
+        ["downloads", results.downloads],
+      ];
+      const hasData = categoryResults.some(([, data]) => Boolean(data?.found));
+      let msg = `${t("migrationReport")}:\n`;
+
+      if (warnings.length > 0) {
+        msg += `\n⚠️ ${t("migrationWarnings")}:\n${warnings.join(
+          "\n"
+        )}\n`;
+      }
+
+      const appendCategoryResult = (
+        category: string,
+        data?: MigrationCategoryResult,
+      ) => {
+        if (data) {
+          if (data.found) {
+            msg += `\n✅ ${category}: ${data.count} ${t("itemsMigrated")}`;
+          } else {
+            msg += `\n❌ ${category}: ${t("fileNotFound")} ${data.path}`;
+          }
+        }
+      };
+
+      categoryResults.forEach(([category, data]) => {
+        appendCategoryResult(category, data);
+      });
+
+      if (hasErrors) {
+        msg += `\n\n⛔ ${t("migrationErrors")}:\n${errors.join("\n")}`;
+      } else if (!hasData) {
+        msg += `\n\n⚠️ ${t("noDataFilesFound")}`;
+      }
+
+      setInfoModal({
+        isOpen: true,
+        title: hasData ? t("migrationResults") : t("migrationNoData"),
+        message: msg,
+        type: hasData ? "success" : "warning",
+      });
+    },
+    onError: async (error: unknown) => {
+      const detail = await getApiErrorMessage(error, t);
+      setInfoModal({
+        isOpen: true,
+        title: t("error"),
+        message: formatErrorText(t("migrationFailed"), detail),
+        type: "error",
+      });
+    },
+  });
+
+  // Cleanup temp files mutation
+  const cleanupMutation = useMutation({
+    mutationFn: async () => {
+      const res = await api.post("/cleanup-temp-files");
+      return res.data;
+    },
+    onSuccess: (data) => {
+      const { deletedCount, errors } = data;
+      let msg = t("cleanupTempFilesSuccess").replace(
+        "{count}",
+        deletedCount.toString()
+      );
+      if (errors && errors.length > 0) {
+        msg += `\n\nErrors:\n${errors.join("\n")}`;
+      }
+
+      setInfoModal({
+        isOpen: true,
+        title: t("success"),
+        message: msg,
+        type: errors && errors.length > 0 ? "warning" : "success",
+      });
+    },
+    onError: async (error: unknown) => {
+      const errorData = await getApiErrorData(error);
+      const errorMsg =
+        errorData?.error ===
+        "Cannot clean up while downloads are active"
+          ? t("cleanupTempFilesActiveDownloads")
+          : formatErrorText(
+              t("cleanupTempFilesFailed"),
+              await getApiErrorMessage(error, t)
+            );
+
+      setInfoModal({
+        isOpen: true,
+        title: t("error"),
+        message: errorMsg,
+        type: "error",
+      });
+    },
+  });
+
+  // Delete legacy data mutation
+  const deleteLegacyMutation = useMutation({
+    mutationFn: async () => {
+      const res = await api.post("/settings/delete-legacy");
+      return res.data.results;
+    },
+    onSuccess: (results) => {
+      let msg = `${t("legacyDataDeleted")}\n`;
+      if (results.deleted.length > 0) {
+        msg += `\nDeleted: ${results.deleted.join(", ")}`;
+      }
+      if (results.failed.length > 0) {
+        msg += `\nFailed: ${results.failed.join(", ")}`;
+      }
+
+      setInfoModal({
+        isOpen: true,
+        title: t("success"),
+        message: msg,
+        type: "success",
+      });
+    },
+    onError: async (error: unknown) => {
+      const detail = await getApiErrorMessage(error, t);
+      setInfoModal({
+        isOpen: true,
+        title: t("error"),
+        message: formatErrorText(t("legacyDataDeleteFailed"), detail),
+        type: "error",
+      });
+    },
+  });
+
+
+  const cleanupAuthorCollectionsMutation = useMutation({
+    mutationFn: async () => {
+      const res = await api.post("/settings/cleanup-author-collections");
+      return res.data.results as CleanupAuthorCollectionsResults;
+    },
+    onSuccess: (results) => {
+      const deletedCount = results.deletedCollections.length;
+      const baseMessage =
+        results.removedMemberships > 0
+          ? t("cleanupAuthorCollectionsSuccess")
+              .replace("{links}", results.removedMemberships.toString())
+              .replace("{videos}", results.affectedVideos.toString())
+              .replace("{collections}", deletedCount.toString())
+          : t("cleanupAuthorCollectionsNothingToDo");
+
+      const details =
+        results.details.length > 0 ? `\n\n${results.details.join("\n")}` : "";
+
+      setInfoModal({
+        isOpen: true,
+        title: results.removedMemberships > 0 ? t("success") : t("info"),
+        message: `${baseMessage}${details}`,
+        type: results.removedMemberships > 0 ? "success" : "info",
+      });
+      invalidateDatabaseQueries();
+    },
+    onError: async (error: unknown) => {
+      const detail = await getApiErrorMessage(error, t);
+      setInfoModal({
+        isOpen: true,
+        title: t("error"),
+        message: formatErrorText(t("cleanupAuthorCollectionsFailed"), detail),
+        type: "error",
+      });
+    },
+  });
+
+  // Export database mutation
+  const exportDatabaseMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.get("/settings/export-database", {
+        responseType: "blob",
+      });
+      return response;
+    },
+    onSuccess: (response) => {
+      // Create a blob URL and trigger download
+      const blob = new Blob([response.data], {
+        type: "application/octet-stream",
+      });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+
+      // Generate filename with timestamp using helper (same format as backend)
+      const timestamp = generateTimestamp();
+      const filename = `videleum-backup-${timestamp}.db`;
+
+      link.setAttribute("download", filename);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+
+      setMessage({ text: t("databaseExportedSuccess"), type: "success" });
+    },
+    onError: async (error: unknown) => {
+      const errorDetails = await getApiErrorMessage(error, t);
+      setMessage({
+        text: formatErrorText(t("databaseExportFailed"), errorDetails),
+        type: "error",
+      });
+    },
+  });
+
+  // Import database mutation
+  const importDatabaseMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      const response = await api.post(
+        "/settings/import-database",
+        formData,
+        {
+          headers: {
+            "Content-Type": "multipart/form-data",
+          },
+        }
+      );
+      return response.data;
+    },
+    onSuccess: () => {
+      setInfoModal({
+        isOpen: true,
+        title: t("success"),
+        message: t("databaseImportedSuccess"),
+        type: "success",
+      });
+    },
+    onError: async (error: unknown) => {
+      const errorDetails = await getApiErrorMessage(error, t);
+      setInfoModal({
+        isOpen: true,
+        title: t("error"),
+        message: formatErrorText(t("databaseImportFailed"), errorDetails),
+        type: "error",
+      });
+    },
+  });
+
+  // Merge database mutation
+  const previewMergeDatabaseMutation = useMutation({
+    mutationFn: async (file: File): Promise<MergePreviewSummary> => {
+      const formData = new FormData();
+      formData.append("file", file);
+      const response = await api.post(
+        "/settings/merge-database-preview",
+        formData,
+        {
+          headers: {
+            "Content-Type": "multipart/form-data",
+          },
+        }
+      );
+      return response.data.summary;
+    },
+  });
+
+  // Merge database mutation
+  const mergeDatabaseMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      const response = await api.post(
+        "/settings/merge-database",
+        formData,
+        {
+          headers: {
+            "Content-Type": "multipart/form-data",
+          },
+        }
+      );
+      return response.data;
+    },
+    onSuccess: () => {
+      setInfoModal({
+        isOpen: true,
+        title: t("success"),
+        message: t("databaseMergedSuccess"),
+        type: "success",
+      });
+      invalidateDatabaseQueries();
+      void refetchLastBackupInfo();
+    },
+    onError: async (error: unknown) => {
+      const errorDetails = await getApiErrorMessage(error, t);
+      setInfoModal({
+        isOpen: true,
+        title: t("error"),
+        message: formatErrorText(t("databaseMergeFailed"), errorDetails),
+        type: "error",
+      });
+    },
+  });
+
+  // Cleanup backup databases mutation
+  const cleanupBackupDatabasesMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.post("/settings/cleanup-backup-databases");
+      return response.data;
+    },
+    onSuccess: (data) => {
+      setMessage({
+        text: data.message || t("backupDatabasesCleanedUp"),
+        type: "success",
+      });
+    },
+    onError: async (error: unknown) => {
+      const errorDetails = await getApiErrorMessage(error, t);
+      setMessage({
+        text: formatErrorText(t("backupDatabasesCleanupFailed"), errorDetails),
+        type: "error",
+      });
+    },
+  });
+
+  // Get last backup info query
+  const { data: lastBackupInfo, refetch: refetchLastBackupInfo } = useQuery({
+    queryKey: ["lastBackupInfo"],
+    queryFn: async () => {
+      const response = await api.get("/settings/last-backup-info");
+      return response.data;
+    },
+    refetchInterval: 60000, // Refetch every 60 seconds (reduced frequency)
+    staleTime: 30000, // Consider data fresh for 30 seconds
+    gcTime: 10 * 60 * 1000, // Garbage collect after 10 minutes
+  });
+
+  // Restore from last backup mutation
+  const restoreFromLastBackupMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.post("/settings/restore-from-last-backup");
+      return response.data;
+    },
+    onSuccess: () => {
+      setInfoModal({
+        isOpen: true,
+        title: t("success"),
+        message: t("restoreFromLastBackupSuccess"),
+        type: "success",
+      });
+      // Refetch last backup info after restore
+      void refetchLastBackupInfo();
+    },
+    onError: async (error: unknown) => {
+      const errorDetails = await getApiErrorMessage(error, t);
+      setInfoModal({
+        isOpen: true,
+        title: t("error"),
+        message: formatErrorText(t("restoreFromLastBackupFailed"), errorDetails),
+        type: "error",
+      });
+    },
+  });
+
+  // Rename tag mutation
+  const renameTagMutation = useMutation({
+    mutationFn: async ({
+      oldTag,
+      newTag,
+    }: {
+      oldTag: string;
+      newTag: string;
+    }) => {
+      await api.post("/settings/tags/rename", { oldTag, newTag });
+      return { oldTag, newTag };
+    },
+    onSuccess: () => {
+      setMessage({
+        text: t("tagRenamedSuccess") || "Tag renamed successfully",
+        type: "success",
+      });
+      void queryClient.invalidateQueries({ queryKey: ["settings"] });
+      void queryClient.invalidateQueries({ queryKey: ["videos"] });
+    },
+    onError: async (error: unknown) => {
+      const apiMsg = await getApiErrorMessage(error, t);
+      const text =
+        typeof apiMsg === "string" && apiMsg
+          ? apiMsg
+          : t("tagRenameFailed") || "Failed to rename tag";
+      setMessage({ text, type: "error" });
+    },
+  });
+
+  // Persist a tags-only change immediately (used by Tags Management add/delete).
+  // PATCHes just the `tags` field so it never flushes other half-edited settings.
+  const updateTagsMutation = useMutation({
+    mutationFn: async (tags: string[]) => {
+      await api.patch("/settings", { tags });
+      return tags;
+    },
+    onSuccess: (tags) => {
+      setMessage({ text: t("settingsSaved"), type: "success" });
+      // `tags` is the authoritative full list the caller just saved, so update
+      // the cache directly instead of invalidating. A refetch would change the
+      // `["settings"]` reference and make SettingsPage re-hydrate the whole form,
+      // clobbering any unsaved edits to other fields.
+      queryClient.setQueryData(["settings"], (old: Settings | undefined) =>
+        old ? { ...old, tags } : old
+      );
+      void queryClient.invalidateQueries({ queryKey: ["videos"] });
+    },
+    onError: async (error: unknown) => {
+      const apiMsg = await getApiErrorMessage(error, t);
+      setMessage({
+        text: typeof apiMsg === "string" && apiMsg ? apiMsg : t("settingsFailed"),
+        type: "error",
+      });
+      // The caller optimistically updated local settings; refetch so the form
+      // reverts to server truth instead of showing tags that never persisted.
+      void queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+
+  // Computed isSaving state
+  const isSaving =
+    saveMutation.isPending ||
+    updateTagsMutation.isPending ||
+    migrateMutation.isPending ||
+    cleanupMutation.isPending ||
+    cleanupAuthorCollectionsMutation.isPending ||
+    deleteLegacyMutation.isPending ||
+    exportDatabaseMutation.isPending ||
+    importDatabaseMutation.isPending ||
+    mergeDatabaseMutation.isPending ||
+    cleanupBackupDatabasesMutation.isPending ||
+    restoreFromLastBackupMutation.isPending;
+
+  return {
+    saveMutation,
+    migrateMutation,
+    cleanupMutation,
+    cleanupAuthorCollectionsMutation,
+    deleteLegacyMutation,
+    exportDatabaseMutation,
+    importDatabaseMutation,
+    previewMergeDatabaseMutation,
+    mergeDatabaseMutation,
+    cleanupBackupDatabasesMutation,
+    restoreFromLastBackupMutation,
+    renameTagMutation,
+    updateTagsMutation,
+    lastBackupInfo,
+    isSaving,
+  };
+}

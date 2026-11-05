@@ -1,0 +1,374 @@
+# API 端点
+
+除特殊说明外，所有 API 路由均挂载在 `/api` 下。
+
+## 认证与访问说明
+
+- 浏览器认证使用 HTTP-only Cookie，其中保存不透明的服务端会话 ID。不支持 Bearer JWT。
+- 启用密码登录后，未认证用户只能访问与登录相关的公开端点。
+- 访客角色对大多数资源仅有只读权限。
+- 当 `apiKeyEnabled` 为 true 时，支持通过 `X-API-Key` 或 `Authorization: ApiKey <key>` 进行 API Key 认证。
+- API Key 认证允许访问 `POST /api/download`，以及一组最小只读媒体库接口：
+  - `GET /api/videos`
+  - `GET /api/videos/:id`
+  - `GET /api/mount-video/:id`
+  - `GET /api/collections`
+  - `GET /api/system/version`
+  - 其它使用 API Key 的接口仍会返回 `403`。
+
+## 视频下载与搜索
+
+- `GET /api/search` - 在线搜索视频 (默认 `source=youtube`，也可用 `source=bilibili`)
+  - 查询参数: `query` (必需), `limit` (可选, 默认: `8`), `offset` (可选, 默认: `1`)
+- `POST /api/download` - 添加视频下载任务
+  - 请求体: `{ youtubeUrl: string, downloadAllParts?: boolean, collectionName?: string, downloadCollection?: boolean, collectionInfo?: object, forceDownload?: boolean }`
+  - 认证: 支持会话 Cookie，或 API Key (`X-API-Key` / `Authorization: ApiKey <key>`)
+  - 支持: YouTube、Bilibili、Twitch VOD、MissAV 以及其他 yt-dlp 支持的网站
+- `GET /api/check-video-download` - 检查源 URL 是否已被下载过
+  - 查询参数: `url` (必需)
+- `GET /api/check-bilibili-parts` - 检查 Bilibili 视频是否有多个分P
+  - 查询参数: `url` (必需)
+- `GET /api/check-bilibili-collection` - 检查 Bilibili URL 是否为合集/系列
+  - 查询参数: `url` (必需)
+- `GET /api/check-playlist` - 检查 URL 是否为播放列表 (支持 YouTube/Bilibili)
+  - 查询参数: `url` (必需)
+- `GET /api/download-status` - 获取正在进行和排队的下载任务
+
+## 视频管理
+
+### 批量整理
+
+两个接口沿用 CSRF Cookie/请求头防护。开启登录时要求管理员权限；关闭登录时可用。访客及 API Key 调用者均不可使用。
+
+- `POST /api/videos/batch/tags`
+  - 请求：`{ videoIds: string[], tags: string[] }`
+  - 在一个事务中追加标签并补充全局标签目录，保留每个视频的旧标签。按大小写不敏感匹配；新追加标签使用目录中的拼写，视频原有拼写保持不变。
+  - 上限：原始数组 1–500 个视频 ID、1–20 个标签；标签去除首尾空白后最多 80 个 Unicode 字符。ID 为非空、无首尾空白、最多 200 个 UTF-16 代码单元的字符串。重复 ID/标签只处理一次。
+  - `200`：`{ success: true, data: { requestedCount, changedVideoIds, unchangedVideoIds, catalogChanged, videos: [{ id, tags }] } }`
+- `POST /api/collections/batch-add`
+  - 加入现有合集：`{ videoIds: string[], collectionId: string }`
+  - 原子新建并加入：`{ videoIds: string[], newCollection: { id: string, name: string } }`
+  - 两种目标只能指定一种；新 ID 必须为 UUID v4，同一创建草稿重试必须复用原 ID。名称去除首尾空白后为 1–200 个 Unicode 字符，禁止文件系统保留字符/控制字符及末尾句点。拒绝 Windows 设备保留名（包括 `CON.txt` 等带扩展名的形式），名称及 title 的冲突检查忽略大小写。
+  - 仅按请求顺序追加缺失成员，保留现有顺序、其他合集归属和所有视频路径，不移动文件。
+  - `200`：`{ success: true, data: { requestedCount, changedVideoIds, unchangedVideoIds, collection: { id, name, created } } }`
+
+校验失败返回 `400`；任一视频或目标合集不存在返回 `404`；已存标签损坏、新名称冲突或创建 ID 身份不匹配返回 `409`。预期错误包含 `{ success: false, error, type, details }`，details 可包含 `missingVideoIds`、`invalidVideoIds` 或 `existingCollectionId`。标签损坏错误会一次返回全部损坏的所选视频 ID。弹窗显示数量，可在保留标签草稿的同时从本次请求排除这些视频。数据库异常返回 `500`。一个请求中的数据库修改整体回滚，不返回部分成功。新名称冲突须明确选择已有合集；旧单视频创建接口的同名合并行为保持不变。
+
+在目标未被并发更改时可以安全重复追加；网络超时不表示事务已回滚。两次请求间合集被改名/删除时，重试可能返回冲突或未找到。标签提交后尽力更新媒体元数据文件，逐条跳过损坏记录，仅在 TV 节目聚合时加载全库。单视频导出与重建使用相同的记录校验，孤立文件清理依据包括损坏记录在内的全部视频路径；导出失败或重启不撤销数据库结果。保存成功而后续列表刷新失败时，应提示已保存并允许刷新。
+
+- `POST /api/upload` - 上传单个本地视频文件
+  - 多部分表单数据: `video` (必需), `title` (可选), `author` (可选)
+  - 说明:
+    - 服务端会在接收后校验内容是否为受支持的视频。
+    - 重复内容会按内容哈希跳过，不会重复入库。
+- `POST /api/upload/batch` - 在一个请求中批量上传多个本地视频文件
+  - 多部分表单数据: `videos` (一个或多个，必需), `title` (可选，仅在只上传 1 个文件时使用), `author` (可选)
+  - 响应数据结构: `{ results: Array<{ originalName, status, message, video? }>, summary: { total, uploaded, duplicates, failed } }`
+  - 说明:
+    - 适用于多文件选择和文件夹上传。
+    - 文件夹上传只导入受支持的视频文件，不保留子目录结构。
+    - 重复内容会按内容哈希跳过。
+- `GET /api/videos` - 获取所有视频 (当前实现无服务器端分页/过滤)
+  - 认证: 支持会话 Cookie，或 API Key (`X-API-Key` / `Authorization: ApiKey <key>`)
+- `GET /api/videos/:id` -通过 ID 获取单个视频
+  - 认证: 支持会话 Cookie，或 API Key (`X-API-Key` / `Authorization: ApiKey <key>`)
+- `GET /api/mount-video/:id` - 通过视频 ID 流式传输挂载目录视频 (支持 Range)
+  - 认证: 支持会话 Cookie，或 API Key (`X-API-Key` / `Authorization: ApiKey <key>`)
+- `PUT /api/videos/:id` - 更新视频元数据
+  - 请求体允许: `{ title?, tags?, visibility?, subtitles? }`
+  - 如提供 `subtitles`，必须为对象数组，每项至少包含字符串 `path` 或 `filename`；这两个字段如为非 null 值，必须是字符串。非法输入在保存任何字段前返回 `400`，`[]` 用于清空字幕。写入与已存记录读取复用同一校验规则。
+  - 如提供 `tags`，必须为字符串数组（`[]` 用于清空标签）。非数组或包含非字符串元素的请求在保存任何字段前返回 `400`。历史混合类型数组仍可读取：响应仅包含字符串标签，不改写数据库原值；可提交合法标签数组修复。
+- `POST /api/videos/:id/subtitles` - 为视频上传字幕文件
+  - 多部分表单数据: `subtitle` (必需), `language` (可选)
+  - 支持的上传格式: `.vtt`, `.srt`, `.ass`, `.ssa`
+- `DELETE /api/videos/:id` - 删除视频记录及相关文件
+- `GET /api/videos/:id/comments` - 获取视频评论 (如可用)
+- `POST /api/videos/:id/rate` - 评价视频
+  - 请求体: `{ rating: number }` 其中 `1 <= rating <= 5`
+- `POST /api/videos/:id/refresh-thumbnail` - 刷新缩略图
+  - 当本地可访问视频文件时，从本地视频的随机帧重新生成缩略图
+  - 当无法解析本地视频文件时，回退为从源 URL 重新下载原始远程缩略图
+- `POST /api/videos/:id/redownload-thumbnail` - 从源 URL 重新下载原始远程缩略图
+- `POST /api/videos/:id/view` - 增加观看次数
+- `PUT /api/videos/:id/progress` - 保存播放进度
+  - 请求体: `{ progress: number }`
+- `GET /api/videos/author-channel-url` - 解析源 URL 中的频道/作者 URL
+  - 查询参数: `sourceUrl` (必需)
+  - 支持: YouTube、Bilibili 和 Twitch 源 URL
+
+## 下载队列与历史
+
+- `POST /api/downloads/channel-playlists` - 一次性流程: 下载频道中的所有播放列表
+  - 请求体: `{ url: string }`
+- `POST /api/downloads/cancel/:id` - 取消正在进行的下载
+- `DELETE /api/downloads/queue/:id` - 移除排队的下载
+- `DELETE /api/downloads/queue` - 清空下载队列
+- `GET /api/downloads/history` - 获取下载历史
+- `DELETE /api/downloads/history/:id` - 删除一条历史记录
+- `DELETE /api/downloads/history` - 清空下载历史
+
+## 收藏夹
+
+- `GET /api/collections` - 获取所有收藏夹
+  - 认证: 支持会话 Cookie，或 API Key (`X-API-Key` / `Authorization: ApiKey <key>`)
+- `POST /api/collections` - 创建收藏夹
+  - 请求体: `{ name: string, videoId?: string }`
+- `PUT /api/collections/:id` - 更新收藏夹
+  - 请求体: `{ name?: string, videoId?: string, action?: "add" | "remove" }`
+- `DELETE /api/collections/empty` - 删除所有不含视频的收藏夹
+  - 由服务端判定哪些收藏夹为空, 不接受请求体或查询参数
+  - 响应: `{ success: true, deletedCount: number, deletedCollections: [{ id, name }] }`
+  - 注册在 `DELETE /api/collections/:id` 之前, 因此 `empty` 不会被当作收藏夹 id
+- `DELETE /api/collections/:id` - 删除收藏夹
+  - 查询参数: `deleteVideos=true` (可选, 同时删除收藏夹内的视频)
+
+## 订阅
+
+- `GET /api/subscriptions` - 获取所有订阅
+- `POST /api/subscriptions` - 创建订阅
+  - 请求体: `{ url: string, interval: number, authorName?: string, downloadAllPrevious?: boolean, downloadShorts?: boolean, downloadOrder?: 'dateDesc' | 'dateAsc' | 'viewsDesc' | 'viewsAsc' }`
+  - `downloadOrder` 仅在 `downloadAllPrevious` 为 `true` 时生效，默认值为 `dateDesc`
+  - 接受: YouTube 频道 URL、Bilibili 空间 URL 和 Twitch 频道 URL
+  - Twitch 说明:
+    - `downloadShorts` 会被忽略，并以禁用状态保存
+    - 新的 Twitch 订阅只会轮询已发布的 VOD（`archive` 和 `upload`），不包含直播流
+    - `twitchClientId` 和 `twitchClientSecret` 是可选的；缺失时后端会回退到 yt-dlp 轮询的尽力模式
+    - 配置 Twitch 应用凭据后，频道识别与轮询稳定性会更好
+- `PUT /api/subscriptions/:id` - 更新订阅
+  - 请求体: `{ interval?: number, retentionDays?: number | null }`
+  - 至少需要提供一个字段；同时提供两个字段时，后端会在一次数据库更新中写入
+  - `interval` 必须是正整数，单位为分钟
+  - `retentionDays` 必须是正整数；传 `null` 或空字符串可关闭自动删除
+  - 自动删除只会清理该订阅下载且已过期的视频；如果同一本地视频仍被其他成功下载历史引用，则不会删除
+- `PUT /api/subscriptions/:id/pause` - 暂停订阅
+- `PUT /api/subscriptions/:id/resume` - 恢复订阅
+- `DELETE /api/subscriptions/:id` - 删除订阅
+- `POST /api/subscriptions/playlist` - 创建播放列表订阅
+  - 请求体: `{ playlistUrl: string, interval: number, collectionName: string, downloadAll?: boolean, collectionInfo?: object }`
+- `POST /api/subscriptions/channel-playlists` - 订阅频道的所有播放列表并创建监视器
+  - 请求体: `{ url: string, interval: number, downloadAllPrevious?: boolean }`
+
+## 持续下载任务
+
+- `GET /api/subscriptions/tasks` - 获取所有持续下载任务
+- `POST /api/subscriptions/tasks/playlist` - 创建单个播放列表持续任务
+  - 请求体: `{ playlistUrl: string, collectionName: string }`
+- `PUT /api/subscriptions/tasks/:id/pause` - 暂停任务
+- `PUT /api/subscriptions/tasks/:id/resume` - 恢复任务
+- `DELETE /api/subscriptions/tasks/:id` - 取消任务
+- `DELETE /api/subscriptions/tasks/:id/delete` - 删除任务记录
+- `DELETE /api/subscriptions/tasks/clear-finished` - 清除已完成的任务
+
+## RSS 订阅
+
+- RSS 管理端点要求管理员会话。API Key 认证访问这些端点会被拒绝。
+- 管理端点响应会返回 `Cache-Control: no-store`，因为 token ID 和 `feedUrl` 都是 bearer secret。
+- `GET /api/rss/tokens` - 获取 RSS 订阅 token 列表
+  - 响应中每个 token 都包含 `feedUrl`
+- `POST /api/rss/tokens` - 创建 RSS 订阅 token
+  - 请求体: `{ label: string, role: "admin" | "visitor", filters?: RssFilters }`
+- `PUT /api/rss/tokens/:id` - 更新 token 备注名、过滤条件或启停状态
+  - 请求体: `{ label?: string, filters?: RssFilters, isActive?: boolean }`
+- `DELETE /api/rss/tokens/:id` - 删除 RSS 订阅 token
+- `POST /api/rss/tokens/:id/reset` - 轮换订阅链接，同时保留备注名、角色、过滤条件和启停状态
+- `RssFilters`: `{ authors?: string[], channelUrls?: string[], tags?: string[], sources?: string[], dayRange?: number, maxItems?: number }`
+  - 支持的 `sources`: `youtube`, `bilibili`, `twitch`, `local`, `missav`, `cloud`
+  - `sources` 为空或缺失表示不限制来源，也会包含未来新增或未知的来源值
+  - `maxItems` 接受 `1` 到 `200`；设置页 UI 使用更适合常规操作的 `10` 到 `200` 滑块
+
+## 设置
+
+- `GET /api/settings` - 获取应用设置 (不包含密码哈希)
+  - 响应可能包含服务配置；当关闭登录保护时，未登录客户端也会看到这些字段
+  - 启用登录保护后，访客和未认证请求不会返回 `apiKey`、`openListToken`、`cloudflaredToken`、`telegramBotToken`、`twitchClientId`、`twitchClientSecret` 等敏感字段
+  - Gemini 实时翻译密钥 (`liveTranslationApiKey`) 绝不会返回给任何客户端（包括管理员）；响应改为提供派生的布尔字段 `liveTranslationApiKeyConfigured`（仅管理员/关闭登录时可见）
+- `PATCH /api/settings` - 部分更新设置
+  - 请求体: 部分设置对象
+  - 支持 `apiKeyEnabled?: boolean` 和 `apiKey?: string`
+  - 支持 `twitchClientId?: string` 和 `twitchClientSecret?: string`
+  - 当 `apiKeyEnabled` 设为 `true` 且 `apiKey` 为空/缺失时，服务端会自动生成 64 位十六进制密钥
+  - 支持实时翻译字段：`liveTranslationEnabled?: boolean`、`liveTranslationModel?: string`、`liveTranslationApiKey?: string`、`liveTranslationSourceLanguage?: string`（`"auto"` 或 BCP-47）、`liveTranslationTargetLanguage?: string`（BCP-47，不能为 `"auto"`）
+    - 启用该功能需要已保存或本次提交的 API 密钥、有效的模型以及目标语言
+    - 提交 `liveTranslationApiKey: ""` 可清除已保存的密钥；省略该字段则保持现有密钥不变
+- `POST /api/settings/migrate` - 将旧版 JSON 数据迁移至 SQLite
+- `POST /api/settings/delete-legacy` - 删除旧版 JSON 数据文件
+- `GET /api/settings/cloudflared/status` - 获取 Cloudflared 隧道状态
+- `POST /api/settings/tags/rename` - 重命名标签
+  - 请求体: `{ oldTag: string, newTag: string }`
+- `POST /api/settings/telegram/test` - 发送 Telegram 测试通知
+  - 请求体: `{ botToken: string, chatId: string }`
+- `GET /api/settings/ytdlp/version` - 返回后端实际使用的 yt-dlp 版本以及 PyPI 上的最新版本
+  - 默认只探测本地可执行文件，不会连接 PyPI
+  - 查询参数: `checkLatest=true` 时才会显式查询 PyPI 最新版本
+  - 响应 `data`: `{ version, path, available, isStale, staleAfterDays, latestVersion, updateAvailable, updateSupported, customPathConfigured, errorMessage? }`
+  - 未请求查询或 PyPI 不可达时，`latestVersion` 为 `null`，此时 `updateAvailable` 为 `false`
+- `POST /api/settings/ytdlp/update` - 通过 pip 就地更新 yt-dlp（无需重建镜像）
+  - 需要 `container` 级管理员信任；在 `application` 信任模式下返回 `403`
+  - 当 `YT_DLP_PATH` 指定了固定可执行文件时返回 `409`（`errorKey: ytDlpUpdateCustomPath`）
+  - 响应 `data`: `{ previousVersion, changed, status }`，其中 `status` 与上一个接口结构相同
+  - 并发请求共用同一次 pip 执行
+  - 安装 `yt-dlp[default,curl-cffi]`，使与发行版本绑定的依赖（yt-dlp-ejs 解算器、curl-cffi 模拟范围）由目标版本自行解析，避免版本脱节
+  - 不会升级内置的 bgutil POT provider：它会优先于任何 pip 副本从镜像加载，且其 Node 服务端不在 PyPI 上
+  - 在 Docker 中该安装会持久化在 `/app/data` 卷内并在容器重建后继续生效；回退到镜像固定版本的方法见 Docker 指南
+
+## 密码与会话
+
+- `GET /api/settings/password-enabled` - 检查是否启用了登录/密码
+  - 响应包含 `hasVisitorUsers`、`isVisitorPasswordSet`、`visitorUserEnabled`、`passwordLoginAllowed`，以及可用时的当前认证角色/用户名
+- `GET /api/settings/reset-password-cooldown` - 已移除
+  - 该端点与已废弃的公开网页重置流程绑定，现已不可用。
+- `POST /api/settings/verify-password` - 验证密码 (已废弃，保留兼容性)
+  - 请求体: `{ password: string }`
+- `POST /api/settings/verify-admin-password` - 验证管理员密码
+  - 请求体: `{ password: string }`
+- `POST /api/settings/verify-user-login` - 验证具名访客用户并签发认证 Cookie
+  - 请求体: `{ username: string, password: string }`
+- `POST /api/settings/verify-visitor-password` - 验证旧版共享访客密码 (已废弃，保留兼容性)
+  - 请求体: `{ password: string }`
+- `POST /api/settings/reset-password` - 已移除
+  - 密码恢复必须在后端环境中执行，使用 `node dist/scripts/reset-password.js <new-password>` 或等效的 Docker 命令。
+- `POST /api/settings/logout` - 清除认证 Cookie
+
+## 访客用户
+
+访客用户管理需要管理员会话。访客会话、未认证请求和 API Key 认证都会被拒绝。
+
+- `GET /api/users` - 列出访客用户
+  - 响应: `{ users: VisitorUser[] }`
+- `POST /api/users` - 创建访客用户
+  - 请求体: `{ username: string, password: string }`
+- `PATCH /api/users/:id` - 更新访客用户
+  - 请求体允许: `{ username?: string, password?: string, enabled?: boolean }`
+  - 修改密码或禁用用户会立即撤销该用户的活动会话。
+- `DELETE /api/users/:id` - 删除访客用户并撤销该用户的活动会话
+- `VisitorUser`: `{ id, username, role, enabled, isLegacyShared, sessionVersion, lastLoginAt, createdAt, updatedAt }`；响应永不返回密码哈希。
+
+## 通行密钥 (Passkeys)
+
+- `GET /api/settings/passkeys` - 获取通行密钥列表 (仅安全字段)
+- `GET /api/settings/passkeys/exists` - 检查是否存在通行密钥
+- `POST /api/settings/passkeys/register` - 生成通行密钥注册选项
+  - 请求体: `{ userName?: string }`
+- `POST /api/settings/passkeys/register/verify` - 验证通行密钥注册
+  - 请求体: `{ body: object, challenge: string }`
+- `POST /api/settings/passkeys/authenticate` - 生成通行密钥认证选项
+- `POST /api/settings/passkeys/authenticate/verify` - 验证通行密钥认证并签发认证 Cookie
+  - 请求体: `{ body: object, challenge: string }`
+- `DELETE /api/settings/passkeys` - 移除所有通行密钥
+
+## 手势登录（仅管理员）
+
+手势登录是唯一管理员的可选便捷凭据。配置后，登录保护和密码登录必须保持启用。管理接口需要管理员会话；状态和认证接口属于公开登录接口。API Key 认证不能使用这些接口。
+
+- `GET /api/settings/gesture-login/status` - 获取安全的手势登录状态
+  - 响应: `{ configured, canConfigure, locked, available, attemptsRemaining, resetRequired }`
+  - 不会返回校验值、pepper 标识、手势图案或时间戳。
+- `PUT /api/settings/gesture-login` - 创建或替换管理员手势
+  - 需要管理员会话
+  - 请求体: `{ pattern: number[] }`；服务端会按 Android 规则补入跨过的中间点，并要求至少 3 个不同的点
+  - 首次设置返回 `201`，替换返回 `200`
+  - 相关错误: `409 gesture_password_login_required`、`423 gesture_locked`、`422 gesture_invalid`
+- `DELETE /api/settings/gesture-login` - 立即移除手势
+  - 需要管理员会话；锁定时仍可移除；接口幂等
+  - 响应: `{ success: true, removed: boolean }`
+- `POST /api/settings/gesture-login/authenticate` - 验证手势并签发管理员认证 Cookie
+  - 请求体: `{ pattern: number[] }`
+  - 有效但错误的手势返回 `401 gesture_incorrect`，并包含 `attemptsRemaining`。
+  - 错误次数在所有设备之间共享。一次或两次错误会在最近一次错误的 12 小时后清零；在到期前达到第三次会返回 `423 gesture_locked`，且永不按时间自动解锁，只能通过一次成功的管理员密码登录清除。
+
+存在手势凭据时，关闭密码登录的设置更新会返回 `409 gesture_requires_password_login`。
+
+## Cookies
+
+- `POST /api/settings/upload-cookies` - 上传 yt-dlp 使用的 cookie 文件
+  - 多部分表单数据: `file`
+- `POST /api/settings/delete-cookies` - 删除 cookie 文件
+- `GET /api/settings/check-cookies` - 检查 cookie 文件是否存在
+
+## 钩子 (Hooks)
+
+- `GET /api/settings/hooks/status` - 获取钩子安装状态
+- `POST /api/settings/hooks/:name` - 上传钩子脚本
+  - 多部分表单数据: `file`
+  - 有效的 `:name`: `task_before_start`, `task_success`, `task_fail`, `task_cancel`
+- `DELETE /api/settings/hooks/:name` - 删除钩子脚本
+
+## 数据库备份
+
+- `GET /api/settings/export-database` - 下载当前数据库备份文件
+- `POST /api/settings/import-database` - 导入 `.db` 备份文件并覆盖当前数据库
+  - 多部分表单数据: `file`
+- `POST /api/settings/merge-database-preview` - 扫描上传的 `.db` 备份文件并返回合并数量预览，不修改当前数据库
+  - 多部分表单数据: `file`
+  - 响应中的 `summary` 包含 `videos`、`collections`、`collectionLinks`、`subscriptions`、`downloadHistory`、`videoDownloads` 和 `tags`；每项都包含 `{ merged, skipped }`
+- `POST /api/settings/merge-database` - 将上传的 `.db` 备份合并到当前数据库，同时保留现有记录
+  - 多部分表单数据: `file`
+  - 响应包含与预览相同结构的合并 `summary`
+- `GET /api/settings/last-backup-info` - 获取最新备份元数据
+- `POST /api/settings/restore-from-last-backup` - 从最新备份恢复
+- `POST /api/settings/cleanup-backup-databases` - 清理备份数据库文件
+
+## 文件维护
+
+- `POST /api/scan-files` - 扫描本地上传视频目录并与数据库同步
+- `POST /api/scan-mount-directories` - 扫描配置的挂载目录并与数据库同步
+  - 请求体: `{ directories: string[] }` (非空)
+- `POST /api/cleanup-temp-files` - 移除临时下载文件 (`.part`, `.ytdl`, `temp_*`)
+- `GET /api/media-integrity-audit` - 检查媒体库中本地媒体文件是否损坏 (仅管理员)
+  - 只读：只报告问题并给出建议操作，不会修复或重新下载任何内容
+  - 报告以下情况：文件缺失、音视频轨道时长不一致、存储的时长与文件不符、ffprobe 无法读取
+  - 查询参数: `timeline=1` 额外检查文件中间缺失的内容，以原因 `timeline_gap` 报告，并附带 `gaps` 列表 `{ stream, atSeconds, gapSeconds }`。较长的分片时长会以 `timeline_ambiguous` 提示人工检查；缺少分片时长时不会据此断定内容缺失。仅扫描可测得帧数缺口的流；帧数无法测量的流会报告为无法判断。每个无法判断的文件都会以原因 `timeline_inconclusive` 列出，供人工检查。需要主动开启，因为扫描会读取整个文件；未改动文件的已完成结果缓存一天
+  - `cloud:`、`mount:` 和 `http(s)` 记录会被跳过，不会报告为缺失
+  - 响应: `{ success, audit: { generatedAt, summary, items, humanSummary } }`
+  - 每一项: `{ localVideoId, title, mediaType, sourceUrl, videoPath, reasons, detail, storedDurationSeconds, measured, recommendedAction }`，其中 `mediaType` 为 `video` 或 `audio`，`recommendedAction` 为 `redownload`、`refresh_duration` 或 `manual_review`
+  - 界面入口: 设置 → 媒体库与存储 → 媒体完整性检查
+
+## 云存储
+
+- `GET /api/cloud/signed-url` - 获取云签名 URL (或缓存的缩略图 URL)
+  - 查询参数: `filename` (必需), `type` (可选: `video` 或 `thumbnail`)
+- `POST /api/cloud/sync` - 双向同步本地/云端视频
+  - 响应为流式 JSON 行进度事件
+- `DELETE /api/cloud/thumbnail-cache` - 清除本地云缩略图缓存
+- `GET /api/cloud/thumbnail-cache/:filename` - 提供缓存的云缩略图文件 (静态路由)
+
+## 实时音频翻译
+
+可选的管理员功能，通过 Google Gemini 实时翻译对正在播放的视频音频进行实时翻译。Gemini API 密钥仅保存在服务器端，绝不会返回给客户端。所有实时翻译端点均拒绝 API Key 认证；当前实现也拒绝访客访问。
+
+- `GET /api/live-translation/config` - 获取当前用户的功能可用性（不含任何密钥）
+  - 响应: `{ enabled, available, canUse, model, sourceLanguage, targetLanguage, apiKeyConfigured, requiresAdmin, reason }`
+  - 可用时 `reason` 为 `null`，否则为以下之一：`feature_disabled`、`unsupported_model`、`api_key_missing`、`target_language_missing`、`admin_required`
+  - `apiKeyConfigured` 仅在管理员/关闭登录时返回
+- `POST /api/live-translation/sessions` - 签发一次性、短期有效的 WebSocket 票据
+  - 请求体: `{ videoId: string }`
+  - 需要正常的已认证会话和 CSRF 令牌；启用登录时需要管理员角色；有速率限制
+  - 响应: `{ ticket, expiresAt, ttlMs, wsPath, config: { model, sourceLanguage, targetLanguage } }`
+  - 票据一次性使用且很快过期（约 60 秒）；配置快照在签发时确定
+
+WebSocket 流（挂载在 `/api` 下，通过升级建立——非 JSON 路由）：
+
+- `GET /api/live-translation/ws?ticket=<ticket>` - 建立实时音频流的 WebSocket 升级
+  - 票据也可通过 `Sec-WebSocket-Protocol` 头传递，以避免出现在访问日志中
+  - 升级时校验：`Origin` 必须匹配主机/允许的主机；票据必须存在、未过期且未使用；访客票据以及功能被禁用/未配置时将被拒绝
+  - 客户端 → 服务端消息：`start`、`audio`（base64 PCM16，16 kHz 单声道，约 100 ms 分块）、`pause`、`resume`、`seek`、`stop`、`ping`
+  - 服务端 → 客户端消息：`ready`、`status`、`inputTranscript`、`outputTranscript`、`audio`（base64 PCM16，24 kHz 单声道）、`pong`、`error`、`closed`
+  - 应用了单服务器活动会话上限和会话时长上限；音频与转录内容不会被持久化或记录
+
+## 系统
+
+- `GET /api/system/version` - 获取版本/更新信息
+  - 返回: `{ currentVersion, latestVersion, releaseUrl, hasUpdate, ... }`
+  - 认证: 支持会话 Cookie，或 API Key (`X-API-Key` / `Authorization: ApiKey <key>`)
+
+## 非 API 路由 (不在 `/api` 下)
+
+- `GET /feed/:token` - 公开 RSS 2.0 输出端点；路径中的 token 即 bearer 凭据
+  - 不需要会话 Cookie 或 API Key
+  - 无效或已停用的 token 会返回 404 状态的 RSS XML
+- `GET /cloud/videos/:filename` - 重定向到签名云视频 URL
+- `GET /cloud/images/:filename` - 提供缓存的云图像或重定向到签名图像 URL
+- `GET /videos/*` - 静态本地视频
+- `GET /images/*` - 静态本地缩略图/图像
+- `GET /subtitles/*` - 静态字幕文件
+- `GET /avatars/*` - 静态头像文件

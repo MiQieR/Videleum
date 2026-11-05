@@ -1,0 +1,199 @@
+import axios from "axios";
+import { IMAGES_DIR, SUBTITLES_DIR, VIDEOS_DIR } from "../../../config/paths";
+import { logger } from "../../../utils/logger";
+import {
+  pathExistsSafeSync,
+  resolveSafePathInDirectories,
+  statSafeSync,
+} from "../../../utils/security";
+import { extractBilibiliVideoId } from "../../../utils/helpers";
+import { buildBilibiliApiHeaders } from "./bilibiliHeaders";
+import { BilibiliVideoInfo } from "./types";
+
+export interface PartMetadata {
+  channelUrl?: string;
+  partTitle: string;
+}
+
+type BilibiliViewPage = {
+  page: number;
+  part?: string;
+};
+
+type BilibiliViewResponse = {
+  data?: {
+    owner?: {
+      mid?: number | string;
+    };
+    pages?: BilibiliViewPage[];
+  };
+};
+
+/**
+ * Extract channel URL and part-specific title from Bilibili API
+ */
+export async function extractPartMetadata(
+  url: string,
+  partNumber: number,
+  totalParts: number,
+  seriesTitle: string,
+  bilibiliInfo: BilibiliVideoInfo,
+  // null means a configured proxy is unusable: skip the lookup rather than
+  // reach api.bilibili.com directly and expose the user's real IP.
+  axiosConfig: Record<string, unknown> | null = {}
+): Promise<PartMetadata> {
+  let channelUrl: string | undefined;
+  let partTitle = bilibiliInfo.title || "Bilibili Video";
+
+  try {
+    if (!axiosConfig) {
+      logger.warn(
+        "Skipping Bilibili part metadata lookup: proxy is configured but unusable"
+      );
+      return { partTitle, channelUrl };
+    }
+
+    const videoId = extractBilibiliVideoId(url);
+    if (!videoId) {
+      logger.warn("Could not extract video ID from URL, using yt-dlp title");
+      return { partTitle, channelUrl };
+    }
+
+    const isBvId = videoId.startsWith("BV");
+    const apiUrl = isBvId
+      ? `https://api.bilibili.com/x/web-interface/view?bvid=${videoId}`
+      : `https://api.bilibili.com/x/web-interface/view?aid=${videoId.replace(
+          "av",
+          ""
+        )}`;
+
+    const response = await axios.get<BilibiliViewResponse>(apiUrl, {
+      ...axiosConfig,
+      headers: buildBilibiliApiHeaders(apiUrl),
+    });
+
+    if (response.data.data) {
+      // Extract channel URL
+      if (response.data.data.owner?.mid) {
+        const mid = response.data.data.owner.mid;
+        channelUrl = `https://space.bilibili.com/${mid}`;
+      }
+
+      // For multi-part videos, get the part-specific title from the pages array
+      if (
+        totalParts > 1 &&
+        response.data.data.pages &&
+        Array.isArray(response.data.data.pages)
+      ) {
+        const page = response.data.data.pages.find(
+          (pageData) => pageData.page === partNumber
+        );
+        if (page && page.part) {
+          partTitle = page.part;
+          logger.info(`Found part-specific title: ${partTitle}`);
+        } else {
+          // Fall back: try to remove collection name from yt-dlp title
+          if (seriesTitle && bilibiliInfo.title.includes(seriesTitle)) {
+            partTitle = bilibiliInfo.title.replace(seriesTitle, "").trim();
+            partTitle = partTitle
+              .replace(/^\s*[-–—]\s*/, "")
+              .replace(/^\s*p\d+\s*/i, "")
+              .trim();
+          }
+        }
+      }
+    }
+  } catch (error) {
+    logger.warn(
+      "Error fetching part-specific title from API, using yt-dlp title:",
+      error
+    );
+    // Fall back to using yt-dlp title, but try to remove collection name if present
+    if (
+      totalParts > 1 &&
+      seriesTitle &&
+      bilibiliInfo.title.includes(seriesTitle)
+    ) {
+      partTitle = bilibiliInfo.title.replace(seriesTitle, "").trim();
+      partTitle = partTitle
+        .replace(/^\s*[-–—]\s*/, "")
+        .replace(/^\s*p\d+\s*/i, "")
+        .trim();
+    }
+  }
+
+  return { channelUrl, partTitle };
+}
+
+/**
+ * Get video duration from file
+ */
+export async function getVideoDuration(
+  videoPath: string
+): Promise<string | undefined> {
+  try {
+    const { getVideoDuration } = await import(
+      "../../../services/metadataService"
+    );
+    const durationSec = await getVideoDuration(videoPath);
+    if (durationSec) {
+      return durationSec.toString();
+    }
+  } catch (e) {
+    logger.error("Failed to extract duration from Bilibili video:", e);
+  }
+  return undefined;
+}
+
+/**
+ * Get the pixel height of a downloaded video (issue #295 2-1).
+ * Used to detect under-resolution downloads so they can be retried.
+ */
+export async function getVideoHeight(
+  videoPath: string
+): Promise<number | null> {
+  try {
+    const { getVideoHeight } = await import(
+      "../../../services/metadataService"
+    );
+    return await getVideoHeight(videoPath);
+  } catch (e) {
+    logger.error("Failed to extract height from Bilibili video:", e);
+    return null;
+  }
+}
+
+/**
+ * Get the pixel dimensions of a downloaded video.
+ */
+export async function getVideoDimensions(
+  videoPath: string
+): Promise<{ width: number; height: number } | null> {
+  try {
+    const { getVideoDimensions } = await import(
+      "../../../services/metadataService"
+    );
+    return await getVideoDimensions(videoPath);
+  } catch (e) {
+    logger.error("Failed to extract dimensions from Bilibili video:", e);
+    return null;
+  }
+}
+
+/**
+ * Get file size from file
+ */
+export function getFileSize(filePath: string): string | undefined {
+  const allowedDirs = [VIDEOS_DIR, IMAGES_DIR, SUBTITLES_DIR];
+
+  try {
+    const safeFilePath = resolveSafePathInDirectories(filePath, allowedDirs);
+    if (pathExistsSafeSync(safeFilePath, allowedDirs)) {
+      const stats = statSafeSync(safeFilePath, allowedDirs);
+      return stats.size.toString();
+    }
+  } catch (e) {
+    logger.error("Failed to get file size:", e);
+  }
+  return undefined;
+}

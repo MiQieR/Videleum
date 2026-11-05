@@ -1,0 +1,1001 @@
+import {
+    DownloadCancelledError,
+    isCancelledError,
+} from "../errors/DownloadErrors";
+import { extractSourceVideoId } from "../utils/helpers";
+import { getErrorMessage } from "../utils/errors";
+import { isMembersOnlyError } from "../utils/ytdlp/errorClassification";
+import { sanitizeLogMessage } from "../utils/logger";
+import {
+  normalizeMediaIdentity,
+  normalizeMediaPlatform,
+  type MediaIdentity,
+} from "../utils/mediaIdentity";
+import { CloudStorageService } from "./CloudStorageService";
+import {
+  canRestoreDetachedTask,
+  parseRetryMetadata,
+  requiresRetryMetadata,
+  serializeRetryMetadata,
+  type DownloadRetryMetadata,
+} from "./downloadRetryMetadata";
+import { awaitTaskCancellationHook, awaitTaskFailHook } from "./downloadManager/hooks";
+import {
+  buildDetachedTask,
+  buildRetryHistoryItem,
+  BILIBILI_RETRY_RESTORE_FAILED_MESSAGE,
+  resolveRetryPolicy,
+} from "./downloadManager/retryScheduler";
+import { PARTIAL_STATUS, PENDING_RETRY_STATUS } from "./downloadManager/retryPolicy";
+import {
+  getStructuredDownloadResult,
+  isStructuredDownloadResult,
+  type AddDownloadStatisticsOptions,
+  type AddDownloadTaskOptions,
+  type DownloadTask,
+} from "./downloadManager/types";
+import { assertDownloadsAllowed } from "./filenameTemplate/renameLockService";
+import { HookService } from "./hookService";
+import {
+  recordEvent,
+  platformFromUrl,
+  normalizeSourceKind,
+  normalizeSurface,
+} from "./statistics";
+import type { DownloadHistoryItem } from "./storageService";
+import type { Video } from "./storageService";
+import * as storageService from "./storageService";
+import { logger } from "../utils/logger";
+
+function getAggregateDownloadedVideos(value: unknown): Video[] {
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+
+  const downloadedVideos = (value as { downloadedVideos?: unknown })
+    .downloadedVideos;
+  if (!Array.isArray(downloadedVideos)) {
+    return [];
+  }
+
+  return downloadedVideos.filter(
+    (video): video is Video =>
+      Boolean(video) &&
+      typeof video === "object" &&
+      typeof (video as { id?: unknown }).id === "string" &&
+      (video as { id: string }).id.length > 0,
+  );
+}
+
+function getTaskMediaIdentity(task: DownloadTask): MediaIdentity {
+  const derivedIdentity = task.sourceUrl
+    ? extractSourceVideoId(task.sourceUrl)
+    : { id: null, platform: "unknown" };
+  return normalizeMediaIdentity({
+    platform: task.identity?.platform ?? derivedIdentity.platform,
+    sourceVideoId: task.identity?.sourceVideoId ?? derivedIdentity.id,
+    sourceUrl: task.sourceUrl ?? "",
+    mediaType: task.identity?.mediaType ?? "video",
+    partNumber: task.identity?.partNumber ?? null,
+  });
+}
+
+function addAggregatePartHistory(
+  task: DownloadTask,
+  value: unknown,
+  representativeVideoId?: string,
+): void {
+  if (task.options?.suppressHistory) {
+    return;
+  }
+
+  const downloadedVideos = getAggregateDownloadedVideos(value);
+  if (downloadedVideos.length === 0) {
+    return;
+  }
+
+  const seenVideoIds = new Set<string>();
+  downloadedVideos.forEach((video, index) => {
+    if (video.id === representativeVideoId || seenVideoIds.has(video.id)) {
+      return;
+    }
+    seenVideoIds.add(video.id);
+
+    const sourceUrl = video.sourceUrl || task.sourceUrl;
+    const partNumber =
+      typeof video.partNumber === "number" &&
+      Number.isInteger(video.partNumber) &&
+      video.partNumber > 0
+        ? video.partNumber
+        : index + 1;
+    const totalSize =
+      typeof video.fileSize === "string" || typeof video.fileSize === "number"
+        ? String(video.fileSize)
+        : undefined;
+
+    storageService.addDownloadHistoryItem({
+      id: `${task.id}:part-${partNumber}`,
+      title: video.title || task.title,
+      finishedAt: Date.now(),
+      status: "success",
+      videoPath: video.videoPath,
+      thumbnailPath: video.thumbnailPath,
+      sourceUrl,
+      author: video.author,
+      videoId: video.id,
+      incompleteDownloadNote: video.incompleteDownloadNote,
+      totalSize,
+      mediaType: video.mediaType === "audio" ? "audio" : "video",
+      platform: normalizeMediaPlatform(platformFromUrl(sourceUrl)),
+      sourceKind: task.statistics?.sourceKind ?? "manual",
+      downloadType: task.type,
+    });
+  });
+}
+
+class DownloadManager {
+  private queue: DownloadTask[];
+  private activeTasks: Map<string, DownloadTask>;
+  private retryTimers: Map<string, NodeJS.Timeout>;
+  private activeDownloads: number;
+  private maxConcurrentDownloads: number;
+
+  constructor() {
+    this.queue = [];
+    this.activeTasks = new Map();
+    this.retryTimers = new Map();
+    this.activeDownloads = 0;
+    this.maxConcurrentDownloads = 3; // Default
+  }
+
+  private async loadSettings() {
+    try {
+      const settings = storageService.getSettings();
+      if (settings.maxConcurrentDownloads) {
+        this.maxConcurrentDownloads = settings.maxConcurrentDownloads;
+        logger.info(
+          `Loaded maxConcurrentDownloads from database: ${this.maxConcurrentDownloads}`
+        );
+      }
+    } catch (error) {
+      logger.error("Error loading settings in DownloadManager:", error);
+    }
+  }
+
+  private hasTask(id: string): boolean {
+    return this.activeTasks.has(id) || this.queue.some((task) => task.id === id);
+  }
+
+  private enqueueTask(task: DownloadTask, persistQueue = true): void {
+    if (this.hasTask(task.id)) {
+      return;
+    }
+
+    this.queue.push(task);
+    if (persistQueue) {
+      this.updateQueuedDownloads();
+    }
+    this.processQueue();
+  }
+
+  private clearRetryTimer(id: string): void {
+    const timer = this.retryTimers.get(id);
+    if (!timer) {
+      return;
+    }
+
+    clearTimeout(timer);
+    this.retryTimers.delete(id);
+  }
+
+  private scheduleRetryTask(
+    task: DownloadTask,
+    historyItem: DownloadHistoryItem,
+  ): void {
+    if (!task.sourceUrl || !task.type) {
+      storageService.finalizePendingRetryHistoryItem(
+        task.id,
+        historyItem.error ?? "Retry metadata missing"
+      );
+      return;
+    }
+
+    this.clearRetryTimer(task.id);
+
+    const nextRetryAt = historyItem.nextRetryAt ?? Date.now();
+    const delayMs = Math.max(nextRetryAt - Date.now(), 0);
+    const timer = setTimeout(() => {
+      this.retryTimers.delete(task.id);
+
+      const latestHistory =
+        storageService.getDownloadHistoryItem(task.id) ?? historyItem;
+      if (latestHistory.status !== PENDING_RETRY_STATUS || this.hasTask(task.id)) {
+        return;
+      }
+
+      this.enqueueTask(task);
+    }, delayMs);
+
+    this.retryTimers.set(task.id, timer);
+  }
+
+  private restorePendingRetries(): void {
+    const pendingRetries = storageService.getPendingRetryHistoryItems();
+    if (pendingRetries.length === 0) {
+      return;
+    }
+
+    for (const item of pendingRetries) {
+      if (this.hasTask(item.id)) {
+        continue;
+      }
+
+      if (!item.sourceUrl || !item.downloadType) {
+        storageService.finalizePendingRetryHistoryItem(
+          item.id,
+          item.error ?? "Retry metadata missing"
+        );
+        continue;
+      }
+
+      if (!canRestoreDetachedTask(item.downloadType, item.retryMetadata)) {
+        storageService.finalizePendingRetryHistoryItem(
+          item.id,
+          BILIBILI_RETRY_RESTORE_FAILED_MESSAGE,
+        );
+        continue;
+      }
+
+      const retryMetadata = parseRetryMetadata(item.retryMetadata);
+      const isAudioOnly =
+        item.mediaType === "audio" ||
+        (retryMetadata?.shape === "download_mode" && retryMetadata.audioOnly);
+      const derivedIdentity = item.sourceUrl
+        ? extractSourceVideoId(item.sourceUrl)
+        : { id: null, platform: "unknown" };
+      const task = buildDetachedTask(
+        item.id,
+        item.title,
+        item.sourceUrl,
+        item.downloadType,
+        retryMetadata,
+        item.retryMetadata,
+        {
+          platform: item.platform ?? derivedIdentity.platform,
+          sourceVideoId: derivedIdentity.id,
+          mediaType: isAudioOnly ? "audio" : "video",
+        },
+      );
+      if (!task) {
+        storageService.finalizePendingRetryHistoryItem(
+          item.id,
+          BILIBILI_RETRY_RESTORE_FAILED_MESSAGE,
+        );
+        continue;
+      }
+      this.scheduleRetryTask(task, item);
+    }
+  }
+
+  private maybeScheduleRetry(task: DownloadTask, error: unknown): boolean {
+    if (task.options?.disableAutoRetry) {
+      // Awaiting callers (subscription checks) rely on immediate settlement;
+      // their own cadence provides the retry/backoff.
+      return false;
+    }
+    if (!task.sourceUrl || !task.type) {
+      return false;
+    }
+
+    const settings = storageService.getSettings();
+    if (settings.autoRetryEnabled !== true) {
+      return false;
+    }
+
+    const existingHistory = storageService.getDownloadHistoryItem(task.id);
+    const policy = resolveRetryPolicy(
+      task,
+      settings.autoRetryTimes,
+      settings.autoRetryIntervalMinutes,
+      existingHistory,
+    );
+    if (!policy) {
+      return false;
+    }
+
+    const historyItem = buildRetryHistoryItem({
+      task,
+      error,
+      retryLimit: policy.retryLimit,
+      retryIntervalMinutes: policy.retryIntervalMinutes,
+      retryCount: policy.retryCount,
+      existingHistory,
+    });
+
+    storageService.addDownloadHistoryItem(historyItem);
+    this.scheduleRetryTask(task, historyItem);
+    return true;
+  }
+
+  /**
+   * Initialize the download manager and restore queued tasks
+   */
+  initialize(): void {
+    try {
+      logger.info("Initializing DownloadManager...");
+      this.loadSettings();
+      const status = storageService.getDownloadStatus();
+      const queuedDownloads = status.queuedDownloads;
+
+      if (queuedDownloads && queuedDownloads.length > 0) {
+        logger.info("Restoring queued downloads...", queuedDownloads.length);
+
+        for (const download of queuedDownloads) {
+          if (download.sourceUrl && download.type) {
+            logger.info(
+              "Restoring task:",
+              sanitizeLogMessage(download.title),
+              sanitizeLogMessage(download.id),
+            );
+
+            if (!canRestoreDetachedTask(download.type, download.retryMetadata)) {
+              logger.warn(
+                `Skipping restoration of task ${download.id} due to unrestorable Bilibili retry metadata`,
+              );
+              continue;
+            }
+
+            const restoredTask = buildDetachedTask(
+              download.id,
+              download.title,
+              download.sourceUrl,
+              download.type,
+              parseRetryMetadata(download.retryMetadata),
+              download.retryMetadata,
+              {
+                platform: download.platform ?? platformFromUrl(download.sourceUrl),
+                sourceVideoId: download.sourceVideoId ?? null,
+                mediaType: download.mediaType ?? "video",
+              },
+            );
+            if (!restoredTask) {
+              logger.warn(
+                `Skipping restoration of task ${download.id} due to invalid retry metadata`,
+              );
+              continue;
+            }
+
+            this.queue.push(restoredTask);
+          } else {
+            logger.warn(
+              `Skipping restoration of task ${download.id} due to missing sourceUrl or type`
+            );
+          }
+        }
+      }
+
+      this.restorePendingRetries();
+      this.processQueue();
+    } catch (error) {
+      logger.error("Error initializing DownloadManager:", error);
+    }
+  }
+
+  /**
+   * Set the maximum number of concurrent downloads
+   * @param limit - Maximum number of concurrent downloads
+   */
+  setMaxConcurrentDownloads(limit: number): void {
+    this.maxConcurrentDownloads = limit;
+    this.processQueue();
+  }
+
+  /**
+   * Add a download task to the manager
+   * @param downloadFn - Async function that performs the download
+   * @param id - Unique ID for the download
+   * @param title - Title of the video being downloaded
+   * @param sourceUrl - Source URL of the video
+   * @param type - Type of the download (youtube, bilibili, missav)
+   * @returns - Resolves when the download is complete
+   */
+  async addDownload(
+    downloadFn: (registerCancel: (cancel: () => void) => void) => Promise<any>,
+    id: string,
+    title: string,
+    sourceUrl?: string,
+    type?: string,
+    statistics?: AddDownloadStatisticsOptions,
+    retryMetadata?: DownloadRetryMetadata,
+    options?: AddDownloadTaskOptions,
+  ): Promise<any> {
+    assertDownloadsAllowed();
+    return new Promise((resolve, reject) => {
+      const derivedIdentity = sourceUrl
+        ? extractSourceVideoId(sourceUrl)
+        : { id: null, platform: "unknown" };
+      const task: DownloadTask = {
+        downloadFn,
+        id,
+        title,
+        resolve,
+        reject,
+        sourceUrl,
+        type,
+        identity: normalizeMediaIdentity({
+          platform: derivedIdentity.platform,
+          sourceVideoId: derivedIdentity.id,
+          sourceUrl: sourceUrl ?? "",
+          mediaType: "video",
+          partNumber: null,
+        }),
+        retryMetadata,
+        options,
+        statistics: statistics
+          ? {
+              actorRole: statistics.actorRole ?? "admin",
+              surface: normalizeSurface(statistics.surface ?? "web"),
+              sourceKind: normalizeSourceKind(statistics.sourceKind ?? "manual"),
+              relatedEventId: statistics.relatedEventId ?? null,
+              enqueuedEventId: statistics.enqueuedEventId ?? null,
+            }
+          : undefined,
+      };
+
+      this.queue.push(task);
+      this.updateQueuedDownloads();
+      this.processQueue();
+    });
+  }
+
+  /**
+   * Update the title of a download task (queued or active)
+   * @param id - ID of the download
+   * @param title - New title
+   */
+  updateTaskTitle(id: string, title: string): void {
+    // Check active tasks
+    const activeTask = this.activeTasks.get(id);
+    if (activeTask) {
+      logger.info(
+        "Updating active task title:",
+        sanitizeLogMessage(id),
+        sanitizeLogMessage(title),
+      );
+      activeTask.title = title;
+      storageService.updateActiveDownloadTitle(id, title);
+    } else {
+      // Check queued tasks
+      const queuedTask = this.queue.find((t) => t.id === id);
+      if (queuedTask) {
+        logger.info(
+          "Updating queued task title:",
+          sanitizeLogMessage(id),
+          sanitizeLogMessage(title),
+        );
+        queuedTask.title = title;
+        this.updateQueuedDownloads();
+      }
+    }
+  }
+
+  /**
+   * Cancel an active download
+   * @param id - ID of the download to cancel
+   */
+  private finalizeCancelledTask(
+    task: DownloadTask,
+    error: DownloadCancelledError = DownloadCancelledError.create(),
+  ): void {
+    if (!task.cancellationFinalized) {
+      task.cancellationFinalized = true;
+      this.clearRetryTimer(task.id);
+      storageService.removeActiveDownload(task.id);
+      if (!task.options?.suppressHistory) {
+        storageService.addDownloadHistoryItem({
+          id: task.id,
+          title: task.title,
+          finishedAt: Date.now(),
+          status: "failed",
+          error: "Download cancelled by user",
+          sourceUrl: task.sourceUrl,
+          platform: getTaskMediaIdentity(task).platform,
+          sourceKind: task.statistics?.sourceKind ?? "unknown",
+          downloadType: task.type,
+        });
+      }
+
+      HookService.executeHook("task_cancel", {
+        taskId: task.id,
+        taskTitle: task.title,
+        sourceUrl: task.sourceUrl,
+        status: "cancel",
+      });
+    }
+
+    if (!task.cancellationRejected) {
+      task.cancellationRejected = true;
+      task.reject(error);
+    }
+
+    if (this.activeTasks.has(task.id)) {
+      this.activeTasks.delete(task.id);
+      this.activeDownloads = Math.max(0, this.activeDownloads - 1);
+      this.processQueue();
+    }
+  }
+
+  async cancelDownload(id: string): Promise<void> {
+    const task = this.activeTasks.get(id);
+    if (task) {
+      logger.info(
+        "Cancelling active download:",
+        sanitizeLogMessage(task.title),
+        sanitizeLogMessage(id),
+      );
+      task.cancelled = true;
+
+      // Call the cancel function if available
+      if (task.cancelFn) {
+        try {
+          await awaitTaskCancellationHook(
+            id,
+            task.cancelFn as () => void | Promise<void>,
+          );
+        } catch (error) {
+          logger.error(
+            "Error calling cancel function for download:",
+            sanitizeLogMessage(id),
+            error,
+          );
+        }
+      }
+
+      this.finalizeCancelledTask(task);
+    } else {
+      // Check if it's in the queue and remove it
+      const inQueue = this.queue.some((t) => t.id === id);
+      if (inQueue) {
+        logger.info("Removing queued download:", sanitizeLogMessage(id));
+        this.removeFromQueue(id);
+        return;
+      }
+
+      const pendingRetryItem = storageService.getDownloadHistoryItem(id);
+      if (pendingRetryItem?.status === PENDING_RETRY_STATUS) {
+        logger.info("Cancelling pending retry:", sanitizeLogMessage(id));
+        this.clearRetryTimer(id);
+        storageService.finalizePendingRetryHistoryItem(
+          id,
+          "Retry cancelled by user"
+        );
+      }
+    }
+  }
+
+  /**
+   * Remove a download from the queue
+   * @param id - ID of the download to remove
+   */
+  removeFromQueue(id: string): void {
+    const removedTasks = this.queue.filter((task) => task.id === id);
+    this.queue = this.queue.filter((task) => task.id !== id);
+    this.clearRetryTimer(id);
+    const pendingRetryItem = storageService.getDownloadHistoryItem(id);
+    const isPendingRetry = pendingRetryItem?.status === PENDING_RETRY_STATUS;
+    if (isPendingRetry) {
+      storageService.finalizePendingRetryHistoryItem(
+        id,
+        "Retry removed from queue by user"
+      );
+    }
+    for (const task of removedTasks) {
+      if (isPendingRetry) {
+        task.reject(new Error("Retry removed from queue by user"));
+      } else if (!task.cancellationRejected) {
+        // addDownload promises resolve on completion; a task removed from the
+        // queue never completes, so settle it (awaiting callers — subscription
+        // checks — would otherwise hang on a queued-task cancellation).
+        task.cancellationRejected = true;
+        task.reject(DownloadCancelledError.create());
+      }
+    }
+    this.updateQueuedDownloads();
+  }
+
+  /**
+   * Clear the download queue
+   */
+  clearQueue(): void {
+    const queuedTasks = [...this.queue];
+    this.queue = [];
+    for (const task of queuedTasks) {
+      this.clearRetryTimer(task.id);
+      const pendingRetryItem = storageService.getDownloadHistoryItem(task.id);
+      if (pendingRetryItem?.status === PENDING_RETRY_STATUS) {
+        storageService.finalizePendingRetryHistoryItem(
+          task.id,
+          "Retry removed from queue by user"
+        );
+        task.reject(new Error("Retry removed from queue by user"));
+      } else if (!task.cancellationRejected) {
+        task.cancellationRejected = true;
+        task.reject(DownloadCancelledError.create());
+      }
+    }
+    this.updateQueuedDownloads();
+  }
+
+  /**
+   * Update the queued downloads in storage
+   */
+  private updateQueuedDownloads(): void {
+    const queuedDownloads = this.queue.map((task) => ({
+      id: task.id,
+      title: task.title,
+      timestamp: Date.now(),
+      sourceUrl: task.sourceUrl,
+      type: task.type,
+      sourceVideoId: task.identity?.sourceVideoId ?? null,
+      platform: getTaskMediaIdentity(task).platform,
+      mediaType: task.identity?.mediaType ?? "video",
+      retryMetadata:
+        task.retryMetadata && requiresRetryMetadata(task.retryMetadata)
+          ? serializeRetryMetadata(task.retryMetadata)
+          : undefined,
+    }));
+    storageService.setQueuedDownloads(queuedDownloads);
+  }
+
+  /**
+   * Process the download queue
+   */
+  private async processQueue(): Promise<void> {
+    if (
+      this.activeDownloads >= this.maxConcurrentDownloads ||
+      this.queue.length === 0
+    ) {
+      return;
+    }
+
+    const task = this.queue.shift();
+    if (!task) return;
+
+    this.updateQueuedDownloads();
+    this.activeDownloads++;
+    this.activeTasks.set(task.id, task);
+
+    // Update status in storage
+    storageService.addActiveDownload(task.id, task.title);
+    // Update with extra info if available
+    if (task.sourceUrl || task.type || task.identity) {
+      storageService.updateActiveDownload(task.id, {
+        sourceUrl: task.sourceUrl,
+        type: task.type,
+        sourceVideoId: task.identity?.sourceVideoId ?? null,
+        platform: getTaskMediaIdentity(task).platform,
+        mediaType: task.identity?.mediaType ?? "video",
+      });
+    }
+
+    // download_started: pair with download_enqueued via relatedEventId so the
+    // queue-wait percentile rollups can match the two without write-time joins.
+    try {
+      const stats = task.statistics;
+      const platform = platformFromUrl(task.sourceUrl);
+      recordEvent({
+        eventType: "download_started",
+        actorRole: stats?.actorRole ?? "system",
+        surface: stats?.surface ?? "background",
+        sessionId: null,
+        relatedEventId: stats?.enqueuedEventId ?? stats?.relatedEventId ?? null,
+        platform,
+        sourceKind: stats?.sourceKind ?? "unknown",
+        payload: { downloadId: task.id },
+      });
+    } catch {
+      // statistics is best-effort
+    }
+
+    try {
+      logger.info(
+        "Starting download:",
+        sanitizeLogMessage(task.title),
+        sanitizeLogMessage(task.id),
+      );
+
+      // Execute hook
+      await HookService.executeHook("task_before_start", {
+        taskId: task.id,
+        taskTitle: task.title,
+        sourceUrl: task.sourceUrl,
+        status: "start",
+      });
+
+      const result = await task.downloadFn((cancel) => {
+        task.cancelFn = cancel;
+      });
+      if (task.cancelled) {
+        // An aggregate download can have saved parts before the cancel landed,
+        // and this is the only point where that result is in hand — the
+        // cancellation is usually finalized earlier, while the download was
+        // still running. Record those parts before discarding the result:
+        // their success rows are the only ones a later deletion can turn into
+        // a tombstone, since the task-level cancel row is a "failed" one.
+        addAggregatePartHistory(task, result);
+        throw DownloadCancelledError.create();
+      }
+
+      if (isStructuredDownloadResult(result)) {
+        if (result.success === false || result.partial === true) {
+          throw Object.assign(
+            new Error(result.error || "Download did not complete successfully"),
+            { downloadResult: result },
+          );
+        }
+      }
+
+      // Extract video data from result
+      // videoController returns { success: true, video: ... }
+      // But some downloaders might return the video object directly or different structure
+      const videoData = result.video || result.videoData || result;
+      storageService.removeActiveDownload(task.id);
+
+      logger.info(
+        "Download finished for task",
+        sanitizeLogMessage(task.title),
+        sanitizeLogMessage(videoData.title),
+      );
+
+      // Determine best title
+      let finalTitle = videoData.title;
+      const genericTitles = [
+        "YouTube Video",
+        "Bilibili Video",
+        "MissAV Video",
+        "Video",
+      ];
+      if (!finalTitle || genericTitles.includes(finalTitle)) {
+        if (task.title && !genericTitles.includes(task.title)) {
+          finalTitle = task.title;
+        }
+      }
+
+      // Add to history
+      if (!task.cancelled) {
+        this.clearRetryTimer(task.id);
+        const historySourceUrl = videoData.sourceUrl || task.sourceUrl;
+        const historyTotalSize =
+          typeof videoData.fileSize === "string" || typeof videoData.fileSize === "number"
+            ? String(videoData.fileSize)
+            : undefined;
+        if (!task.options?.suppressHistory) {
+          storageService.addDownloadHistoryItem({
+            id: task.id,
+            title: finalTitle || task.title,
+            finishedAt: Date.now(),
+            status: "success",
+            videoPath: videoData.videoPath,
+            thumbnailPath: videoData.thumbnailPath,
+            sourceUrl: historySourceUrl,
+            author: videoData.author,
+            videoId: videoData.id,
+            incompleteDownloadNote: videoData.incompleteDownloadNote,
+            totalSize: historyTotalSize,
+            // Carried so a later deletion leaves a tombstone that says which of
+            // audio/video went away, which the shared source-level tracking row
+            // cannot express for a multipart item.
+            mediaType: videoData.mediaType === "audio" ? "audio" : "video",
+            platform: normalizeMediaPlatform(platformFromUrl(historySourceUrl)),
+            sourceKind: task.statistics?.sourceKind ?? "manual",
+            downloadType: task.type,
+            retryMetadata:
+              task.retryMetadata && requiresRetryMetadata(task.retryMetadata)
+                ? serializeRetryMetadata(task.retryMetadata)
+                : undefined,
+          });
+          addAggregatePartHistory(task, result, videoData.id);
+        }
+
+        // Record video download for future duplicate detection
+        const sourceUrl = videoData.sourceUrl || task.sourceUrl;
+        if (sourceUrl && videoData.id) {
+          const { id: sourceVideoId, platform } =
+            extractSourceVideoId(sourceUrl);
+          if (sourceVideoId) {
+            // Track audio-only downloads as their own row so they never collide
+            // with the video download for the same source.
+            const mediaType =
+              videoData.mediaType === "audio" ? "audio" : "video";
+            storageService.persistDownloadedMediaIdentity({
+              video: {
+                ...videoData,
+                title: finalTitle || videoData.title || task.title,
+                sourceUrl,
+                sourceVideoId,
+                mediaType,
+              },
+              identity: {
+                platform: normalizeMediaPlatform(platform),
+                sourceVideoId,
+                mediaType,
+                partNumber: videoData.partNumber,
+                localVideoId: videoData.id,
+              },
+              sourceUrl,
+              trackingMode: "redownload",
+              downloadedAtMs:
+                typeof videoData.addedAt === "string"
+                  ? Date.parse(videoData.addedAt)
+                  : undefined,
+            });
+          }
+        }
+      }
+
+
+
+      // Execute hook - Await this so user script can process local file before cloud upload/delete
+      await HookService.executeHook("task_success", {
+        taskId: task.id,
+        taskTitle: finalTitle || task.title,
+        sourceUrl: task.sourceUrl,
+        status: "success",
+        videoPath: videoData.videoPath,
+        thumbnailPath: videoData.thumbnailPath,
+      });
+
+      if (!task.options?.suppressCompletionNotification) {
+        import("./telegramService").then(({ TelegramService }) =>
+          TelegramService.notifyTaskComplete({
+            taskTitle: finalTitle || task.title,
+            status: "success",
+            sourceUrl: task.sourceUrl,
+          })
+        ).catch(() => {});
+      }
+
+      // Trigger Cloud Upload (Async, don't await to block queue processing?)
+      // Actually, we might want to await it if we want to ensure it's done before resolving,
+      // but that would block the download queue.
+      // Let's run it in background but log it.
+      CloudStorageService.uploadVideo({
+        ...videoData,
+        title: finalTitle || task.title,
+        sourceUrl: task.sourceUrl,
+      }).catch((err) => logger.error("Background cloud upload failed:", err));
+
+      task.resolve(result);
+    } catch (error) {
+      // Check if this is a cancellation - handle differently
+      if (isCancelledError(error) || task.cancelled) {
+        logger.info("Download cancelled:", sanitizeLogMessage(task.title));
+        task.cancelled = true;
+        this.finalizeCancelledTask(
+          task,
+          isCancelledError(error) ? error : DownloadCancelledError.create(),
+        );
+        return;
+      }
+
+      // Members-only content can never be downloaded without a channel
+      // membership. For *subscription* downloads this is a benign skip rather
+      // than a failure: log it informationally and suppress every failure side
+      // effect below (retry, failed-history row, task_fail hook, fail
+      // notification); we still reject so the subscription check can advance
+      // its own cursor. Detecting it here — before those side effects fire — is
+      // what makes the skip benign (issue #393). Manually-queued downloads keep
+      // their normal failure automation: an admin who explicitly requested a
+      // members-only URL should still see it fail, fire task_fail, and honor
+      // configured auto-retries (PR #395 review).
+      const isSubscriptionTask =
+        task.statistics?.sourceKind === "subscription";
+      const membersOnlySkip = isSubscriptionTask && isMembersOnlyError(error);
+
+      if (membersOnlySkip) {
+        logger.info(
+          "Skipping members-only content:",
+          sanitizeLogMessage(task.title),
+        );
+      } else {
+        logger.error(
+          "Error downloading task:",
+          sanitizeLogMessage(task.title),
+          error,
+        );
+      }
+
+      // Download failed
+      storageService.removeActiveDownload(task.id);
+      const structuredResult = getStructuredDownloadResult(error);
+      // The task-level history row is partial/failed here, so it cannot later
+      // become a deletion tombstone. Keep a success row for every part that
+      // was actually saved, including the part surfaced as `video`.
+      addAggregatePartHistory(task, structuredResult);
+
+      // Add to history (unless already added by cancelDownload). Members-only
+      // subscription skips are never retried — retrying can't succeed.
+      let retryScheduled = false;
+      if (!task.cancelled && !membersOnlySkip) {
+        retryScheduled = this.maybeScheduleRetry(task, error);
+      }
+
+      if (!task.cancelled && !retryScheduled) {
+        this.clearRetryTimer(task.id);
+        if (!task.options?.suppressHistory) {
+          storageService.addDownloadHistoryItem({
+            id: task.id,
+            title: task.title,
+            finishedAt: Date.now(),
+            status: membersOnlySkip
+              ? "skipped"
+              : structuredResult?.partial === true
+                ? PARTIAL_STATUS
+                : "failed",
+            error: membersOnlySkip
+              ? "Skipped members-only content"
+              : getErrorMessage(error),
+            sourceUrl: task.sourceUrl,
+            platform: getTaskMediaIdentity(task).platform,
+            sourceKind: task.statistics?.sourceKind ?? "unknown",
+            downloadType: task.type,
+            retryMetadata:
+              task.retryMetadata && requiresRetryMetadata(task.retryMetadata)
+                ? serializeRetryMetadata(task.retryMetadata)
+                : undefined,
+          });
+        }
+      }
+
+      if (!retryScheduled) {
+        // Failure automation (task_fail hook + fail notification) only fires
+        // for genuine failures, not benign subscription skips.
+        if (!membersOnlySkip) {
+          // Await failure hooks so notifications and other side effects complete
+          // before the task rejection propagates to callers.
+          await awaitTaskFailHook({
+            taskId: task.id,
+            taskTitle: task.title,
+            sourceUrl: task.sourceUrl,
+            status: "fail",
+            error: getErrorMessage(error),
+          });
+
+          if (!task.options?.suppressCompletionNotification) {
+            import("./telegramService").then(({ TelegramService }) =>
+              TelegramService.notifyTaskComplete({
+                taskTitle: task.title,
+                status: "fail",
+                sourceUrl: task.sourceUrl,
+                error: getErrorMessage(error),
+              })
+            ).catch(() => {});
+          }
+        }
+
+        task.reject(error);
+      }
+    } finally {
+      // Only clean up if the task wasn't already cleaned up by cancelDownload
+      if (this.activeTasks.has(task.id)) {
+        this.activeTasks.delete(task.id);
+        this.activeDownloads--;
+      }
+      // Process next item in queue
+      this.processQueue();
+    }
+  }
+
+  /**
+   * Get current status
+   */
+  getStatus(): { active: number; queued: number } {
+    return {
+      active: this.activeDownloads,
+      queued: this.queue.length,
+    };
+  }
+}
+
+// Export a singleton instance
+export default new DownloadManager();

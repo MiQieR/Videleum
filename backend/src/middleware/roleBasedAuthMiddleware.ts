@@ -1,0 +1,203 @@
+import { NextFunction, Request, Response } from "express";
+import { isLoginRequired } from "../services/passwordService";
+import * as storageService from "../services/storageService";
+import {
+  getNormalizedRequestPath,
+  matchesExactPath,
+  matchesPathOrSubpath,
+} from "../utils/requestPath";
+
+const PUBLIC_EXACT_PATHS = [
+  "/settings/verify-password",
+  "/settings/verify-admin-password",
+  "/settings/verify-user-login",
+  "/settings/verify-visitor-password",
+  "/settings/password-enabled",
+  "/settings/passkeys/exists",
+  "/settings/logout",
+  "/settings/gesture-login/status",
+  "/settings/gesture-login/authenticate",
+] as const;
+
+const PUBLIC_PREFIX_PATHS = [
+  "/settings/passkeys/authenticate",
+] as const;
+
+const VISITOR_ALLOWED_POST_EXACT_PATHS = [
+  "/settings/verify-password",
+  "/settings/verify-admin-password",
+  "/settings/verify-user-login",
+  "/settings/verify-visitor-password",
+  "/settings/logout",
+  // A visitor may submit an admin gesture just as they may submit an admin
+  // password: knowing the credential is what upgrades the session. The visitor
+  // branch below runs before the public-endpoint check, so the public list
+  // alone would not reach this handler.
+  "/settings/gesture-login/authenticate",
+] as const;
+
+const VISITOR_ALLOWED_POST_PREFIX_PATHS = [
+  "/settings/passkeys/authenticate",
+  "/favorites",
+] as const;
+
+const VISITOR_ALLOWED_DELETE_PREFIX_PATHS = [
+  "/favorites",
+] as const;
+
+/**
+ * Check if the current request is to a public endpoint that doesn't require authentication
+ */
+const isPublicEndpoint = (req: Request): boolean => {
+  return (
+    matchesExactPath(req, PUBLIC_EXACT_PATHS) ||
+    matchesPathOrSubpath(req, PUBLIC_PREFIX_PATHS)
+  );
+};
+
+const isApiKeyDownloadEndpoint = (req: Request): boolean => {
+  return req.method === "POST" && getNormalizedRequestPath(req) === "/download";
+};
+
+const statisticsVisitorIngestionAllowed = (): boolean => {
+  try {
+    const settings = storageService.getSettings() as {
+      statisticsEnabled?: boolean;
+      statisticsTrackVisitorActivity?: boolean;
+    };
+    return (
+      settings.statisticsEnabled === true &&
+      settings.statisticsTrackVisitorActivity === true
+    );
+  } catch {
+    return false;
+  }
+};
+
+const isAdminUploadEndpoint = (req: Request): boolean => {
+  const requestPath = getNormalizedRequestPath(req);
+  return (
+    req.method === "POST" &&
+    (requestPath === "/upload" || requestPath === "/upload/batch")
+  );
+};
+
+/**
+ * Middleware to enforce role-based access control
+ * Visitors (userRole === 'visitor') are restricted to read-only operations
+ * Admins (userRole === 'admin') have full access
+ * Unauthenticated users are blocked when loginEnabled is true (except for public endpoints)
+ */
+export const roleBasedAuthMiddleware = (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void => {
+  // API-key-only read routes are mounted before this middleware.
+  // Requests that still reach this guard are forbidden, except for the legacy
+  // POST /api/download fallback which remains explicitly allowed here.
+  if (req.apiKeyAuthenticated === true) {
+    if (isApiKeyDownloadEndpoint(req)) {
+      next();
+      return;
+    }
+
+    res.status(403).json({
+      success: false,
+      error:
+        "API key authentication only allows POST /api/download and read-only library endpoints.",
+    });
+    return;
+  }
+
+  const loginRequired = isLoginRequired();
+
+  // When login is disabled, requests should not remain scoped by a stale visitor role.
+  if (!loginRequired) {
+    next();
+    return;
+  }
+
+  // If user is Admin, allow all requests
+  if (req.user?.role === "admin") {
+    next();
+    return;
+  }
+
+  // If user is Visitor, restrict to read-only
+  if (req.user?.role === "visitor") {
+    // Allow GET requests (read-only)
+    if (req.method === "GET") {
+      next();
+      return;
+    }
+
+    // Allow authentication-related POST requests
+    if (req.method === "POST") {
+      if (matchesExactPath(req, VISITOR_ALLOWED_POST_EXACT_PATHS)) {
+        next();
+        return;
+      }
+
+      if (matchesPathOrSubpath(req, VISITOR_ALLOWED_POST_PREFIX_PATHS)) {
+        next();
+        return;
+      }
+
+      // Dynamic gate: visitor statistics ingestion is only allowed when
+      // statisticsTrackVisitorActivity = true. Read at request time so toggling
+      // the setting takes effect immediately. The internal path here is normalized
+      // to /statistics/events because the /api prefix is stripped by the mount.
+      if (
+        getNormalizedRequestPath(req) === "/statistics/events" &&
+        statisticsVisitorIngestionAllowed()
+      ) {
+        next();
+        return;
+      }
+    }
+
+    if (
+      req.method === "DELETE" &&
+      matchesPathOrSubpath(req, VISITOR_ALLOWED_DELETE_PREFIX_PATHS)
+    ) {
+      next();
+      return;
+    }
+
+    // Block all other write operations (POST, PUT, DELETE, PATCH)
+    res.status(403).json({
+      success: false,
+      error: "Visitor role: Write operations are not allowed. Read-only access only.",
+    });
+    return;
+  }
+
+  // For unauthenticated users, check if login is required
+  if (!req.user) {
+    if (isAdminUploadEndpoint(req)) {
+      res.status(401).json({
+        success: false,
+        error:
+          "Video upload endpoints require an authenticated admin session.",
+      });
+      return;
+    }
+
+    // If login is required and this is not a public endpoint, reject the request
+    if (!isPublicEndpoint(req)) {
+      res.status(401).json({
+        success: false,
+        error: "Authentication required. Please log in to access this resource.",
+      });
+      return;
+    }
+
+    // If login is not required, or this is a public endpoint, allow the request
+    next();
+    return;
+  }
+
+  // Fallback: allow the request (should not reach here)
+  next();
+};

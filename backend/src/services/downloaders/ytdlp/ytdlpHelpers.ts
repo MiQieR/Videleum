@@ -1,0 +1,277 @@
+import axios from "axios";
+import path from "path";
+import { logger } from "../../../utils/logger";
+import {
+  normalizeSafeAbsolutePath,
+  pathExistsTrustedSync,
+} from "../../../utils/security";
+
+const XIAOHONGSHU_PROFILE_ORIGIN = "https://www.xiaohongshu.com";
+const XIAOHONGSHU_UPLOADER_ID_PATTERN = /^[a-zA-Z0-9]{16,64}$/;
+const BGUTIL_SCRIPT_RELATIVE_PATH = path.join(
+  "bgutil-ytdlp-pot-provider",
+  "server",
+  "build",
+  "generate_once.js",
+);
+const BGUTIL_PLUGIN_PACKAGE_RELATIVE_PATH = path.join(
+  "bgutil-ytdlp-pot-provider",
+  "plugin",
+  "yt_dlp_plugins",
+);
+const BGUTIL_SCRIPT_BASENAME = "generate_once.js";
+const warnedInvalidProviderScriptPaths = new Set<string>();
+const warnedMissingProviderScriptPaths = new Set<string>();
+
+function isValidProviderScriptPath(filePath: string): boolean {
+  return path.basename(filePath) === BGUTIL_SCRIPT_BASENAME;
+}
+
+function resolveBundledProviderPluginCandidatePaths(): string[] {
+  return [
+    path.resolve(process.cwd(), BGUTIL_PLUGIN_PACKAGE_RELATIVE_PATH),
+    // Source layout: backend/src/services/downloaders/ytdlp -> backend/
+    path.resolve(__dirname, "../../../..", BGUTIL_PLUGIN_PACKAGE_RELATIVE_PATH),
+    // Build layout: backend/dist/src/services/downloaders/ytdlp -> backend/
+    path.resolve(__dirname, "../../../../..", BGUTIL_PLUGIN_PACKAGE_RELATIVE_PATH),
+  ].map((candidatePath) => normalizeSafeAbsolutePath(candidatePath));
+}
+
+function findExistingBundledProviderPath(candidatePaths: string[]): string {
+  for (const candidatePath of candidatePaths) {
+    if (pathExistsTrustedSync(candidatePath)) {
+      return candidatePath;
+    }
+  }
+  return "";
+}
+
+function warnOnce(
+  warnedPaths: Set<string>,
+  warningKey: string,
+  message: string,
+): void {
+  if (warnedPaths.has(warningKey)) {
+    return;
+  }
+
+  warnedPaths.add(warningKey);
+  logger.warn(message);
+}
+
+function resolveConfiguredProviderScript(configuredPath: string): string | null {
+  const absoluteConfiguredPath = path.isAbsolute(configuredPath)
+    ? configuredPath
+    : path.normalize(`${process.cwd()}${path.sep}${configuredPath}`);
+  const normalizedConfiguredPath = normalizeSafeAbsolutePath(absoluteConfiguredPath);
+
+  if (!isValidProviderScriptPath(normalizedConfiguredPath)) {
+    warnOnce(
+      warnedInvalidProviderScriptPaths,
+      normalizedConfiguredPath,
+      `Ignoring BGUTIL_SCRIPT_PATH because it must point to ${BGUTIL_SCRIPT_BASENAME}: ${configuredPath}`,
+    );
+    return null;
+  }
+
+  if (!pathExistsTrustedSync(normalizedConfiguredPath)) {
+    warnOnce(
+      warnedMissingProviderScriptPaths,
+      normalizedConfiguredPath,
+      `Ignoring BGUTIL_SCRIPT_PATH because the file does not exist: ${configuredPath}`,
+    );
+    return null;
+  }
+
+  return normalizedConfiguredPath;
+}
+
+function getSafeUploaderId(rawUploaderId: unknown): string | null {
+  if (typeof rawUploaderId !== "string") {
+    return null;
+  }
+  const normalized = rawUploaderId.trim();
+  if (!XIAOHONGSHU_UPLOADER_ID_PATTERN.test(normalized)) {
+    return null;
+  }
+  return normalized;
+}
+
+function escapeRegex(source: string): string {
+  return source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function decodeEscapedJsonString(raw: string): string {
+  try {
+    return JSON.parse(`"${raw}"`);
+  } catch {
+    return raw
+      .replace(/\\"/g, "\"")
+      .replace(/\\\\/g, "\\")
+      .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) =>
+        String.fromCharCode(parseInt(hex, 16)),
+      );
+  }
+}
+
+function normalizeNickname(raw: string): string | null {
+  const decoded = decodeEscapedJsonString(raw)
+    .replace(/\0/g, "")
+    .trim();
+  if (!decoded || decoded.length > 80) {
+    return null;
+  }
+  return decoded;
+}
+
+function extractNicknameFromText(text: string): string | null {
+  const patterns = [
+    /"nickname":"([^"\\]*(?:\\.[^"\\]*)*)"/i,
+    /"nickName":"([^"\\]*(?:\\.[^"\\]*)*)"/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match || !match[1]) {
+      continue;
+    }
+
+    const nickname = normalizeNickname(match[1]);
+    if (nickname) {
+      return nickname;
+    }
+  }
+
+  return null;
+}
+
+function extractNicknameFromProfileHtml(
+  html: string,
+  uploaderId: string,
+): string | null {
+  const userIdMarker = `"userId":"${escapeRegex(uploaderId)}"`;
+  const userSectionStart = html.indexOf(userIdMarker);
+  if (userSectionStart >= 0) {
+    const userSection = html.slice(
+      userSectionStart,
+      userSectionStart + userIdMarker.length + 500,
+    );
+    const scopedNickname = extractNicknameFromText(userSection);
+    if (scopedNickname) {
+      return scopedNickname;
+    }
+  }
+
+  return extractNicknameFromText(html);
+}
+
+/**
+ * Helper function to extract author from XiaoHongShu page when yt-dlp doesn't provide it
+ */
+export async function extractXiaoHongShuAuthor(
+  url: string,
+  uploaderId?: string | null,
+): Promise<string | null> {
+  try {
+    const safeUploaderId = getSafeUploaderId(uploaderId);
+    if (!safeUploaderId) {
+      logger.info(
+        `Skipping XiaoHongShu author extraction for URL: ${url}. Missing/invalid uploader_id.`,
+      );
+      return null;
+    }
+
+    const profileUrl = `${XIAOHONGSHU_PROFILE_ORIGIN}/user/profile/${safeUploaderId}`;
+    logger.info(
+      `Attempting XiaoHongShu author extraction from profile for uploader_id: ${safeUploaderId}`,
+    );
+
+    // Same egress as the yt-dlp call for this video: "proxy only for YouTube"
+    // resolves to an explicit direct connection, which axios has to be told
+    // about because it reads HTTP_PROXY from the environment itself. Resolved
+    // from the video URL, not the profile URL, because that is what the
+    // download decided on. (The helper is generic despite its module - it is
+    // the one place that owns the skip-vs-proxy decision for side requests.)
+    const { resolveProxiedAxiosConfigForUrl } = await import(
+      "../bilibili/bilibiliConfig"
+    );
+    const axiosConfig = resolveProxiedAxiosConfigForUrl(url);
+    if (!axiosConfig) {
+      // A configured proxy that cannot be used: recording the fallback author
+      // is the lesser harm against fetching this over the user's real IP.
+      logger.warn(
+        "Skipping XiaoHongShu author extraction: the configured proxy is unusable.",
+      );
+      return null;
+    }
+
+    const response = await axios.get(profileUrl, {
+      ...axiosConfig,
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Referer: XIAOHONGSHU_PROFILE_ORIGIN,
+      },
+      timeout: 10000,
+    });
+
+    const html = typeof response.data === "string" ? response.data : "";
+    if (!html) {
+      return null;
+    }
+
+    const nickname = extractNicknameFromProfileHtml(html, safeUploaderId);
+    if (nickname) {
+      logger.info(`Extracted XiaoHongShu author nickname: ${nickname}`);
+      return nickname;
+    }
+
+    logger.info(
+      `Could not extract XiaoHongShu nickname from profile for uploader_id: ${safeUploaderId}`,
+    );
+    return null;
+  } catch (error) {
+    logger.error("Error extracting XiaoHongShu author:", error);
+    return null;
+  }
+}
+
+/**
+ * Get the PO Token provider script path from environment
+ */
+export function getProviderScript(): string {
+  const configuredPath = process.env.BGUTIL_SCRIPT_PATH?.trim();
+  if (configuredPath) {
+    const configuredProviderScript = resolveConfiguredProviderScript(configuredPath);
+    if (configuredProviderScript) {
+      return configuredProviderScript;
+    }
+  }
+
+  const candidatePaths = [
+    path.resolve(process.cwd(), BGUTIL_SCRIPT_RELATIVE_PATH),
+    // Source layout: backend/src/services/downloaders/ytdlp -> backend/
+    path.resolve(__dirname, "../../../..", BGUTIL_SCRIPT_RELATIVE_PATH),
+    // Build layout: backend/dist/src/services/downloaders/ytdlp -> backend/
+    path.resolve(__dirname, "../../../../..", BGUTIL_SCRIPT_RELATIVE_PATH),
+  ];
+
+  for (const candidatePath of candidatePaths) {
+    const normalizedCandidatePath = normalizeSafeAbsolutePath(candidatePath);
+    if (pathExistsTrustedSync(normalizedCandidatePath)) {
+      return normalizedCandidatePath;
+    }
+  }
+
+  return "";
+}
+
+/**
+ * Get the bundled PO Token provider plugin path for PYTHONPATH injection.
+ */
+export function getProviderPluginPath(): string {
+  const pluginPackagePath = findExistingBundledProviderPath(
+    resolveBundledProviderPluginCandidatePaths(),
+  );
+  return pluginPackagePath ? path.dirname(pluginPackagePath) : "";
+}

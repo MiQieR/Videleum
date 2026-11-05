@@ -1,0 +1,297 @@
+import { Pause, PlayArrow } from '@mui/icons-material';
+import { Box, IconButton, Stack, Tooltip, useMediaQuery, useTheme } from '@mui/material';
+import React from 'react';
+import { brand, gradient, modeColors, overlay } from '../../../theme/colors';
+import { useLanguage } from '../../../contexts/LanguageContext';
+import type { PlayerSeekIntervals } from '../../../utils/playerSeekIntervals';
+import CinemaModeControl from './CinemaModeControl';
+import CompatibilityModeControl from './CompatibilityModeControl';
+import FullscreenControl from './FullscreenControl';
+import LiveTranslationControlButton from './LiveTranslationControlButton';
+import LoopControl from './LoopControl';
+import PlaybackControls from './PlaybackControls';
+import SpeedControl from './SpeedControl';
+import ProgressBar from './ProgressBar';
+import SubtitleControl from './SubtitleControl';
+import VolumeControl from './VolumeControl';
+
+interface ControlsOverlayProps {
+    isFullscreen: boolean;
+    controlsVisible: boolean;
+    isPlaying: boolean;
+    currentTime: number;
+    duration: number;
+    isDragging: boolean;
+    volume: number;
+    showVolumeSlider: boolean;
+    volumeSliderRef: React.RefObject<HTMLDivElement | null>;
+    subtitles: Array<{ language: string; filename: string; path: string }>;
+    subtitlesEnabled: boolean;
+    selectedSubtitleIndices: number[];
+    isLooping: boolean;
+    subtitleMenuAnchor: HTMLElement | null;
+    onPlayPause: () => void;
+    onSeek: (seconds: number) => void;
+    onProgressChange: (value: number) => void;
+    onProgressChangeCommitted: (value: number) => void;
+    onProgressMouseDown: () => void;
+    onVolumeChange: (value: number) => void;
+    onVolumeClick: () => void;
+    onVolumeMouseEnter: () => void;
+    onVolumeMouseLeave: () => void;
+    onSliderMouseEnter: () => void;
+    onSliderMouseLeave: () => void;
+    onSubtitleClick: (event: React.MouseEvent<HTMLElement>) => void;
+    onCloseSubtitleMenu: () => void;
+    onSelectSubtitle: (index: number) => void;
+    onToggleFullscreen: () => void;
+    onToggleLoop: () => void;
+    onControlsMouseEnter: () => void;
+    playbackRate: number;
+    onPlaybackRateChange: (rate: number) => void;
+    seekIntervals: PlayerSeekIntervals;
+    isCinemaMode?: boolean;
+    onToggleCinemaMode?: () => void;
+    onUploadSubtitle?: (file: File) => void;
+    onDeleteSubtitle?: (index: number) => void | Promise<void>;
+    liveSubtitleAvailable?: boolean;
+    liveSubtitleLabel?: string;
+    liveSubtitleSelected?: boolean;
+    onSelectLiveSubtitle?: () => void;
+    isAudio?: boolean;
+    onEnterCompatibilityMode?: () => void;
+}
+
+const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
+    isFullscreen,
+    controlsVisible,
+    isPlaying,
+    currentTime,
+    duration,
+    // isDragging,
+    volume,
+    showVolumeSlider,
+    volumeSliderRef,
+    subtitles,
+    subtitlesEnabled,
+    selectedSubtitleIndices,
+    isLooping,
+    subtitleMenuAnchor,
+    onPlayPause,
+    onSeek,
+    onProgressChange,
+    onProgressChangeCommitted,
+    onProgressMouseDown,
+    onVolumeChange,
+    onVolumeClick,
+    onVolumeMouseEnter,
+    onVolumeMouseLeave,
+    onSliderMouseEnter,
+    onSliderMouseLeave,
+    onSubtitleClick,
+    onCloseSubtitleMenu,
+    onSelectSubtitle,
+    onToggleFullscreen,
+    onToggleLoop,
+    onControlsMouseEnter,
+    playbackRate,
+    onPlaybackRateChange,
+    seekIntervals,
+    isCinemaMode = false,
+    onToggleCinemaMode,
+    onUploadSubtitle,
+    onDeleteSubtitle,
+    liveSubtitleAvailable = false,
+    liveSubtitleLabel = '',
+    liveSubtitleSelected = false,
+    onSelectLiveSubtitle,
+    isAudio = false,
+    onEnterCompatibilityMode,
+}) => {
+    const theme = useTheme();
+    const { t } = useLanguage();
+    const isTouch = useMediaQuery('(hover: none), (pointer: coarse)');
+    const fullscreenIconColor = overlay.white92;
+    const fullscreenActiveColor = brand.primaryDark;
+    const modePalette = modeColors(theme.palette.mode);
+
+    return (
+        <Box
+            sx={{
+                p: 1,
+                // Nothing in the control cluster is meant to be selected; a
+                // stray tap on touch screens should never start a selection.
+                userSelect: 'none',
+                bgcolor: isFullscreen
+                    ? overlay.black55
+                    : modePalette.backgroundElevated,
+                backgroundImage: isFullscreen
+                    ? gradient.controlsFullscreen
+                    : 'none',
+                opacity: isFullscreen
+                    ? (controlsVisible ? 1 : 0)
+                    : 1,
+                visibility: isFullscreen && !controlsVisible ? 'hidden' : 'visible',
+                transform: isFullscreen
+                    ? (controlsVisible ? 'translateY(0)' : 'translateY(12px)')
+                    : 'translateY(0)',
+                transition: 'opacity 0.35s ease, visibility 0.35s ease, transform 0.35s ease, background-color 0.3s',
+                pointerEvents: isFullscreen && !controlsVisible ? 'none' : 'auto',
+                '&:hover': {
+                    opacity: 1
+                },
+                ...(isFullscreen && {
+                    color: fullscreenIconColor,
+                    '& .MuiIconButton-root': {
+                        color: fullscreenIconColor,
+                        '&:hover': {
+                            bgcolor: overlay.white14
+                        }
+                    },
+                    '& .MuiIconButton-colorPrimary, & .MuiIconButton-colorSecondary': {
+                        color: fullscreenActiveColor
+                    }
+                })
+            }}
+            onMouseEnter={onControlsMouseEnter}
+        >
+            {/* Progress Bar */}
+            <Box sx={{ px: { xs: 0.5, sm: 2 }, mb: 1 }}>
+                <Stack direction="row" spacing={{ xs: 0.5, sm: 1 }} alignItems="center">
+                    {/* Left Side: Volume and Play */}
+                    <Stack direction="row" spacing={0.5} alignItems="center" sx={{ mr: { xs: 0.5, sm: 1 } }}>
+                        <VolumeControl
+                            volume={volume}
+                            showVolumeSlider={showVolumeSlider}
+                            volumeSliderRef={volumeSliderRef}
+                            onVolumeChange={onVolumeChange}
+                            onVolumeClick={onVolumeClick}
+                            onMouseEnter={onVolumeMouseEnter}
+                            onMouseLeave={onVolumeMouseLeave}
+                            onSliderMouseEnter={onSliderMouseEnter}
+                            onSliderMouseLeave={onSliderMouseLeave}
+                        />
+
+                        {/* Play/Pause */}
+                        <Tooltip title={isPlaying ? t('paused') : t('playing')} disableHoverListener={isTouch}>
+                            <IconButton
+                                color={isPlaying ? "secondary" : "primary"}
+                                onClick={onPlayPause}
+                                size="small"
+                            >
+                                {isPlaying ? <Pause /> : <PlayArrow />}
+                            </IconButton>
+                        </Tooltip>
+                    </Stack>
+
+                    <ProgressBar
+                        currentTime={currentTime}
+                        duration={duration}
+                        isFullscreen={isFullscreen}
+                        onProgressChange={onProgressChange}
+                        onProgressChangeCommitted={onProgressChangeCommitted}
+                        onProgressMouseDown={onProgressMouseDown}
+                    />
+
+                    {/* Subtitle Button (Mobile only, next to progress bar) */}
+                    {!isAudio && <SubtitleControl
+                        subtitles={subtitles}
+                        subtitlesEnabled={subtitlesEnabled}
+                        selectedSubtitleIndices={selectedSubtitleIndices}
+                        subtitleMenuAnchor={subtitleMenuAnchor}
+                        onSubtitleClick={onSubtitleClick}
+                        onCloseMenu={onCloseSubtitleMenu}
+                        onSelectSubtitle={onSelectSubtitle}
+                        showOnMobile={true}
+                        onUploadSubtitle={onUploadSubtitle}
+                        onDeleteSubtitle={onDeleteSubtitle}
+                        isFullscreen={isFullscreen}
+                        liveSubtitleAvailable={liveSubtitleAvailable}
+                        liveSubtitleLabel={liveSubtitleLabel}
+                        liveSubtitleSelected={liveSubtitleSelected}
+                        onSelectLiveSubtitle={onSelectLiveSubtitle}
+                    />}
+
+                    {/* Right Side: Fullscreen, Cinema Mode (large screens only), Subtitle, Loop (Desktop only) */}
+                    <Stack direction="row" spacing={0.5} alignItems="center" sx={{ ml: 1, display: { xs: 'none', sm: 'flex' } }}>
+                        {!isAudio && <FullscreenControl
+                            isFullscreen={isFullscreen}
+                            onToggle={onToggleFullscreen}
+                        />}
+
+                        {/* Cinema Mode - only on large screens (lg and above) */}
+                        {!isAudio && onToggleCinemaMode && (
+                            <Box sx={{ display: { xs: 'none', sm: 'none', lg: 'block' } }}>
+                                <CinemaModeControl
+                                    isCinemaMode={isCinemaMode}
+                                    onToggle={onToggleCinemaMode}
+                                />
+                            </Box>
+                        )}
+
+                        {!isAudio && <SubtitleControl
+                            subtitles={subtitles}
+                            subtitlesEnabled={subtitlesEnabled}
+                            selectedSubtitleIndices={selectedSubtitleIndices}
+                            subtitleMenuAnchor={subtitleMenuAnchor}
+                            onSubtitleClick={onSubtitleClick}
+                            onCloseMenu={onCloseSubtitleMenu}
+                            onSelectSubtitle={onSelectSubtitle}
+                            onUploadSubtitle={onUploadSubtitle}
+                            onDeleteSubtitle={onDeleteSubtitle}
+                            isFullscreen={isFullscreen}
+                            liveSubtitleAvailable={liveSubtitleAvailable}
+                            liveSubtitleLabel={liveSubtitleLabel}
+                            liveSubtitleSelected={liveSubtitleSelected}
+                            onSelectLiveSubtitle={onSelectLiveSubtitle}
+                        />}
+
+                        <LoopControl
+                            isLooping={isLooping}
+                            onToggle={onToggleLoop}
+                        />
+                    </Stack>
+                </Stack>
+            </Box>
+
+            {/* Seek Controls */}
+            <PlaybackControls
+                isPlaying={isPlaying}
+                onPlayPause={onPlayPause}
+                onSeek={onSeek}
+                playbackRate={playbackRate}
+                onPlaybackRateChange={onPlaybackRateChange}
+                isFullscreen={isFullscreen}
+                seekIntervals={seekIntervals}
+                onEnterCompatibilityMode={onEnterCompatibilityMode}
+            />
+
+            {/* Mobile: Live Translate, Fullscreen, Loop, Speed */}
+            <Stack direction="row" spacing={0.5} alignItems="center" sx={{ display: { xs: 'flex', sm: 'none' }, ml: 1, justifyContent: 'center', mt: 1 }}>
+                {!isAudio && <LiveTranslationControlButton />}
+
+                {!isAudio && <FullscreenControl
+                    isFullscreen={isFullscreen}
+                    onToggle={onToggleFullscreen}
+                />}
+
+                <LoopControl
+                    isLooping={isLooping}
+                    onToggle={onToggleLoop}
+                />
+
+                <SpeedControl
+                    playbackRate={playbackRate}
+                    onPlaybackRateChange={onPlaybackRateChange}
+                    isFullscreen={isFullscreen}
+                />
+
+                {onEnterCompatibilityMode && (
+                    <CompatibilityModeControl onEnter={onEnterCompatibilityMode} />
+                )}
+            </Stack>
+        </Box>
+    );
+};
+
+export default ControlsOverlay;

@@ -1,0 +1,938 @@
+import { isHostnameAllowed } from "./security";
+import { getErrorMessage } from "./errors";
+import {
+  extractTwitchChannelLogin as extractLocalTwitchChannelLogin,
+  isTwitchChannelUrl as isLocalTwitchChannelUrl,
+  normalizeTwitchChannelUrl as normalizeLocalTwitchChannelUrl,
+} from "./twitch";
+import { logger } from "./logger";
+
+const YOUTUBE_HOSTNAMES = ["youtube.com", "youtu.be"] as const;
+const BILIBILI_HOSTNAMES = ["bilibili.com", "b23.tv", "bili2233.cn"] as const;
+const BILIBILI_SPACE_HOSTNAMES = ["space.bilibili.com"] as const;
+const MISSAV_HOSTNAMES = [
+  "missav.com",
+  "missav.ai",
+  "missav.ws",
+  "missav.live",
+  "123av.com",
+  "123av.ai",
+  "123av.ws",
+  "javxx.com",
+  "njavtv.com",
+] as const;
+const TWITTER_HOSTNAMES = ["x.com", "twitter.com"] as const;
+const TWITCH_HOSTNAMES = ["twitch.tv"] as const;
+
+const ALLOWED_BILIBILI_SHORTENER_HOSTNAMES = ["b23.tv", "bili2233.cn"] as const;
+// Hosts a shortener hop may legally land on. Kept separate from the shortener
+// list so a redirect can only ever move within the shorteners or onto Bilibili
+// proper — never to an arbitrary host the shortener happens to point at.
+const ALLOWED_BILIBILI_REDIRECT_HOSTNAMES = [
+  "bilibili.com",
+  "b23.tv",
+  "bili2233.cn",
+] as const;
+const MAX_SHORT_URL_REDIRECTS = 5;
+const SHORT_URL_RESOLVE_TIMEOUT_MS = 10000;
+const SHORT_URL_RESOLVE_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36";
+const REQUEST_HOST_OUTPUT_MAP: Record<string, string> = {
+  "bilibili.com": "www.bilibili.com",
+};
+function parseUrlSafe(url: string): URL | null {
+  try {
+    return new URL(url);
+  } catch {
+    return null;
+  }
+}
+
+function hasAllowedHostname(
+  url: string,
+  allowedHostnames: readonly string[],
+): boolean {
+  const parsedUrl = parseUrlSafe(url);
+  if (!parsedUrl) {
+    return false;
+  }
+
+  // Reject credentials/port at the classifier level to avoid unsafe edge cases.
+  if (parsedUrl.username || parsedUrl.password || parsedUrl.port) {
+    return false;
+  }
+
+  return isHostnameAllowed(parsedUrl.hostname, allowedHostnames);
+}
+
+function buildSafeRequestUrl(
+  url: string,
+  allowedHostnames: readonly string[],
+): string {
+  const parsedUrl = new URL(url);
+  if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+    throw new Error(
+      `Invalid protocol: ${parsedUrl.protocol}. Only http and https are allowed.`,
+    );
+  }
+  if (parsedUrl.username || parsedUrl.password || parsedUrl.port) {
+    throw new Error(
+      "SSRF protection: URLs with credentials or explicit ports are not allowed.",
+    );
+  }
+
+  const normalizedHostname = parsedUrl.hostname.toLowerCase();
+  const canonicalAllowedHost = allowedHostnames.find((allowedHost) => {
+    const normalizedAllowedHost = allowedHost.toLowerCase();
+    return (
+      normalizedHostname === normalizedAllowedHost ||
+      normalizedHostname.endsWith(`.${normalizedAllowedHost}`)
+    );
+  });
+  if (!canonicalAllowedHost) {
+    throw new Error(
+      `SSRF protection: Hostname ${parsedUrl.hostname} is not in the URL allow-list.`,
+    );
+  }
+
+  const pathSegments = parsedUrl.pathname.split("/").filter(Boolean);
+  if (pathSegments.some((segment) => segment === "..")) {
+    throw new Error("SSRF protection: Path traversal is not allowed in URL path.");
+  }
+
+  const safePath = parsedUrl.pathname || "/";
+  const outputHost =
+    REQUEST_HOST_OUTPUT_MAP[canonicalAllowedHost] ?? canonicalAllowedHost;
+  return `https://${outputHost}${safePath}${parsedUrl.search}`;
+}
+
+// Helper function to check if a string is a valid URL
+export function isValidUrl(string: string): boolean {
+  try {
+    new URL(string);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// Helper function to check if a URL is from Bilibili
+export function isBilibiliUrl(url: string): boolean {
+  return hasAllowedHostname(url, BILIBILI_HOSTNAMES);
+}
+
+// Helper function to check if a URL is a Bilibili space/author URL
+export function isBilibiliSpaceUrl(url: string): boolean {
+  return hasAllowedHostname(url, BILIBILI_SPACE_HOSTNAMES);
+}
+
+export function isBilibiliShortUrl(url: string): boolean {
+  return hasAllowedHostname(url, ALLOWED_BILIBILI_SHORTENER_HOSTNAMES);
+}
+
+export function isYouTubeUrl(url: string): boolean {
+  return hasAllowedHostname(url, YOUTUBE_HOSTNAMES);
+}
+
+export function isMissAVUrl(url: string): boolean {
+  return hasAllowedHostname(url, MISSAV_HOSTNAMES);
+}
+
+export function isTwitterUrl(url: string): boolean {
+  return hasAllowedHostname(url, TWITTER_HOSTNAMES);
+}
+
+export function isTwitchUrl(url: string): boolean {
+  return hasAllowedHostname(url, TWITCH_HOSTNAMES);
+}
+
+// Helper function to extract URL from text that might contain a title and URL
+export function extractUrlFromText(text: string): string {
+  // Regular expression to find URLs in text
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+  const matches = text.match(urlRegex);
+
+  if (matches && matches.length > 0) {
+    return matches[0];
+  }
+
+  return text; // Return original text if no URL found
+}
+
+/**
+ * Validate a shortener redirect target.
+ *
+ * Deliberately not buildSafeRequestUrl: that helper canonicalizes every
+ * `*.bilibili.com` host to `www.bilibili.com`, which is right for a URL the user
+ * typed but wrong for a redirect target — a short link to `live.bilibili.com/123`
+ * would be rewritten into a completely different `www.bilibili.com/123` page.
+ * Here the host is validated and preserved, and only a bare `bilibili.com` is
+ * filled out to `www`.
+ */
+function buildSafeRedirectUrl(url: string): string {
+  const parsedUrl = new URL(url);
+  if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+    throw new Error(
+      `Invalid redirect protocol: ${parsedUrl.protocol}. Only http and https are allowed.`,
+    );
+  }
+  if (parsedUrl.username || parsedUrl.password || parsedUrl.port) {
+    throw new Error(
+      "SSRF protection: redirects with credentials or explicit ports are not allowed.",
+    );
+  }
+
+  const hostname = parsedUrl.hostname.toLowerCase();
+  const isAllowed = ALLOWED_BILIBILI_REDIRECT_HOSTNAMES.some(
+    (allowedHost) =>
+      hostname === allowedHost || hostname.endsWith(`.${allowedHost}`),
+  );
+  if (!isAllowed) {
+    throw new Error(
+      `SSRF protection: redirect target ${parsedUrl.hostname} is not in the allow-list.`,
+    );
+  }
+
+  if (parsedUrl.pathname.split("/").some((segment) => segment === "..")) {
+    throw new Error("SSRF protection: path traversal is not allowed in a redirect.");
+  }
+
+  const outputHost = hostname === "bilibili.com" ? "www.bilibili.com" : hostname;
+  return `https://${outputHost}${parsedUrl.pathname || "/"}${parsedUrl.search}`;
+}
+
+// A single download resolves the same short URL several times (download-status
+// check, then the download itself, then any retry), so cache the redirect target
+// briefly to keep one paste from fanning out into repeated outbound requests.
+const shortUrlResolutionCache = new Map<
+  string,
+  // resolvedUrl null = a remembered failure.
+  { resolvedUrl: string | null; expiresAt: number }
+>();
+const SHORT_URL_CACHE_TTL_MS = 10 * 60 * 1000;
+const SHORT_URL_FAILURE_CACHE_TTL_MS = 60 * 1000;
+const SHORT_URL_CACHE_MAX_ENTRIES = 500;
+
+/**
+ * Cached resolution, or undefined when nothing is cached.
+ *
+ * A cached entry with a null resolvedUrl is a remembered failure, which is not
+ * the same as a cache miss: one paste hits /check-bilibili-collection,
+ * /check-bilibili-parts and /download in sequence, and each resolves the same
+ * URL, so an unreachable shortener would otherwise burn the full timeout three
+ * times before the download is even queued.
+ */
+function getCachedShortUrlResolution(
+  safeShortUrl: string,
+): { resolvedUrl: string | null } | undefined {
+  const cached = shortUrlResolutionCache.get(safeShortUrl);
+  if (!cached) return undefined;
+  if (cached.expiresAt <= Date.now()) {
+    shortUrlResolutionCache.delete(safeShortUrl);
+    return undefined;
+  }
+  return cached;
+}
+
+/**
+ * Store a resolution, keeping the cache bounded.
+ *
+ * A long-running server sees a stream of one-off links that are never requested
+ * a second time, so lazy expiry-on-read alone would let the map grow forever.
+ * Every write sweeps expired entries, and if that is not enough the oldest
+ * entries are dropped — Map preserves insertion order, so those are the ones
+ * closest to expiring anyway.
+ */
+function setCachedShortUrlResolution(
+  safeShortUrl: string,
+  resolvedUrl: string | null,
+): void {
+  const now = Date.now();
+  for (const [key, entry] of shortUrlResolutionCache) {
+    if (entry.expiresAt <= now) {
+      shortUrlResolutionCache.delete(key);
+    }
+  }
+
+  shortUrlResolutionCache.set(safeShortUrl, {
+    resolvedUrl,
+    // Failures expire far sooner than successes: they are remembered only to
+    // spare the rest of one paste's request flow, not to keep a shortener
+    // marked unreachable after it recovers.
+    expiresAt:
+      now +
+      (resolvedUrl === null
+        ? SHORT_URL_FAILURE_CACHE_TTL_MS
+        : SHORT_URL_CACHE_TTL_MS),
+  });
+
+  while (shortUrlResolutionCache.size > SHORT_URL_CACHE_MAX_ENTRIES) {
+    const oldestKey = shortUrlResolutionCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    shortUrlResolutionCache.delete(oldestKey);
+  }
+}
+
+/**
+ * @internal Test helper to clear the short-URL resolution cache between cases.
+ */
+export function resetShortUrlResolutionCacheForTests(): void {
+  shortUrlResolutionCache.clear();
+}
+
+/**
+ * @internal Test helper to assert the cache stays bounded.
+ */
+export function getShortUrlResolutionCacheSizeForTests(): number {
+  return shortUrlResolutionCache.size;
+}
+
+/**
+ * Follow a Bilibili shortener redirect chain one hop at a time.
+ *
+ * Every hop is validated against the allow-list before it is requested, which is
+ * why redirects are followed manually instead of by axios: axios' own follower
+ * would happily request an intermediate Location pointing at an internal host
+ * before we ever see the final URL.
+ *
+ * Returns null when the chain could not be followed (network failure, proxy-only
+ * reachability, an off-allow-list hop), leaving the caller on the short URL.
+ */
+async function followBilibiliShortUrl(safeShortUrl: string): Promise<string | null> {
+  // Dynamic imports: both modules reach back into helpers, so a static import
+  // would close an initialization cycle. getUserYtDlpConfig swallows its own
+  // read errors and returns {}, so a throw here means the module itself is
+  // unavailable — treat that as "proxy state unknown" and give up rather than
+  // guess that a direct connection is acceptable.
+  const { getUserYtDlpConfig } = await import("./ytdlp/config");
+  const proxy = getUserYtDlpConfig(safeShortUrl)?.proxy;
+
+  let axiosConfig: Record<string, unknown> = {};
+  if (typeof proxy === "string") {
+    // getAxiosProxyConfig throws on a malformed proxy precisely so callers do
+    // not silently fall back to a direct connection and expose the user's real
+    // IP. Let it propagate: the caller keeps the short URL, and the download
+    // still works because yt-dlp follows the redirect over the same proxy.
+    const { getAxiosProxyConfig } = await import("./ytdlp/proxy");
+    // An empty proxy is yt-dlp's "connect directly" value and comes back from
+    // getAxiosProxyConfig as `{ proxy: false }`, which stops axios reading
+    // HTTP_PROXY from the environment - otherwise the redirect chain and the
+    // download it feeds would take different egress paths.
+    axiosConfig = getAxiosProxyConfig(proxy);
+  }
+
+  const axios = (await import("axios")).default;
+  let currentUrl = safeShortUrl;
+
+  for (let hop = 0; hop < MAX_SHORT_URL_REDIRECTS; hop++) {
+    const response = await axios.head(currentUrl, {
+      ...axiosConfig,
+      maxRedirects: 0, // every hop is validated here, not by axios
+      validateStatus: null,
+      timeout: SHORT_URL_RESOLVE_TIMEOUT_MS,
+      headers: { "User-Agent": SHORT_URL_RESOLVE_USER_AGENT },
+    });
+
+    const location = response.headers?.location;
+    if (typeof location !== "string" || !location) {
+      // No further redirect: this is as far as the chain goes.
+      return isBilibiliShortUrl(currentUrl) ? null : currentUrl;
+    }
+
+    // Relative Location headers are resolved against the current hop.
+    const nextUrl = new URL(location, currentUrl).toString();
+    currentUrl = buildSafeRedirectUrl(nextUrl);
+
+    if (!isBilibiliShortUrl(currentUrl)) {
+      return currentUrl;
+    }
+  }
+
+  throw new Error(
+    `Short URL exceeded ${MAX_SHORT_URL_REDIRECTS} redirects without reaching bilibili.com`,
+  );
+}
+
+// Helper function to resolve shortened URLs (like b23.tv)
+export async function resolveShortUrl(url: string): Promise<string> {
+  try {
+    logger.info(`Resolving shortened URL: ${url}`);
+
+    const safeShortUrl = buildSafeRequestUrl(
+      url,
+      ALLOWED_BILIBILI_SHORTENER_HOSTNAMES,
+    );
+
+    const cached = getCachedShortUrlResolution(safeShortUrl);
+    if (cached) {
+      if (cached.resolvedUrl) {
+        logger.info(
+          `Resolved shortened URL from cache to: ${cached.resolvedUrl}`,
+        );
+        return cached.resolvedUrl;
+      }
+      logger.warn(
+        `Short URL ${safeShortUrl} failed to resolve recently; keeping it as-is without retrying.`,
+      );
+      return safeShortUrl;
+    }
+
+    // The short URL carries no BV/av id, so everything keyed off the source
+    // video id (avatar lookup, duplicate detection, multipart/collection
+    // detection, filename templates) needs the redirect target.
+    try {
+      const resolvedUrl = await followBilibiliShortUrl(safeShortUrl);
+      if (resolvedUrl) {
+        logger.info(`Resolved shortened URL to: ${resolvedUrl}`);
+        setCachedShortUrlResolution(safeShortUrl, resolvedUrl);
+        return resolvedUrl;
+      }
+      logger.warn(
+        `Short URL ${safeShortUrl} did not redirect to an allowed Bilibili host; keeping the short URL.`,
+      );
+      setCachedShortUrlResolution(safeShortUrl, null);
+    } catch (resolveError: unknown) {
+      // Resolution is best-effort: yt-dlp follows the redirect itself, so a
+      // failure here degrades metadata rather than breaking the download.
+      setCachedShortUrlResolution(safeShortUrl, null);
+      logger.warn(
+        `Could not follow shortened URL ${safeShortUrl}, keeping it as-is: ${getErrorMessage(resolveError)}`,
+      );
+    }
+
+    return safeShortUrl;
+  } catch (error: unknown) {
+    logger.error(`Error resolving shortened URL: ${getErrorMessage(error)}`);
+    // If validation fails, return original URL only if it's already validated
+    try {
+      return buildSafeRequestUrl(url, ALLOWED_BILIBILI_SHORTENER_HOSTNAMES);
+    } catch {
+      throw new Error(`Invalid URL: ${url}`);
+    }
+  }
+}
+
+/**
+ * Read the `p` (part) selector off a Bilibili URL.
+ *
+ * `p` is the one query parameter that changes *which* video is downloaded, so it
+ * has to survive trimming; everything else is share/tracking noise. Only a plain
+ * positive integer is accepted, so a junk value cannot ride along.
+ */
+export function getBilibiliPartNumber(url: string): number | null {
+  try {
+    const part = new URL(url).searchParams.get("p");
+    if (!part || !/^\d+$/.test(part)) return null;
+    const partNumber = Number(part);
+    return partNumber > 0 ? partNumber : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Every source URL that can denote the part a Bilibili URL selects.
+ *
+ * Part 1 has two canonical spellings and either may be what was stored: a single
+ * download saves the bare URL, the all-parts flow saves `?p=1`. Every other part
+ * has exactly one. Shared so duplicate detection and the downloader's reuse
+ * lookup cannot disagree about what counts as the same item.
+ */
+export function bilibiliPartSourceUrlAliases(url: string): string[] {
+  const baseUrl = trimBilibiliUrl(url).split("?")[0];
+  const partNumber = getBilibiliPartNumber(url) ?? 1;
+  return partNumber === 1
+    ? [baseUrl, `${baseUrl}?p=1`]
+    : [`${baseUrl}?p=${partNumber}`];
+}
+
+// Helper function to trim Bilibili URL by removing query parameters
+export function trimBilibiliUrl(url: string): string {
+  try {
+    // First, extract the video ID (BV or av format)
+    const videoIdMatch = url.match(/\/video\/(BV[\w]+|av\d+)/i);
+
+    if (videoIdMatch && videoIdMatch[1]) {
+      const videoId = videoIdMatch[1];
+      // Keep the part selector: dropping it silently redirects a shared link
+      // for part N to part 1. Matches the `?p=N` form the multipart download
+      // flow already uses as a part's canonical source URL.
+      const partNumber = getBilibiliPartNumber(url);
+      const cleanUrl =
+        `https://www.bilibili.com/video/${videoId}` +
+        (partNumber != null ? `?p=${partNumber}` : "");
+
+      logger.info(`Trimmed Bilibili URL from "${url}" to "${cleanUrl}"`);
+      return cleanUrl;
+    }
+
+    // If we couldn't extract the video ID using the regex above,
+    // try to clean the URL by removing query parameters
+    try {
+      const urlObj = new URL(url);
+      const cleanUrl = `${urlObj.origin}${urlObj.pathname}`;
+      logger.info(`Trimmed Bilibili URL from "${url}" to "${cleanUrl}"`);
+      return cleanUrl;
+    } catch (urlError) {
+      logger.error("Error parsing URL:", urlError);
+      return url;
+    }
+  } catch (error) {
+    logger.error("Error trimming Bilibili URL:", error);
+    return url; // Return original URL if there's an error
+  }
+}
+
+const YOUTUBE_AUTHOR_PATH_PREFIXES = ["channel", "user", "c"] as const;
+
+function getYouTubeAuthorBasePath(segments: string[]): string | null {
+  if (segments.length === 0) return null;
+  if (segments[0]?.startsWith("@")) return `/${segments[0]}`;
+  const isChannelLike =
+    YOUTUBE_AUTHOR_PATH_PREFIXES.includes(
+      segments[0] as (typeof YOUTUBE_AUTHOR_PATH_PREFIXES)[number]
+    ) && segments.length >= 2;
+  return isChannelLike ? `/${segments[0]}/${segments[1]}` : null;
+}
+
+/**
+ * Normalize YouTube author/channel URL by stripping tab path segments.
+ * e.g. https://www.youtube.com/@huzeyfekurt/featured → https://www.youtube.com/@huzeyfekurt
+ * Handles @handle, /channel/ID, /user/name, /c/name.
+ */
+export function normalizeYouTubeAuthorUrl(url: string): string {
+  try {
+    if (!isYouTubeUrl(url)) return url;
+    const u = new URL(url);
+    const segments = u.pathname.replace(/\/+$/, "").split("/").filter(Boolean);
+    const basePath = getYouTubeAuthorBasePath(segments);
+    return basePath ? `${u.origin}${basePath}` : url;
+  } catch {
+    return url;
+  }
+}
+
+// Helper function to extract video ID from Bilibili URL
+export function extractBilibiliVideoId(url: string): string | null {
+  // Extract BV ID from URL - works for both desktop and mobile URLs
+  const bvMatch = url.match(/\/video\/(BV[\w]+)/i);
+  if (bvMatch && bvMatch[1]) {
+    return bvMatch[1];
+  }
+
+  // Extract av ID from URL
+  const avMatch = url.match(/\/video\/(av\d+)/i);
+  if (avMatch && avMatch[1]) {
+    return avMatch[1];
+  }
+
+  return null;
+}
+
+const YOUTUBE_VIDEO_ID_PATTERNS: RegExp[] = [
+  /[?&]v=([a-zA-Z0-9_-]{11})/,
+  /youtu\.be\/([a-zA-Z0-9_-]{11})/,
+  /\/embed\/([a-zA-Z0-9_-]{11})/,
+  /\/shorts\/([a-zA-Z0-9_-]{11})/,
+];
+
+function extractByPatternList(url: string, patterns: RegExp[]): string | null {
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+
+  return null;
+}
+
+// Helper function to extract video ID from YouTube URL
+export function extractYouTubeVideoId(url: string): string | null {
+  return extractByPatternList(url, YOUTUBE_VIDEO_ID_PATTERNS);
+}
+
+function getMissAVLastPathSegment(url: string): string | null {
+  const pathSegments = new URL(url).pathname
+    .split("/")
+    .filter((segment) => segment.length > 0);
+  const videoId = pathSegments[pathSegments.length - 1];
+
+  if (videoId && /^[a-zA-Z0-9_-]+$/.test(videoId)) {
+    return videoId;
+  }
+
+  return null;
+}
+
+// Helper function to extract video ID from MissAV/123AV URL
+export function extractMissAVVideoId(url: string): string | null {
+  try {
+    // MissAV URLs have patterns like:
+    // - https://missav.ai/dm2/en/jux-492-uncensored-leak
+    // - https://missav.ai/dm29/en/juq-643-uncensored-leak
+    // - https://missav.ai/v/VIDEO_ID
+    const videoIdFromPath = getMissAVLastPathSegment(url);
+    if (videoIdFromPath) {
+      return videoIdFromPath;
+    }
+
+    // Fallback to old regex pattern for URLs like /v/VIDEO_ID or /dm*/VIDEO_ID (without language code)
+    return extractByPatternList(url, [/\/(?:v|dm\d*)\/([a-zA-Z0-9-]+)(?:\/|$)/]);
+  } catch (error) {
+    logger.error("Error extracting MissAV video ID:", error);
+    return null;
+  }
+}
+
+function getMissAVSourceDisplayName(url: string): string {
+  if (!isMissAVUrl(url)) {
+    return "MissAV";
+  }
+
+  const hostname = new URL(url).hostname.toLowerCase();
+  if (hostname === "123av.com" || hostname.endsWith(".123av.com")) {
+    return "123AV";
+  }
+  if (hostname === "123av.ai" || hostname.endsWith(".123av.ai")) {
+    return "123AV";
+  }
+  if (hostname === "123av.ws" || hostname.endsWith(".123av.ws")) {
+    return "123AV";
+  }
+  if (hostname === "javxx.com" || hostname.endsWith(".javxx.com")) {
+    return "JAVXX";
+  }
+  if (hostname === "njavtv.com" || hostname.endsWith(".njavtv.com")) {
+    return "NJAVTV";
+  }
+
+  return "MissAV";
+}
+
+export function getMissAVPlaceholderTitle(url: string): string {
+  try {
+    const sourceName = getMissAVSourceDisplayName(url);
+    if (!isMissAVUrl(url)) {
+      return `${sourceName} Video`;
+    }
+
+    const videoId = extractMissAVVideoId(url);
+    if (!videoId) {
+      return `${sourceName} Video`;
+    }
+
+    return `${sourceName}: ${videoId.toUpperCase()}`;
+  } catch {
+    return "MissAV Video";
+  }
+}
+
+export function extractTwitchVideoId(url: string): string | null {
+  if (!isTwitchUrl(url)) {
+    return null;
+  }
+
+  try {
+    const parsedUrl = new URL(url);
+    const segments = parsedUrl.pathname
+      .replace(/\/+$/, "")
+      .split("/")
+      .filter(Boolean);
+
+    if (
+      segments.length >= 2 &&
+      segments[0]?.toLowerCase() === "videos" &&
+      /^\d+$/.test(segments[1] || "")
+    ) {
+      return segments[1];
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function isTwitchVideoUrl(url: string): boolean {
+  return extractTwitchVideoId(url) !== null;
+}
+
+export function extractTwitchChannelLogin(url: string): string | null {
+  return extractLocalTwitchChannelLogin(url);
+}
+
+export function isTwitchChannelUrl(url: string): boolean {
+  return isLocalTwitchChannelUrl(url);
+}
+
+export function normalizeTwitchChannelUrl(url: string): string {
+  return normalizeLocalTwitchChannelUrl(url);
+}
+
+// Helper function to extract source video ID from any supported URL
+export function extractSourceVideoId(url: string): {
+  id: string | null;
+  platform: string;
+} {
+  if (isBilibiliUrl(url)) {
+    return { id: extractBilibiliVideoId(url), platform: "bilibili" };
+  }
+
+  if (isYouTubeUrl(url)) {
+    return { id: extractYouTubeVideoId(url), platform: "youtube" };
+  }
+
+  const twitchVideoId = extractTwitchVideoId(url);
+  if (twitchVideoId) {
+    return { id: twitchVideoId, platform: "twitch" };
+  }
+
+  if (isMissAVUrl(url)) {
+    return { id: extractMissAVVideoId(url), platform: "missav" };
+  }
+
+  // For other URLs, use the full URL as ID (normalized)
+  return { id: url, platform: "other" };
+}
+
+/**
+ * Process video URL: extract from text, resolve shortened URLs, and extract source video ID
+ * This consolidates the common pattern used across multiple controllers
+ *
+ * @param input - URL string that may contain text with a URL
+ * @returns Object containing processed videoUrl, sourceVideoId, and platform
+ */
+export async function processVideoUrl(input: string): Promise<{
+  videoUrl: string;
+  sourceVideoId: string | null;
+  platform: string;
+}> {
+  // Extract URL from text that might contain a title and URL
+  let videoUrl = extractUrlFromText(input);
+
+  // Resolve shortened URLs (like b23.tv)
+  if (isBilibiliShortUrl(videoUrl)) {
+    videoUrl = await resolveShortUrl(videoUrl);
+  }
+
+  // Extract source video ID and platform
+  const { id: sourceVideoId, platform } = extractSourceVideoId(videoUrl);
+
+  return { videoUrl, sourceVideoId, platform };
+}
+
+// Helper function to create a safe filename that preserves non-Latin characters
+// Truncate a string so its UTF-8 byte length does not exceed maxBytes.
+// Avoids splitting multi-byte characters (e.g. Chinese/Japanese: 3 bytes each).
+function truncateToByteLength(str: string, maxBytes: number): string {
+  if (Buffer.byteLength(str, "utf8") <= maxBytes) return str;
+  let result = "";
+  let byteCount = 0;
+  for (const char of str) {
+    const charBytes = Buffer.byteLength(char, "utf8");
+    if (byteCount + charBytes > maxBytes) break;
+    result += char;
+    byteCount += charBytes;
+  }
+  return result;
+}
+
+export function sanitizeFilename(filename: string): string {
+  // Remove hashtags (e.g. #tag)
+  const withoutHashtags = filename.replace(/#\S+/g, "").trim();
+
+  // Replace only unsafe characters for filesystems
+  // This preserves non-Latin characters like Chinese, Japanese, Korean, etc.
+  const sanitized = withoutHashtags
+    .replace(/[\/\\:*?"<>|%,'!;=+\$@^`{}~\[\]()&]/g, "_") // Replace unsafe filesystem and URL characters
+    .replace(/\s+/g, "_"); // Replace spaces with underscores
+
+  // Truncate to 200 bytes to avoid ENAMETOOLONG errors (filesystem limit is 255 bytes).
+  // Using byte length because multi-byte characters (CJK) take 3 bytes each.
+  return truncateToByteLength(sanitized, 200);
+}
+
+// Helper function to extract user mid from Bilibili URL
+export function extractBilibiliMid(url: string): string | null {
+  // Try to extract from space URL pattern: space.bilibili.com/{mid}
+  const spaceMatch = url.match(/space\.bilibili\.com\/(\d+)/i);
+  if (spaceMatch && spaceMatch[1]) {
+    return spaceMatch[1];
+  }
+
+  // Try to extract from URL parameters
+  const urlObj = new URL(url);
+  const midParam = urlObj.searchParams.get("mid");
+  if (midParam) {
+    return midParam;
+  }
+
+  return null;
+}
+
+// Helper to clean segments for the legacy filename format: remove symbols
+// (keep letters/numbers/spaces), replace spaces with dots. Exported so the
+// suffix-stripper below can reproduce the exact author segment that
+// formatVideoFilename produces.
+function cleanLegacyFilenameSegment(str: string): string {
+  if (!str) return "Unknown";
+  return str
+    .replace(/[^\p{L}\p{N}\s]/gu, "") // Remove non-letters/numbers/spaces
+    .trim()
+    .replace(/\s+/g, "."); // Replace spaces with dots
+}
+
+// Helper function to format video filename according to: Title-Author-YYYY
+// Symbols are removed, spaces replaced by dots.
+export function formatVideoFilename(
+  title: string,
+  author: string,
+  dateString: string,
+): string {
+  const cleanSegment = cleanLegacyFilenameSegment;
+
+  let cleanTitle = cleanSegment(title) || "Video";
+  let cleanAuthor = cleanSegment(author) || "Unknown";
+
+  // Extract year
+  let year = new Date().getFullYear().toString();
+  if (dateString) {
+    const match = dateString.match(/(\d{4})/);
+    if (match) {
+      year = match[1];
+    }
+  }
+
+  // Truncate author to 50 bytes (not chars) to prioritize title visibility.
+  // CJK characters are 3 bytes each, so 50 bytes ≈ 16 CJK chars or 50 ASCII chars.
+  cleanAuthor = truncateToByteLength(cleanAuthor, 50);
+
+  // Construct the suffix parts
+  const yearSuffix = `-${year}`;
+  const authorSuffix = `-${cleanAuthor}`;
+  const fullSuffix = `${authorSuffix}${yearSuffix}`;
+
+  // Max byte length for the filename base (no extension).
+  // Linux ext4 limit is 255 bytes. yt-dlp appends .part/.ytdl during download,
+  // so we leave ample room: 200 bytes for the base name.
+  const MAX_FILENAME_BYTES = 200;
+
+  // Calculate available bytes for the title portion
+  const availableTitleBytes = MAX_FILENAME_BYTES - Buffer.byteLength(fullSuffix, "utf8");
+
+  if (Buffer.byteLength(cleanTitle, "utf8") > availableTitleBytes) {
+    cleanTitle = truncateToByteLength(cleanTitle, Math.max(0, availableTitleBytes));
+  }
+
+  return `${cleanTitle}${fullSuffix}`;
+}
+
+/**
+ * Strips a trailing `-<cleanAuthor>-<year>` (and optional `_<n>` dedupe tail)
+ * from `title` if and only if it is byte-identical to what
+ * `formatVideoFilename` would have appended for the given (author, date).
+ *
+ * Used by the legacy preset of the filename template renderer so that
+ * round-trip renames (legacy → other → legacy) on records whose stored
+ * title was derived from a previous legacy filename are idempotent.
+ *
+ * Conservative on purpose: only strips suffixes whose author segment matches
+ * `cleanLegacyFilenameSegment(author)` and whose year matches the year
+ * extracted from `dateString`. A real video title that happens to end with
+ * `-SomeOtherAuthor-2026` is left unchanged. Returns the title unmodified
+ * when author or date are missing.
+ *
+ * Designed to be idempotent: applying twice produces the same result, since
+ * the second application no longer matches.
+ */
+export function stripLegacyFilenameSuffix(
+  title: string | undefined,
+  author: string | undefined,
+  dateString: string | undefined,
+): string {
+  if (!title) return title || "";
+  if (!author || !dateString) return title;
+
+  const expectedAuthorRaw = cleanLegacyFilenameSegment(author);
+  const expectedAuthor = truncateToByteLength(expectedAuthorRaw, 50);
+  if (!expectedAuthor || expectedAuthor === "Unknown") return title;
+
+  const yearMatch = dateString.match(/(\d{4})/);
+  if (!yearMatch) return title;
+  const year = yearMatch[1];
+
+  // Detect and strip an optional trailing _<digits> dedupe tail using a
+  // literal regex (no user input in the pattern).
+  let candidate = title;
+  const dedupeMatch = candidate.match(/_\d+$/);
+  if (dedupeMatch && dedupeMatch.index !== undefined) {
+    candidate = candidate.slice(0, dedupeMatch.index);
+  }
+
+  // Then check the remaining string ends with the expected -Author-Year
+  // suffix using plain string ops; no dynamic regex needed.
+  const baseSuffix = `-${expectedAuthor}-${year}`;
+  if (candidate.endsWith(baseSuffix)) {
+    return candidate.slice(0, candidate.length - baseSuffix.length);
+  }
+
+  return title;
+}
+
+/**
+ * Generate avatar filename in format: platform-author.name.jpg
+ * Example: youtube-eric.cartman.jpg
+ */
+export function formatAvatarFilename(platform: string, author: string): string {
+  // Clean author name: remove symbols, replace spaces with dots, lowercase
+  const cleanAuthor = author
+    .replace(/[^\p{L}\p{N}\s]/gu, "") // Remove non-letters/numbers/spaces
+    .trim()
+    .replace(/\s+/g, ".") // Replace spaces with dots
+    .toLowerCase(); // Convert to lowercase
+
+  // Clean platform name: lowercase, remove special chars
+  const cleanPlatform = platform
+    .replace(/[^\p{L}\p{N}]/gu, "") // Remove non-letters/numbers
+    .toLowerCase();
+
+  // Use "unknown" if author is empty
+  const authorName = cleanAuthor || "unknown";
+
+  // Truncate author if too long (max 100 chars to leave room for platform prefix)
+  const maxAuthorLength = 100;
+  const finalAuthor =
+    authorName.length > maxAuthorLength
+      ? authorName.substring(0, maxAuthorLength)
+      : authorName;
+
+  return `${cleanPlatform}-${finalAuthor}.jpg`;
+}
+
+/**
+ * Generate a timestamp string for backup filenames
+ * Format: YYYY-MM-DD-HH-MM-SS
+ */
+export function generateTimestamp(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  const hours = String(now.getHours()).padStart(2, "0");
+  const minutes = String(now.getMinutes()).padStart(2, "0");
+  const seconds = String(now.getSeconds()).padStart(2, "0");
+  return `${year}-${month}-${day}-${hours}-${minutes}-${seconds}`;
+}
+
+// Helper function to extract domain name from URL
+export function getDomainFromUrl(url: string): string {
+  try {
+    const urlObj = new URL(url);
+    const hostname = urlObj.hostname;
+    // Remove www. prefix if present
+    return hostname.replace(/^www\./, "");
+  } catch (error) {
+    return "Unknown";
+  }
+}

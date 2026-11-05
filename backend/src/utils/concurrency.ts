@@ -1,0 +1,58 @@
+/**
+ * Run an async worker over items with at most `limit` in flight at once.
+ * Items are started in order; a rejected worker propagates and stops
+ * scheduling new items, so workers that must never fail the batch should
+ * catch internally.
+ */
+export const runWithConcurrencyLimit = async <T>(
+  items: T[],
+  limit: number,
+  worker: (item: T) => Promise<void>
+): Promise<void> => {
+  if (items.length === 0) {
+    return;
+  }
+
+  const effectiveLimit = Math.max(1, Math.min(limit, items.length));
+  let nextIndex = 0;
+
+  const workers = Array.from({ length: effectiveLimit }, async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      await worker(items[currentIndex]);
+    }
+  });
+
+  await Promise.all(workers);
+};
+
+/**
+ * Wait for every promise to settle, but never longer than `timeoutMs`.
+ *
+ * `Promise.allSettled` alone is unbounded, so a single promise that never
+ * settles blocks the caller forever. That matters wherever the wait sits in
+ * front of something that must happen - releasing a resource, starting the next
+ * stage - and where the results are a best-effort optimisation rather than a
+ * requirement.
+ *
+ * Promises still pending when the timeout fires are abandoned, not cancelled:
+ * they may settle later, so whatever they write into must tolerate a late
+ * arrival or simply stop being read.
+ */
+export const settleAllWithin = (
+  promises: ReadonlyArray<Promise<unknown>>,
+  timeoutMs: number,
+): Promise<void> => {
+  if (promises.length === 0) {
+    return Promise.resolve();
+  }
+
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, timeoutMs);
+    void Promise.allSettled(promises).then(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+};

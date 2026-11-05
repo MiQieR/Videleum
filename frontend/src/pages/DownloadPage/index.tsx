@@ -1,0 +1,391 @@
+import { CloudUpload, PlaylistAdd as PlaylistAddIcon } from '@mui/icons-material';
+import {
+    Box,
+    Button,
+    Container,
+    Tab,
+    Tabs,
+    Typography
+} from '@mui/material';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import React, { useState } from 'react';
+import BatchDownloadModal from '../../components/BatchDownloadModal';
+import UploadModal from '../../components/UploadModal';
+import { useAuth } from '../../contexts/AuthContext';
+import { useDownload } from '../../contexts/DownloadContext';
+import { useLanguage } from '../../contexts/LanguageContext';
+import { useSnackbar } from '../../contexts/SnackbarContext';
+import { api } from '../../utils/apiClient';
+import { ActiveDownloadsTab } from './ActiveDownloadsTab';
+import { CustomTabPanel } from './CustomTabPanel';
+import { DownloadHistoryItem } from './HistoryItem';
+import { HistoryTab } from './HistoryTab';
+import { QueueTab } from './QueueTab';
+
+interface UploadBatchSummary {
+    total: number;
+    uploaded: number;
+    duplicates: number;
+    failed: number;
+}
+
+const DownloadPage: React.FC = () => {
+    const { t } = useLanguage();
+    const { showSnackbar } = useSnackbar();
+    const { userRole, loginRequired } = useAuth();
+    const { activeDownloads, queuedDownloads, handleVideoSubmit } = useDownload();
+    const queryClient = useQueryClient();
+    const [tabValue, setTabValue] = useState(0);
+    const [showBatchModal, setShowBatchModal] = useState(false);
+    const [uploadModalOpen, setUploadModalOpen] = useState(false);
+    const [downloadingItems, setDownloadingItems] = useState<Set<string>>(new Set());
+    const canUpload = userRole === 'admin' || loginRequired === false;
+
+    const handleUploadSuccess = (summary: UploadBatchSummary) => {
+        void queryClient.invalidateQueries({ queryKey: ['videos'] });
+
+        const uploadSummaryMessage = t(
+            'uploadSummary',
+            summary as unknown as Record<string, string | number>
+        );
+        if (uploadSummaryMessage !== 'uploadSummary') {
+            showSnackbar(uploadSummaryMessage);
+            return;
+        }
+
+        showSnackbar(`Uploaded ${summary.uploaded}, duplicates ${summary.duplicates}, failed ${summary.failed}`);
+    };
+
+    const handleBatchSubmit = async (urls: string[]) => {
+        let addedCount = 0;
+        for (const url of urls) {
+            if (url.trim()) {
+                await handleVideoSubmit(url.trim());
+                addedCount++;
+            }
+        }
+        if (addedCount > 0) {
+            showSnackbar(t('batchTasksAdded', { count: addedCount }) || `${addedCount} tasks added`);
+        }
+    };
+
+    // Fetch history with polling while the downloads page is mounted so retry
+    // state transitions show up without a manual refresh.
+    const { data: history = [] } = useQuery({
+        queryKey: ['downloadHistory'],
+        queryFn: async () => {
+            const response = await api.get('/downloads/history');
+            return response.data;
+        },
+        refetchInterval: 2000,
+        staleTime: 1000, // Consider data stale after 1 second
+        gcTime: 5 * 60 * 1000, // Garbage collect after 5 minutes
+    });
+
+    const handleTabChange = (_event: React.SyntheticEvent, newValue: number) => {
+        setTabValue(newValue);
+    };
+
+    // Cancel download mutation
+    const cancelMutation = useMutation({
+        mutationFn: async (id: string) => {
+            await api.post(`/downloads/cancel/${id}`);
+        },
+        onMutate: async (id: string) => {
+            await queryClient.cancelQueries({ queryKey: ['downloadStatus'] });
+            const previousStatus = queryClient.getQueryData(['downloadStatus']);
+            queryClient.setQueryData(['downloadStatus'], (old: any) => {
+                if (!old) return old;
+                return {
+                    ...old,
+                    activeDownloads: old.activeDownloads.filter((d: any) => d.id !== id),
+                    queuedDownloads: old.queuedDownloads.filter((d: any) => d.id !== id),
+                };
+            });
+            return { previousStatus };
+        },
+        onError: (_err, _id, context) => {
+            if (context?.previousStatus) {
+                queryClient.setQueryData(['downloadStatus'], context.previousStatus);
+            }
+            showSnackbar(t('error') || 'Error');
+        },
+        onSettled: () => {
+            queryClient.invalidateQueries({ queryKey: ['downloadStatus'] });
+        },
+        onSuccess: () => {
+            showSnackbar(t('downloadCancelled') || 'Download cancelled');
+        },
+    });
+
+    const handleCancelDownload = (id: string) => {
+        cancelMutation.mutate(id);
+    };
+
+    // Remove from queue mutation
+    const removeFromQueueMutation = useMutation({
+        mutationFn: async (id: string) => {
+            await api.delete(`/downloads/queue/${id}`);
+        },
+        onSuccess: () => {
+            showSnackbar(t('removedFromQueue') || 'Removed from queue');
+            queryClient.invalidateQueries({ queryKey: ['downloadStatus'] });
+        },
+        onError: () => {
+            showSnackbar(t('error') || 'Error');
+        }
+    });
+
+    const handleRemoveFromQueue = (id: string) => {
+        removeFromQueueMutation.mutate(id);
+    };
+
+    // Clear queue mutation
+    const clearQueueMutation = useMutation({
+        mutationFn: async () => {
+            await api.delete('/downloads/queue');
+        },
+        onSuccess: () => {
+            showSnackbar(t('queueCleared') || 'Queue cleared');
+            queryClient.invalidateQueries({ queryKey: ['downloadStatus'] });
+        },
+        onError: () => {
+            showSnackbar(t('error') || 'Error');
+        }
+    });
+
+    const handleClearQueue = () => {
+        clearQueueMutation.mutate();
+    };
+
+    // Remove from history mutation
+    const removeFromHistoryMutation = useMutation({
+        mutationFn: async (id: string) => {
+            await api.delete(`/downloads/history/${id}`);
+        },
+        onSuccess: () => {
+            showSnackbar(t('removedFromHistory') || 'Removed from history');
+            queryClient.invalidateQueries({ queryKey: ['downloadHistory'] });
+        },
+        onError: () => {
+            showSnackbar(t('error') || 'Error');
+        }
+    });
+
+    const handleRemoveFromHistory = (id: string) => {
+        removeFromHistoryMutation.mutate(id);
+    };
+
+    const cancelRetryMutation = useMutation({
+        mutationFn: async (id: string) => {
+            await api.post(`/downloads/cancel/${id}`);
+        },
+        onSuccess: () => {
+            showSnackbar(t('retryCancelled') || 'Retry cancelled');
+            queryClient.invalidateQueries({ queryKey: ['downloadHistory'] });
+            queryClient.invalidateQueries({ queryKey: ['downloadStatus'] });
+        },
+        onError: () => {
+            showSnackbar(t('error') || 'Error');
+        }
+    });
+
+    const handleCancelRetry = (id: string) => {
+        cancelRetryMutation.mutate(id);
+    };
+
+    // Helper function to check if a sourceUrl is already in active or queued downloads
+    const isDownloadInProgress = (sourceUrl: string): boolean => {
+        if (!sourceUrl) return false;
+
+        const inActive = activeDownloads.some((d: any) => d.sourceUrl === sourceUrl);
+        if (inActive) return true;
+
+        const inQueue = queuedDownloads.some((d: any) => d.sourceUrl === sourceUrl);
+        if (inQueue) return true;
+
+        if (downloadingItems.has(sourceUrl)) return true;
+
+        return false;
+    };
+
+    // Re-download deleted video
+    const handleReDownload = async (sourceUrl: string, mediaType?: 'video' | 'audio') => {
+        if (!sourceUrl) return;
+
+        if (isDownloadInProgress(sourceUrl)) {
+            showSnackbar('Download already in progress or queued');
+            return;
+        }
+
+        setDownloadingItems(prev => new Set(prev).add(sourceUrl));
+
+        try {
+            const response = await api.post('/download', {
+                youtubeUrl: sourceUrl,
+                forceDownload: true,
+                // Audio and video are separate items; replace the one this row is about.
+                audioOnly: mediaType === 'audio'
+            });
+
+            if (response.data.downloadId) {
+                showSnackbar(t('videoDownloading') || 'Video downloading');
+                queryClient.invalidateQueries({ queryKey: ['downloadStatus'] });
+            }
+        } catch (error: unknown) {
+            console.error('Error re-downloading video:', error);
+            showSnackbar(t('error') || 'Error');
+        } finally {
+            setTimeout(() => {
+                setDownloadingItems(prev => {
+                    const next = new Set(prev);
+                    next.delete(sourceUrl);
+                    return next;
+                });
+            }, 1000);
+        }
+    };
+
+    // Clear history mutation
+    const clearHistoryMutation = useMutation({
+        mutationFn: async () => {
+            await api.delete('/downloads/history');
+        },
+        onSuccess: () => {
+            showSnackbar(t('historyCleared') || 'History cleared');
+            queryClient.invalidateQueries({ queryKey: ['downloadHistory'] });
+        },
+        onError: () => {
+            showSnackbar(t('error') || 'Error');
+        }
+    });
+
+    const handleClearHistory = () => {
+        clearHistoryMutation.mutate();
+    };
+
+    const handleRetry = async (sourceUrl: string) => {
+        if (isDownloadInProgress(sourceUrl)) {
+            showSnackbar('Download already in progress or queued');
+            return;
+        }
+
+        setDownloadingItems(prev => new Set(prev).add(sourceUrl));
+        try {
+            await handleVideoSubmit(sourceUrl);
+        } finally {
+            setTimeout(() => {
+                setDownloadingItems(prev => {
+                    const next = new Set(prev);
+                    next.delete(sourceUrl);
+                    return next;
+                });
+            }, 1000);
+        }
+    };
+
+    const handleViewVideo = (videoId: string) => {
+        window.location.href = `/video/${videoId}`;
+    };
+
+    return (
+        <Container maxWidth="lg" sx={{ py: 4 }}>
+            <Box sx={{
+                display: 'flex',
+                flexDirection: { xs: 'column', sm: 'row' },
+                justifyContent: 'space-between',
+                alignItems: { xs: 'flex-start', sm: 'center' },
+                mb: 2,
+                gap: { xs: 2, sm: 0 }
+            }}>
+                <Typography variant="h4" component="h1" gutterBottom fontWeight="bold" sx={{ mb: 0 }}>
+                    {t('downloads') || 'Downloads'}
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', width: { xs: '100%', sm: 'auto' } }}>
+                    <Button
+                        variant="contained"
+                        size="small"
+                        startIcon={<PlaylistAddIcon />}
+                        onClick={() => setShowBatchModal(true)}
+                    >
+                        {t('addBatchTasks') || 'Add batch tasks'}
+                    </Button>
+                    {canUpload && (
+                        <Button
+                            variant="contained"
+                            size="small"
+                            startIcon={<CloudUpload />}
+                            onClick={() => setUploadModalOpen(true)}
+                        >
+                            {t('uploadVideo') || 'Upload Video'}
+                        </Button>
+                    )}
+                </Box>
+            </Box>
+
+            <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+                <Tabs
+                    value={tabValue}
+                    onChange={handleTabChange}
+                    aria-label="download tabs"
+                    variant="scrollable"
+                    scrollButtons="auto"
+                    allowScrollButtonsMobile
+                >
+                    <Tab label={t('activeDownloads') || 'Active Downloads'} />
+                    <Tab label={t('queuedDownloads') || 'Queue'} />
+                    <Tab label={t('downloadHistory') || 'History'} />
+                </Tabs>
+            </Box>
+
+            <CustomTabPanel value={tabValue} index={0}>
+                <ActiveDownloadsTab
+                    downloads={activeDownloads}
+                    onCancel={handleCancelDownload}
+                    cancellingId={cancelMutation.isPending ? cancelMutation.variables ?? null : null}
+                />
+            </CustomTabPanel>
+
+            <CustomTabPanel value={tabValue} index={1}>
+                <QueueTab
+                    downloads={queuedDownloads}
+                    onRemove={handleRemoveFromQueue}
+                    onClear={handleClearQueue}
+                    removingId={removeFromQueueMutation.isPending ? removeFromQueueMutation.variables ?? null : null}
+                    clearing={clearQueueMutation.isPending}
+                />
+            </CustomTabPanel>
+
+            <CustomTabPanel value={tabValue} index={2}>
+                <HistoryTab
+                    history={history as DownloadHistoryItem[]}
+                    onRemove={handleRemoveFromHistory}
+                    onCancelRetry={handleCancelRetry}
+                    onClear={handleClearHistory}
+                    onRetry={handleRetry}
+                    onReDownload={handleReDownload}
+                    onViewVideo={handleViewVideo}
+                    isDownloadInProgress={isDownloadInProgress}
+                    removingId={removeFromHistoryMutation.isPending ? removeFromHistoryMutation.variables ?? null : null}
+                    cancellingRetryId={cancelRetryMutation.isPending ? cancelRetryMutation.variables ?? null : null}
+                    clearing={clearHistoryMutation.isPending}
+                />
+            </CustomTabPanel>
+
+            <BatchDownloadModal
+                open={showBatchModal}
+                onClose={() => setShowBatchModal(false)}
+                onConfirm={handleBatchSubmit}
+            />
+            {canUpload && (
+                <UploadModal
+                    open={uploadModalOpen}
+                    onClose={() => setUploadModalOpen(false)}
+                    onUploadSuccess={handleUploadSuccess}
+                />
+            )}
+        </Container>
+    );
+};
+
+export default DownloadPage;

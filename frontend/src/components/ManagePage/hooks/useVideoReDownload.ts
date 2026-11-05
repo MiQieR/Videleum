@@ -1,0 +1,60 @@
+import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { useLanguage } from '../../../contexts/LanguageContext';
+import { useSnackbar } from '../../../contexts/SnackbarContext';
+import { api } from '../../../utils/apiClient';
+import { Video } from '../../../types';
+
+export const useVideoReDownload = () => {
+    const [downloadingItems, setDownloadingItems] = useState<Set<string>>(new Set());
+    const queryClient = useQueryClient();
+    const { showSnackbar } = useSnackbar();
+    const { t } = useLanguage();
+
+    const handleReDownload = async (video: Pick<Video, 'sourceUrl' | 'mediaType'>) => {
+        if (!video.sourceUrl) {
+            showSnackbar(t('noSourceUrlAvailable') || 'No source URL available', 'error');
+            return;
+        }
+
+        // Prevent duplicate downloads
+        if (downloadingItems.has(video.sourceUrl)) {
+            showSnackbar(t('downloadAlreadyInProgress') || 'Download already in progress', 'warning');
+            return;
+        }
+
+        setDownloadingItems(prev => new Set(prev).add(video.sourceUrl));
+
+        try {
+            const response = await api.post('/download', {
+                youtubeUrl: video.sourceUrl,
+                forceDownload: true,
+                // Audio and video are separate items; replace the one this is.
+                ...(video.mediaType === 'audio' ? { audioOnly: true } : {})
+            });
+
+            if (response.data.downloadId) {
+                showSnackbar(t('videoDownloading') || 'Video downloading');
+                void queryClient.invalidateQueries({ queryKey: ['downloadStatus'] });
+            }
+        } catch (error: unknown) {
+            console.error('Error re-downloading video:', error);
+            const axiosError = error as { response?: { data?: { error?: string } } };
+            showSnackbar(axiosError.response?.data?.error || t('error'), 'error');
+        } finally {
+            setTimeout(() => {
+                setDownloadingItems(prev => {
+                    const next = new Set(prev);
+                    next.delete(video.sourceUrl);
+                    return next;
+                });
+            }, 1000);
+        }
+    };
+
+    const isReDownloading = (sourceUrl: string | undefined) => (
+        Boolean(sourceUrl && downloadingItems.has(sourceUrl))
+    );
+
+    return { handleReDownload, isReDownloading };
+};

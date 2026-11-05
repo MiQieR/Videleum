@@ -1,0 +1,233 @@
+import { renderHook } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+import { Collection, Video } from "../../types";
+import { useVideoFiltering } from "../useVideoFiltering";
+
+describe("useVideoFiltering", () => {
+  const mockVideos: Video[] = [
+    {
+      id: "v1",
+      title: "Video 1",
+      tags: ["tag1"],
+      author: "Alice",
+      lastPlayedAt: 100,
+    } as Video,
+    {
+      id: "v2",
+      title: "Video 2",
+      tags: ["tag2"],
+      author: "Bob",
+      lastPlayedAt: 200,
+    } as Video,
+    {
+      id: "v3",
+      title: "Video 3",
+      tags: ["tag1", "tag2"],
+      author: "Alice",
+      lastPlayedAt: undefined,
+    } as Video,
+  ];
+
+  const mockCollections: Collection[] = [
+    { id: "c1", name: "Collection 1", videos: ["v1", "v3"] } as Collection,
+    { id: "c2", name: "Collection 2", videos: ["v2"] } as Collection,
+  ];
+
+  it('should return all videos when viewMode is "all-videos"', () => {
+    const { result } = renderHook(() =>
+      useVideoFiltering({
+        videos: mockVideos,
+        viewMode: "all-videos",
+        selectedTags: [],
+        collections: mockCollections,
+      })
+    );
+
+    expect(result.current).toHaveLength(3);
+    expect(result.current).toEqual(mockVideos);
+  });
+
+  it('should filter by tags in "all-videos" mode', () => {
+    const { result } = renderHook(() =>
+      useVideoFiltering({
+        videos: mockVideos,
+        viewMode: "all-videos",
+        selectedTags: ["tag1"],
+        collections: mockCollections,
+      })
+    );
+
+    expect(result.current).toHaveLength(2);
+    expect(result.current.map((v) => v.id)).toContain("v1");
+    expect(result.current.map((v) => v.id)).toContain("v3");
+  });
+
+  it('should return only videos with lastPlayedAt in "history" mode and sort by date desc', () => {
+    const { result } = renderHook(() =>
+      useVideoFiltering({
+        videos: mockVideos,
+        viewMode: "history",
+        selectedTags: [],
+        collections: mockCollections,
+      })
+    );
+
+    expect(result.current).toHaveLength(2);
+    // v2 (200) > v1 (100)
+    expect(result.current[0].id).toBe("v2");
+    expect(result.current[1].id).toBe("v1");
+  });
+
+  it('should filter by tags in "history" mode', () => {
+    const { result } = renderHook(() =>
+      useVideoFiltering({
+        videos: mockVideos,
+        viewMode: "history",
+        selectedTags: ["tag1"],
+        collections: mockCollections,
+      })
+    );
+
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].id).toBe("v1");
+  });
+
+  it('should return first video of each collection in "collections" mode', () => {
+    const { result } = renderHook(() =>
+      useVideoFiltering({
+        videos: mockVideos,
+        viewMode: "collections",
+        selectedTags: [],
+        collections: mockCollections,
+      })
+    );
+
+    // c1 starts with v1, c2 starts with v2
+    // v3 is in c1 but not first, so should not show
+    const ids = result.current.map((v) => v.id);
+    expect(ids).toContain("v1");
+    expect(ids).toContain("v2");
+    expect(ids).not.toContain("v3");
+    expect(result.current).toHaveLength(2);
+  });
+
+  it("should return empty array if videos is undefined", () => {
+    const { result } = renderHook(() =>
+      useVideoFiltering({
+        videos: undefined as any,
+        viewMode: "all-videos",
+        selectedTags: [],
+        collections: mockCollections,
+      })
+    );
+
+    expect(result.current).toEqual([]);
+  });
+
+  it('should filter by tags in "collections" mode', () => {
+    // v1 (tag1) is first in c1. v2 (tag2) is first in c2.
+    // If we filter by tag1, only v1 should show.
+    const { result } = renderHook(() =>
+      useVideoFiltering({
+        videos: mockVideos,
+        viewMode: "collections",
+        selectedTags: ["tag1"],
+        collections: mockCollections,
+      })
+    );
+
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].id).toBe("v1");
+  });
+
+  it("should match by author tags with case-insensitive normalization", () => {
+    const { result } = renderHook(() =>
+      useVideoFiltering({
+        videos: mockVideos,
+        viewMode: "all-videos",
+        selectedTags: ["TagX"],
+        collections: mockCollections,
+        authorTags: {
+          alice: ["tagx"],
+        },
+      })
+    );
+
+    expect(result.current.map((v) => v.id)).toEqual(["v1", "v3"]);
+  });
+
+  it("should match by collection tags with case-insensitive normalization", () => {
+    // Use videos where v2 has no tag2 so only c1's collection tag match applies (v1, v3 in c1)
+    const videosNoTag2OnV2: Video[] = [
+      { ...mockVideos[0], tags: ["tag1"] },
+      { ...mockVideos[1], tags: ["other"] },
+      { ...mockVideos[2], tags: ["tag1"] },
+    ];
+    const { result } = renderHook(() =>
+      useVideoFiltering({
+        videos: videosNoTag2OnV2,
+        viewMode: "all-videos",
+        selectedTags: ["TAG2"],
+        collections: mockCollections,
+        collectionTags: {
+          c1: ["tag2"],
+        },
+      })
+    );
+
+    expect(result.current.map((v) => v.id)).toEqual(["v1", "v3"]);
+  });
+
+  it("should filter by selectedPlatform correctly", () => {
+    const multiPlatformVideos: Video[] = [
+      { id: "yt-1", title: "YouTube Video", source: "youtube", tags: [] } as any,
+      { id: "bili-1", title: "Bilibili Video", source: "bilibili", tags: [] } as any,
+      { id: "twitch-1", title: "Twitch Video", platform: "twitch", source: "youtube", tags: [] } as any,
+    ];
+
+    const { result: biliResult } = renderHook(() =>
+      useVideoFiltering({
+        videos: multiPlatformVideos,
+        viewMode: "all-videos",
+        selectedTags: [],
+        collections: [],
+        selectedPlatform: "bilibili",
+      })
+    );
+    expect(biliResult.current.map((v) => v.id)).toEqual(["bili-1"]);
+
+    const { result: twitchResult } = renderHook(() =>
+      useVideoFiltering({
+        videos: multiPlatformVideos,
+        viewMode: "all-videos",
+        selectedTags: [],
+        collections: [],
+        selectedPlatform: "twitch",
+      })
+    );
+    expect(twitchResult.current.map((v) => v.id)).toEqual(["twitch-1"]);
+  });
+
+  it("should filter by selectedPlatform in collections mode when tags are also selected", () => {
+    const multiPlatformVideos: Video[] = [
+      { id: "yt-1", title: "YT 1", platform: "youtube", tags: ["music"] } as any,
+      { id: "bili-1", title: "Bili 1", platform: "bili", tags: ["music"] } as any,
+    ];
+    const multiCollections: Collection[] = [
+      { id: "c-yt", name: "YT Collection", videos: ["yt-1"] } as Collection,
+      { id: "c-bili", name: "Bili Collection", videos: ["bili-1"] } as Collection,
+    ];
+
+    const { result } = renderHook(() =>
+      useVideoFiltering({
+        videos: multiPlatformVideos,
+        viewMode: "collections",
+        selectedTags: ["music"],
+        collections: multiCollections,
+        selectedPlatform: "bilibili",
+      })
+    );
+
+    expect(result.current.map((v) => v.id)).toEqual(["bili-1"]);
+  });
+});

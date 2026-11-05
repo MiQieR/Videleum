@@ -1,0 +1,154 @@
+import * as storageService from "../../services/storageService";
+import { twitchApiService } from "../../services/twitchService";
+import {
+  extractTwitchVideoId,
+  isBilibiliUrl,
+  isTwitchChannelUrl,
+  isTwitchVideoUrl,
+  isYouTubeUrl,
+  normalizeTwitchChannelUrl,
+} from "../../utils/helpers";
+import { logger } from "../../utils/logger";
+
+type ExistingVideoRecord = { id: string; channelUrl?: string };
+
+export const getExistingVideoBySourceUrl = (
+  sourceUrl: string
+): ExistingVideoRecord | null =>
+  storageService.getVideoBySourceUrl(sourceUrl) as ExistingVideoRecord | null;
+
+export const persistChannelUrlForVideo = (
+  existingVideo: ExistingVideoRecord | null,
+  channelUrl: string
+): void => {
+  if (!existingVideo) {
+    return;
+  }
+  storageService.updateVideo(existingVideo.id, { channelUrl });
+};
+
+const getBilibiliApiUrl = (videoId: string): string => {
+  if (videoId.startsWith("BV")) {
+    return `https://api.bilibili.com/x/web-interface/view?bvid=${videoId}`;
+  }
+  return `https://api.bilibili.com/x/web-interface/view?aid=${videoId.replace(
+    "av",
+    ""
+  )}`;
+};
+
+const fetchYouTubeChannelUrl = async (
+  sourceUrl: string
+): Promise<string | null> => {
+  if (!isYouTubeUrl(sourceUrl)) {
+    return null;
+  }
+
+  const { executeYtDlpJson, getNetworkConfigFromUserConfig, getUserYtDlpConfig } =
+    await import("../../utils/ytDlpUtils");
+  const userConfig = getUserYtDlpConfig(sourceUrl);
+  const networkConfig = getNetworkConfigFromUserConfig(userConfig);
+  const info = await executeYtDlpJson(sourceUrl, {
+    ...networkConfig,
+    noWarnings: true,
+  });
+
+  return info.channel_url || info.uploader_url || null;
+};
+
+const fetchBilibiliChannelUrl = async (
+  sourceUrl: string
+): Promise<string | null> => {
+  if (!isBilibiliUrl(sourceUrl)) {
+    return null;
+  }
+
+  const { extractBilibiliVideoId } = await import("../../utils/helpers");
+  const videoId = extractBilibiliVideoId(sourceUrl);
+  if (!videoId) {
+    return null;
+  }
+
+  // The lookup must take the same route as the yt-dlp call for this URL:
+  // "proxy only for YouTube" resolves to an explicit direct connection here,
+  // which axios needs to be told about because it reads HTTP_PROXY from the
+  // environment on its own. A null means the configured proxy is unusable -
+  // skip rather than reach api.bilibili.com directly and expose the real IP.
+  const { resolveProxiedAxiosConfigForUrl } = await import(
+    "../../services/downloaders/bilibili/bilibiliConfig"
+  );
+  const { buildBilibiliApiHeaders } = await import(
+    "../../services/downloaders/bilibili/bilibiliHeaders"
+  );
+  const axiosConfig = resolveProxiedAxiosConfigForUrl(sourceUrl);
+  if (!axiosConfig) {
+    return null;
+  }
+
+  try {
+    const axios = (await import("axios")).default;
+    const apiUrl = getBilibiliApiUrl(videoId);
+    const response = await axios.get(apiUrl, {
+      ...axiosConfig,
+      headers: buildBilibiliApiHeaders(apiUrl),
+    });
+
+    const ownerMid = response?.data?.data?.owner?.mid;
+    if (!ownerMid) {
+      return null;
+    }
+    return `https://space.bilibili.com/${ownerMid}`;
+  } catch (error) {
+    logger.error("Error fetching Bilibili video info:", error);
+    return null;
+  }
+};
+
+const fetchTwitchChannelUrl = async (
+  sourceUrl: string
+): Promise<string | null> => {
+  if (isTwitchChannelUrl(sourceUrl)) {
+    return normalizeTwitchChannelUrl(sourceUrl);
+  }
+
+  if (!isTwitchVideoUrl(sourceUrl)) {
+    return null;
+  }
+
+  const twitchVideoId = extractTwitchVideoId(sourceUrl);
+  if (!twitchVideoId) {
+    return null;
+  }
+
+  try {
+    const twitchVideo = await twitchApiService.getVideoById(twitchVideoId);
+    if (twitchVideo) {
+      return `https://www.twitch.tv/${twitchVideo.userLogin}`;
+    }
+  } catch (error) {
+    logger.error("Error fetching Twitch video info:", error);
+  }
+
+  const {
+    getChannelUrlFromVideo,
+    getNetworkConfigFromUserConfig,
+    getUserYtDlpConfig,
+  } = await import("../../utils/ytDlpUtils");
+  const userConfig = getUserYtDlpConfig(sourceUrl);
+  const networkConfig = getNetworkConfigFromUserConfig(userConfig);
+  return getChannelUrlFromVideo(sourceUrl, networkConfig);
+};
+
+export const resolveChannelUrl = async (
+  sourceUrl: string
+): Promise<string | null> => {
+  const youtubeChannelUrl = await fetchYouTubeChannelUrl(sourceUrl);
+  if (youtubeChannelUrl) {
+    return youtubeChannelUrl;
+  }
+  const bilibiliChannelUrl = await fetchBilibiliChannelUrl(sourceUrl);
+  if (bilibiliChannelUrl) {
+    return bilibiliChannelUrl;
+  }
+  return fetchTwitchChannelUrl(sourceUrl);
+};

@@ -1,0 +1,44 @@
+{
+  "name": "videleum",
+  "version": "0.1.0",
+  "description": "Videleum - Cross-platform media collector, archiver, and streaming player",
+  "main": "index.js",
+  "scripts": {
+    "preinstall": "node ./backend/scripts/check-supported-node.cjs",
+    "start": "concurrently \"npm run start:backend\" \"npm run start:frontend\"",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "start:frontend": "cd frontend && node scripts/waitForBackend.cjs && npm run dev",
+    "start:backend": "cd backend && npm run start",
+    "dev:frontend": "cd frontend && node scripts/waitForBackend.cjs && npm run dev",
+    "dev:backend": "cd backend && npm run dev",
+    "install:all": "npm install && cd frontend && npm install && cd ../backend && npm install",
+    "build": "cd frontend && npm run build",
+    "lint": "npm run lint:frontend",
+    "lint:frontend": "cd frontend && npm run lint",
+    "typecheck": "npm run typecheck:frontend",
+    "typecheck:frontend": "cd frontend && npm run typecheck",
+    "test": "npm run test:backend && npm run test:frontend",
+    "test:watch": "concurrently --names backend,frontend \"npm run test:backend:watch\" \"npm run test:frontend:watch\"",
+    "test:frontend": "cd frontend && npm run test",
+    "test:frontend:watch": "cd frontend && npm run test:watch",
+    "test:backend": "cd backend && npm run test",
+    "test:backend:watch": "cd backend && npm run test:watch"
+  },
+  "engines": {
+    "node": ">=22.22.0 <27"
+  },
+  "keywords": [
+    "youtube",
+    "video",
+    "downloader",
+    "player"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "concurrently": "^10.0.6"
+  },
+  "overrides": {
+    "@babel/runtime": "^7.26.10"
+  }
+}

@@ -1,0 +1,1250 @@
+import * as cheerio from "cheerio";
+import fs from "fs-extra";
+import puppeteer from "puppeteer";
+import { DATA_DIR, IMAGES_DIR, VIDEOS_DIR } from "../../config/paths";
+import { resolveExplicitPreferredVideoContainer } from "../../types/settings";
+import {
+  DownloadCancelledError,
+  isCancelledError,
+} from "../../errors/DownloadErrors";
+import { cleanupTemporaryFiles, safeRemove } from "../../utils/downloadUtils";
+import {
+  extractSourceVideoId,
+  getMissAVPlaceholderTitle,
+} from "../../utils/helpers";
+import { logger } from "../../utils/logger";
+import { ProgressTracker } from "../../utils/progressTracker";
+import {
+  pathExistsSafeSync,
+  resolveSafeChildPath,
+  statSafeSync,
+  unlinkSafeSync,
+  writeFileSafeSync,
+} from "../../utils/security";
+import {
+  planOwnedReplacementStagingPathSync,
+  replaceOwnedFileWithBackupSync,
+} from "../filenameTemplate/outputPathAllocator";
+import { resolveSupersededManagedPath } from "./supersededOutput";
+import { FilenameTemplateSourceOptions } from "../filenameTemplate/types";
+import { findRedownloadTargetBySourceIdentity } from "./redownloadTarget";
+import { verifyDownloadedMediaComplete } from "./downloadIntegrity";
+import { createSkippedFragmentNote } from "./skippedFragmentNote";
+import {
+  flagsToArgs,
+  getAxiosProxyConfig,
+  getNetworkConfigFromUserConfig,
+  getUserYtDlpConfig,
+  InvalidProxyError,
+  isYtDlpImpersonateAvailable,
+} from "../../utils/ytDlpUtils";
+import { appendYtDlpInputOperand } from "../../utils/ytdlp/flags";
+import { settleAllWithin } from "../../utils/concurrency";
+import { spawnYtDlp, withYtDlpRelease } from "../../utils/ytdlp/release";
+import {
+  removeMediaServerArtifactsForVideo,
+  syncMediaServerArtifactsForRecord,
+} from "../mediaServerExport";
+import {
+  deleteSmallThumbnailMirrorSync,
+  regenerateSmallThumbnailForThumbnailPath,
+} from "../thumbnailMirrorService";
+import * as storageService from "../storageService";
+import { Video } from "../storageService";
+import { BaseDownloader, DownloadOptions, VideoInfo } from "./BaseDownloader";
+import {
+  MISSAV_DEFAULT_CONCURRENT_FRAGMENTS,
+  MISSAV_DEFAULT_FRAGMENT_RETRIES,
+  MISSAV_DEFAULT_FRAGMENT_RETRY_SLEEP,
+  MISSAV_PROGRESS_LOG_INTERVAL_MS,
+} from "./missav/constants";
+import {
+  buildSafeMissAvNavigationTarget,
+  isCloudflareChallengeHtml,
+} from "./missav/navigation";
+import {
+  configureMissAvPage,
+  getMissAvPuppeteerLaunchOptions,
+  navigateMissAvPage,
+} from "./missav/puppeteer";
+import { PlaylistCaptureBudget } from "./missav/captureBudget";
+import { resolveM3u8DurationSeconds, selectBestM3u8Url } from "./missav/m3u8";
+import { planMissAvOutputPaths } from "./missav/outputPaths";
+
+const MISSAV_FAILED_REQUEST_LOG_LIMIT = 10;
+
+// A media playlist for a long VOD is tens of KB; this only bounds the damage
+// if the URL filter ever matches something that is not a playlist.
+const MISSAV_MAX_CAPTURED_PLAYLIST_BYTES = 4 * 1024 * 1024;
+
+// How long the page load may be held open waiting for playlist bodies that
+// have not finished arriving. They are an optimisation, not a requirement.
+const MISSAV_PLAYLIST_CAPTURE_TIMEOUT_MS = 5_000;
+
+// A page can emit many distinct .m3u8 responses, so the per-body cap alone
+// does not bound what is retained. These do.
+const MISSAV_MAX_CAPTURED_PLAYLISTS = 32;
+const MISSAV_MAX_CAPTURED_PLAYLIST_TOTAL_BYTES = 16 * 1024 * 1024;
+
+function resolveMissAvMergeOutputFormat(
+  userConfig: Record<string, unknown>,
+  settings: { preferredVideoContainer?: unknown },
+): string {
+  const userMergeOutputFormat =
+    typeof userConfig.mergeOutputFormat === "string" &&
+    userConfig.mergeOutputFormat
+      ? userConfig.mergeOutputFormat
+      : undefined;
+
+  if (userMergeOutputFormat) {
+    return userMergeOutputFormat;
+  }
+
+  const preferredContainer = resolveExplicitPreferredVideoContainer(settings);
+
+  // MissAV downloads extracted HLS streams, which are normally H.264/AAC.
+  // Applying a global WebM container would force an incompatible remux; keep
+  // MP4 unless the user explicitly overrides MissAV mergeOutputFormat.
+  if (preferredContainer === "webm") {
+    return "mp4";
+  }
+
+  return preferredContainer || "mp4";
+}
+
+/**
+ * Resolve how many HLS fragments yt-dlp may fetch in parallel.
+ *
+ * The MissAV flag set is assembled from `getNetworkConfigFromUserConfig`, whose
+ * allow-list carries no `-N`, so a user's own `--concurrent-fragments` never
+ * reached this downloader and every stream fell back to yt-dlp's default of 1.
+ * Honour the setting here, and default to a small parallel fetch so the
+ * fragment round trip stops being the bottleneck (issue #446).
+ *
+ * A non-numeric value is ignored rather than forwarded: yt-dlp rejects it
+ * outright, which would break downloads that work today.
+ */
+function resolveMissAvConcurrentFragments(
+  userConfig: Record<string, unknown>,
+): number {
+  const configured = userConfig.N ?? userConfig.concurrentFragments;
+  const raw = typeof configured === "number" ? String(configured) : configured;
+
+  if (typeof raw === "string" && /^\d+$/.test(raw.trim())) {
+    const parsed = Number(raw.trim());
+    if (parsed > 0) {
+      return parsed;
+    }
+  }
+
+  return MISSAV_DEFAULT_CONCURRENT_FRAGMENTS;
+}
+
+/**
+ * Resolve the `--retry-sleep` rules for a MissAV download.
+ *
+ * yt-dlp reads an untyped `--retry-sleep` as an `http:` rule, so the user's
+ * rules only replace the fragment backoff when one of them names the
+ * `fragment` type (alone or in a list such as `http,fragment:`). Otherwise the
+ * default is added beside them.
+ */
+function resolveMissAvRetrySleep(
+  userConfig: Record<string, unknown>,
+): string | string[] {
+  const configured = userConfig.retrySleep;
+  const rules = (Array.isArray(configured) ? configured : [configured]).filter(
+    (rule): rule is string => typeof rule === "string" && !!rule.trim(),
+  );
+  if (rules.length === 0) {
+    return MISSAV_DEFAULT_FRAGMENT_RETRY_SLEEP;
+  }
+
+  const coversFragments = rules.some((rule) =>
+    rule
+      .trim()
+      .match(/^([\w-]+(?:,[\w-]+)*):/)?.[1]
+      .toLowerCase()
+      .split(",")
+      .includes("fragment"),
+  );
+
+  return coversFragments
+    ? rules
+    : [...rules, MISSAV_DEFAULT_FRAGMENT_RETRY_SLEEP];
+}
+
+function isPuppeteerTimeoutError(error: unknown): boolean {
+  return error instanceof Error && error.name === "TimeoutError";
+}
+
+function resolveExistingVideoForRedownload(
+  url: string,
+  existingLocalVideoId?: string
+): Video | undefined {
+  if (!existingLocalVideoId) {
+    // Identity first, so this agrees with the duplicate gate that let a forced
+    // re-download through; the URL lookup stays as the fallback for rows that
+    // predate the tracking table.
+    return (
+      findRedownloadTargetBySourceIdentity(url, "video") ??
+      storageService.getVideoBySourceUrl(url, "video")
+    );
+  }
+
+  const selectedVideo = storageService.getVideoById(existingLocalVideoId);
+  if (!selectedVideo) {
+    throw new Error(
+      `Requested MissAV redownload target ${existingLocalVideoId} was not found`
+    );
+  }
+
+  const selectedMediaType = selectedVideo.mediaType === "audio" ? "audio" : "video";
+  if (selectedMediaType !== "video") {
+    throw new Error(
+      `Requested MissAV redownload target ${existingLocalVideoId} has media type ${selectedMediaType}, expected video`
+    );
+  }
+
+  return selectedVideo;
+}
+
+export class MissAVDownloader extends BaseDownloader {
+  // Implementation of IDownloader.getVideoInfo
+  async getVideoInfo(url: string): Promise<VideoInfo> {
+    return MissAVDownloader.getVideoInfo(url);
+  }
+
+  // Get video info without downloading (Static wrapper)
+  static async getVideoInfo(url: string): Promise<VideoInfo> {
+    try {
+      const { url: safeNavigationUrl } =
+        buildSafeMissAvNavigationTarget(url);
+
+      logger.info(
+        `Fetching page content for ${safeNavigationUrl} with Puppeteer...`,
+      );
+
+      const browser = await puppeteer.launch(
+        getMissAvPuppeteerLaunchOptions(getUserYtDlpConfig(url)),
+      );
+
+      let html: string;
+      try {
+        const page = await browser.newPage();
+        await configureMissAvPage(page);
+        await navigateMissAvPage(page, safeNavigationUrl);
+        html = await page.content();
+      } finally {
+        // Always close the browser, even when navigation throws - which is
+        // exactly what a Cloudflare challenge does. Closing only on the happy
+        // path orphaned one Chromium per failed lookup, and a run of failures
+        // is precisely when they pile up.
+        try {
+          await browser.close();
+        } catch (closeError: unknown) {
+          logger.warn("Failed to close Puppeteer browser:", closeError);
+        }
+      }
+
+      // A challenge page parses perfectly well - it just has no og: tags - so
+      // without this it is indistinguishable from a video page that happens to
+      // carry no metadata, and the placeholder below is returned as if the
+      // lookup had succeeded. The check is free here because the HTML is
+      // already in hand, and unlike the title probe in navigateMissAvPage it
+      // catches challenge pages whatever they are titled.
+      if (isCloudflareChallengeHtml(html)) {
+        logger.warn(
+          `MissAV metadata lookup for ${safeNavigationUrl} was served a Cloudflare ` +
+            "challenge; returning placeholder metadata. Downloads from this host " +
+            "will fail until the challenge clears - see the outbound proxy section " +
+            "of the Docker guide.",
+        );
+      }
+
+      const $ = cheerio.load(html);
+      const pageTitle = $('meta[property="og:title"]').attr("content");
+      const ogImage = $('meta[property="og:image"]').attr("content");
+
+      let author = "missav.com";
+      try {
+        const urlObj = new URL(url);
+        author = urlObj.hostname.replace("www.", "");
+      } catch {
+        // Keep default author on malformed URL.
+      }
+
+      return {
+        title: pageTitle || getMissAVPlaceholderTitle(url),
+        author: author,
+        date: new Date().toISOString().slice(0, 10).replace(/-/g, ""),
+        thumbnailUrl: ogImage || null,
+      };
+    } catch (error) {
+      logger.error("Error fetching MissAV video info:", error);
+      let author = "missav.com";
+      try {
+        const urlObj = new URL(url);
+        author = urlObj.hostname.replace("www.", "");
+      } catch {
+        // Use default author for malformed URL fallback.
+      }
+
+      return {
+        title: getMissAVPlaceholderTitle(url),
+        author: author,
+        date: new Date().toISOString().slice(0, 10).replace(/-/g, ""),
+        thumbnailUrl: null,
+      };
+    }
+  }
+
+  // Implementation of IDownloader.downloadVideo
+  async downloadVideo(url: string, options?: DownloadOptions): Promise<Video> {
+    return MissAVDownloader.downloadVideo(
+      url,
+      options?.downloadId,
+      options?.onStart,
+      options?.filenameTemplateSourceOptions,
+      options?.existingLocalVideoId,
+    );
+  }
+
+  // Helper function to download MissAV video (Static wrapper/Implementation)
+  static async downloadVideo(
+    url: string,
+    downloadId?: string,
+    onStart?: (cancel: () => void) => void,
+    filenameTemplateSourceOptions?: FilenameTemplateSourceOptions,
+    existingLocalVideoId?: string,
+  ): Promise<Video> {
+    logger.info("Detected MissAV-family URL:", url);
+
+    const timestamp = Date.now();
+    const downloadedAtIso = new Date(timestamp).toISOString();
+    const sourceVideoId = extractSourceVideoId(url).id || undefined;
+
+    // Ensure directories exist
+    fs.ensureDirSync(VIDEOS_DIR);
+    fs.ensureDirSync(IMAGES_DIR);
+
+    const urlObj = new URL(url);
+    const author = urlObj.hostname.replace("www.", "");
+
+    let videoTitle = getMissAVPlaceholderTitle(url);
+    let videoAuthor = author;
+    let videoDate = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    let thumbnailUrl: string | null = null;
+    let thumbnailSaved = false;
+    let releaseOutputReservation: (() => void) | null = null;
+    // Only paths allocated to this attempt may be cleaned. Owned replacements
+    // use staging paths, which are cleared once the library copy is replaced.
+    let videoPathForCleanup: string | null = null;
+    let thumbnailPathForCleanup: string | null = null;
+    let cancellationRequested = false;
+    let existingLocalVideo: Video | undefined;
+    const cleanupVideoDownload = async (): Promise<void> => {
+      const pendingPath = videoPathForCleanup;
+      videoPathForCleanup = null;
+      if (pendingPath) await cleanupTemporaryFiles(pendingPath);
+    };
+
+    try {
+      existingLocalVideo = resolveExistingVideoForRedownload(
+        url,
+        existingLocalVideoId,
+      );
+
+      // 1. Extract m3u8 URL and metadata using Puppeteer
+      // (yt-dlp doesn't support MissAV natively, so we extract the m3u8 URL first)
+      const { url: safeNavigationUrl } =
+        buildSafeMissAvNavigationTarget(url);
+
+      logger.info("Launching Puppeteer to extract m3u8 URL...");
+
+      // Resolved before the launch rather than after it: the browser step has
+      // to follow the same proxy decision as the yt-dlp download it feeds.
+      const userConfig = getUserYtDlpConfig(url);
+
+      const browser = await puppeteer.launch(
+        getMissAvPuppeteerLaunchOptions(userConfig),
+      );
+
+      // Declared before try so they are accessible after browser is closed.
+      const m3u8Urls: string[] = [];
+      // Bodies of the playlists the browser itself fetched. The m3u8 host sits
+      // behind Cloudflare bot management that fingerprints the TLS handshake -
+      // see the impersonation note on the download flags below - so a plain
+      // Node request for the same URL is answered with 403. The browser has
+      // already paid that cost with an accepted fingerprint and its session
+      // cookies, so reusing what it received is both free and the only thing
+      // that works on the preferred host.
+      const capturedPlaylists = new Map<string, string>();
+      const pendingCaptures: Array<Promise<unknown>> = [];
+      // Any hop URL -> the URL its body actually arrived at, so a redirected
+      // master's relative variant URIs resolve against the right base.
+      const capturedFinalUrls = new Map<string, string>();
+      // Tracked apart from the map, which holds one entry per redirect hop and
+      // so overstates how many bodies are actually retained.
+      const captureBudget = new PlaylistCaptureBudget(
+        MISSAV_MAX_CAPTURED_PLAYLISTS,
+        MISSAV_MAX_CAPTURED_PLAYLIST_BYTES,
+        MISSAV_MAX_CAPTURED_PLAYLIST_TOTAL_BYTES,
+      );
+      const isM3u8 = (u: string) => u.includes(".m3u8") && !u.includes("preview");
+      let failedRequestLogCount = 0;
+      let html = "";
+      // Declared out here so the no-stream diagnosis below can report what the
+      // page actually returned rather than guessing at a cause.
+      let navigation: { status: number | null; clearedChallenge: boolean } = {
+        status: null,
+        clearedChallenge: false,
+      };
+
+      try {
+        const page = await browser.newPage();
+        await configureMissAvPage(page);
+
+        // Collect all m3u8 URLs seen during page load via the request event.
+        page.on("request", (request) => {
+          const reqUrl = request.url();
+          if (isM3u8(reqUrl) && !m3u8Urls.includes(reqUrl)) {
+            logger.info("Found m3u8 URL via network interception:", reqUrl);
+            m3u8Urls.push(reqUrl);
+          }
+        });
+
+        // Telemetry: record the status the browser gets for each m3u8 response
+        // (plus Cloudflare markers). When a download later 403s, this line shows
+        // whether the CDN still serves the browser — distinguishing a yt-dlp/
+        // impersonation regression from the CDN blocking this host outright.
+        page.on("response", (response) => {
+          const resUrl = response.url();
+          if (!isM3u8(resUrl)) return;
+          const headers = response.headers();
+          logger.info(
+            `[MissAV m3u8 probe] status=${response.status()} ` +
+              `cf-mitigated=${headers["cf-mitigated"] ?? "none"} ` +
+              `cf-ray=${headers["cf-ray"] ?? "none"} ` +
+              `server=${headers["server"] ?? "?"} ` +
+              `set-cookie=${headers["set-cookie"] ? "yes" : "no"} ${resUrl}`,
+          );
+
+          if (response.status() !== 200 || capturedPlaylists.has(resUrl)) return;
+
+          // Reserve room before reading: concurrent responses would otherwise
+          // all see the same totals and each start a read. See
+          // PlaylistCaptureBudget for why the reservation is provisional.
+          const ticket = captureBudget.reserve(Number(headers["content-length"]));
+          if (!ticket) return;
+
+          // Best-effort: a body that cannot be read (aborted request, page
+          // already gone) simply leaves this URL uncaptured, and the duration
+          // lookup reports no duration for it.
+          pendingCaptures.push(
+            response
+              .text()
+              .then((body) => {
+                if (typeof body !== "string" || !ticket.settle(body.length)) {
+                  ticket.settle(null);
+                  return;
+                }
+                // A redirected request is recorded by the request listener under
+                // the URL it started at, while the body arrives under the URL it
+                // ended at. Key it under every hop so a lookup for either finds
+                // it - otherwise the URL the selector picked would miss.
+                for (const hopUrl of [
+                  resUrl,
+                  ...response.request().redirectChain().map((hop) => hop.url()),
+                ]) {
+                  capturedPlaylists.set(hopUrl, body);
+                  // Relative variant URIs in a redirected master must resolve
+                  // against where it ended up, not where the request started.
+                  capturedFinalUrls.set(hopUrl, resUrl);
+                }
+              })
+              .catch(() => ticket.settle(null)),
+          );
+        });
+
+        page.on("requestfailed", (request) => {
+          if (failedRequestLogCount >= MISSAV_FAILED_REQUEST_LOG_LIMIT) return;
+          failedRequestLogCount += 1;
+
+          const failure = request.failure();
+          logger.warn(
+            `[MissAV request failed] resource=${request.resourceType()} ` +
+              `method=${request.method()} ` +
+              `error=${failure?.errorText ?? "unknown"} ${request.url()}`,
+          );
+
+          if (failedRequestLogCount === MISSAV_FAILED_REQUEST_LOG_LIMIT) {
+            logger.warn(
+              `[MissAV request failed] further failures suppressed after ${MISSAV_FAILED_REQUEST_LOG_LIMIT} entries.`,
+            );
+          }
+        });
+
+        try {
+          navigation = await navigateMissAvPage(page, safeNavigationUrl);
+        } catch (error) {
+          if (isPuppeteerTimeoutError(error) && m3u8Urls.length > 0) {
+            logger.warn(
+              "MissAV page navigation timed out after m3u8 capture; continuing with captured stream URLs.",
+            );
+          } else {
+            throw error;
+          }
+        }
+
+        // Extra wait is created AFTER networkidle2, so the full 20 s budget
+        // belongs entirely to player initialisation — not shared with page load.
+        // Only entered when nothing was captured during navigation, so the warn
+        // only fires on a genuine timeout, never as a false positive.
+        if (m3u8Urls.length === 0) {
+          logger.info(
+            "No m3u8 URL captured during page load — waiting up to 20 s for video player...",
+          );
+          await page
+            .waitForResponse((res) => isM3u8(res.url()), { timeout: 20_000 })
+            .then((res) => {
+              const u = res.url();
+              if (!m3u8Urls.includes(u)) m3u8Urls.push(u);
+            })
+            .catch((err: unknown) => {
+              if (err instanceof Error && err.name === "TimeoutError") {
+                logger.warn("Video player did not fire an m3u8 request within 20 s.");
+                return;
+              }
+              throw err;
+            });
+        }
+
+        html = await page.content();
+        // The bodies must be read while the page is still alive; after
+        // browser.close() the responses can no longer be resolved. Bounded,
+        // because a 200 whose body then stalls leaves response.text() pending
+        // forever - and this wait sits in front of closing the browser and
+        // starting the download, before any cancellation callback is
+        // registered, so an unbounded wait here hangs the download with no way
+        // to abort it. A body that has not arrived by now is not worth that.
+        await settleAllWithin(pendingCaptures, MISSAV_PLAYLIST_CAPTURE_TIMEOUT_MS);
+      } finally {
+        // Always close the browser, even when a non-timeout error is thrown,
+        // to prevent Chromium processes from being left behind.
+        await browser.close().catch((closeErr: unknown) => {
+          logger.warn("Failed to close Puppeteer browser:", closeErr);
+        });
+      }
+
+      // 2. Extract metadata using cheerio
+      const $ = cheerio.load(html);
+      const pageTitle = $('meta[property="og:title"]').attr("content");
+      if (pageTitle) {
+        videoTitle = pageTitle;
+      }
+
+      const ogImage = $('meta[property="og:image"]').attr("content");
+      if (ogImage) {
+        thumbnailUrl = ogImage;
+      }
+
+      logger.info("Extracted metadata:", {
+        title: videoTitle,
+        thumbnail: thumbnailUrl,
+      });
+
+      // 3. The user's yt-dlp configuration, resolved before the browser launch
+      // above, also decides the m3u8 URL selection strategy.
+      const hasFormatSort = !!(userConfig.S || userConfig.formatSort);
+
+      // 4. Select the best m3u8 URL from collected URLs
+      let m3u8Url = MissAVDownloader.selectBestM3u8Url(m3u8Urls, hasFormatSort);
+
+      if (m3u8Url) {
+        logger.info(
+          `Selected m3u8 URL from ${m3u8Urls.length} candidates (format sort: ${hasFormatSort}):`,
+          m3u8Url,
+        );
+        const alternatives = m3u8Urls.filter((u) => u !== m3u8Url);
+        if (alternatives.length > 0) {
+          logger.info("Alternative URLs:", alternatives);
+        }
+      }
+
+      // 5. If m3u8 URL was not found via network, try regex extraction as fallback
+      if (!m3u8Url) {
+        if (isCloudflareChallengeHtml(html)) {
+          throw new Error(
+            "MissAV access is blocked by Cloudflare verification. This is usually the " +
+              "container's egress IP being challenged rather than anything about " +
+              "this video, so it often succeeds on a later attempt: enable Auto " +
+              "Retry in Settings, or route the container through a cleaner egress.",
+          );
+        }
+
+        logger.info(
+          "m3u8 URL not found via network, trying regex extraction...",
+        );
+
+        // Logic ported from: https://github.com/smalltownjj/yt-dlp-plugin-missav/blob/main/yt_dlp_plugins/extractor/missav.py
+        const m3u8Match = html.match(/m3u8\|[^"]+\|playlist\|source/);
+
+        if (m3u8Match) {
+          const matchString = m3u8Match[0];
+          const cleanString = matchString
+            .replace("m3u8|", "")
+            .replace("|playlist|source", "");
+          const urlWords = cleanString.split("|");
+
+          const videoIndex = urlWords.indexOf("video");
+          if (videoIndex !== -1) {
+            const protocol = urlWords[videoIndex - 1];
+            const videoFormat = urlWords[videoIndex + 1];
+            const m3u8UrlPath = urlWords.slice(0, 5).reverse().join("-");
+            const baseUrlPath = urlWords
+              .slice(5, videoIndex - 1)
+              .reverse()
+              .join(".");
+            const regexExtractedUrl = `${protocol}://${baseUrlPath}/${m3u8UrlPath}/${videoFormat}/${urlWords[videoIndex]}.m3u8`;
+            logger.info("Reconstructed m3u8 URL via regex:", regexExtractedUrl);
+
+            if (!m3u8Urls.includes(regexExtractedUrl)) {
+              m3u8Urls.push(regexExtractedUrl);
+            }
+            m3u8Url = regexExtractedUrl;
+          }
+        }
+      }
+
+      if (!m3u8Url) {
+        const debugFile = resolveSafeChildPath(
+          DATA_DIR,
+          `missav_debug_${timestamp}.html`
+        );
+        writeFileSafeSync(debugFile, DATA_DIR, html);
+        logger.error(`Could not find m3u8 URL. HTML dumped to ${debugFile}`);
+        // Deliberately states only what was observed. The previous wording
+        // named Cloudflare, which this code cannot know, and the replacement
+        // asserted the page had been "fetched fine", which it also cannot know:
+        // an origin error page or a WAF denial without our markers lands here
+        // too. The response status is the one fact available, so report that
+        // and let the dumped HTML answer the rest.
+        // A cleared challenge is worth more here than a status code, and the
+        // captured status belongs to the interstitial anyway - reporting it
+        // would blame a block that had already been got past.
+        const servedAs = navigation.clearedChallenge
+          ? ", after a Cloudflare challenge was served and cleared"
+          : navigation.status === null
+            ? ""
+            : ` (HTTP ${navigation.status})`;
+        throw new Error(
+          `MissAV returned no video stream URL for this page${servedAs}. ` +
+            `The saved HTML at ${debugFile} shows what was actually served.`,
+        );
+      }
+
+      // 5. Get network configuration from user config (already loaded above)
+      const networkConfig = getNetworkConfigFromUserConfig(userConfig);
+
+      // Get merge output format from user config, app settings, or default to mp4.
+      const settings = storageService.getSettings();
+      const mergeOutputFormat = resolveMissAvMergeOutputFormat(
+        userConfig,
+        settings,
+      );
+      // 6. Compute output paths using template or legacy formatter
+      const {
+        finalVideoFilename,
+        finalThumbnailFilename,
+        newVideoPath,
+        newThumbnailPath,
+        finalVideoWebPath,
+        finalThumbnailWebPath,
+        releaseOutputReservation: releasePlannedOutput,
+      } = planMissAvOutputPaths(settings, {
+        videoTitle,
+        videoAuthor,
+        videoDate,
+        url,
+        mergeOutputFormat,
+        filenameTemplateSourceOptions,
+        existingLocalVideoId: existingLocalVideo?.id,
+      });
+      releaseOutputReservation = releasePlannedOutput;
+      const ownedVideoReplacement = planOwnedReplacementStagingPathSync(
+        newVideoPath,
+        VIDEOS_DIR,
+        existingLocalVideo?.id
+      );
+      const ownedThumbnailReplacement = planOwnedReplacementStagingPathSync(
+        newThumbnailPath,
+        [IMAGES_DIR, VIDEOS_DIR],
+        existingLocalVideo?.id
+      );
+      const videoDownloadPath = ownedVideoReplacement?.stagingPath ?? newVideoPath;
+      const thumbnailDownloadPath =
+        ownedThumbnailReplacement?.stagingPath ?? newThumbnailPath;
+      videoPathForCleanup = videoDownloadPath;
+      thumbnailPathForCleanup = thumbnailDownloadPath;
+
+      // 7. Download the video using yt-dlp with the m3u8 URL
+      logger.info("Downloading video from m3u8 URL using yt-dlp:", m3u8Url);
+      logger.info("Downloading video to:", videoDownloadPath);
+      logger.info("Download ID:", downloadId);
+
+      if (downloadId) {
+        storageService.updateActiveDownload(downloadId, {
+          title: videoTitle,
+          filename: videoTitle,
+          progress: 0,
+        });
+      } else {
+        logger.warn(
+          "[MissAV] Warning: downloadId is not set, progress updates will not work!",
+        );
+      }
+
+      // Get format sort option if user specified it
+      const formatSortValue = userConfig.S || userConfig.formatSort;
+
+      // Default format - use bestvideo*+bestaudio/best to support highest resolution
+      // This allows downloading 1080p or higher if available
+      let downloadFormat = "bestvideo*+bestaudio/best";
+
+      // If user specified a format, use it
+      if (userConfig.f || userConfig.format) {
+        downloadFormat = userConfig.f || userConfig.format;
+        logger.info("Using user-specified format for MissAV:", downloadFormat);
+      } else if (formatSortValue) {
+        // If user specified format sort but not format, use a more permissive format
+        // that allows format sort to work properly with m3u8 streams
+        // This ensures format sort (e.g., -S res:360) can properly filter resolutions
+        downloadFormat = "bestvideo+bestaudio/best";
+        logger.info(
+          "Using permissive format with format sort for MissAV:",
+          downloadFormat,
+          "format sort:",
+          formatSortValue,
+        );
+      }
+
+      // Prepare flags for yt-dlp to download m3u8 stream
+      // Dynamically determine Referer based on the input URL domain
+      const urlObjForReferer = new URL(url);
+      const referer = `${urlObjForReferer.protocol}//${urlObjForReferer.host}/`;
+      logger.info("Using Referer:", referer);
+
+      // MissAV is the one path with no source duration, which leaves it with
+      // only the track comparison and blind to a download shortened equally
+      // across both tracks. The playlist answers it authoritatively: it
+      // describes the exact stream being fetched. Read from what the browser
+      // already received - no request is issued here - so every uncertain case
+      // yields null, which is the behaviour without this.
+      const sourceDurationSeconds = resolveM3u8DurationSeconds(
+        m3u8Url,
+        (target) => capturedPlaylists.get(target),
+        (requested) => capturedFinalUrls.get(requested),
+      );
+      logger.info(
+        sourceDurationSeconds == null
+          ? "MissAV playlist duration could not be established; the completeness check will compare tracks only."
+          : `MissAV playlist duration: ${sourceDurationSeconds.toFixed(1)}s`,
+      );
+
+      // Read back from the tracker, which lives inside the release callback.
+      let skippedFragments = 0;
+
+      // The m3u8 host (e.g. surrit.com) sits behind Cloudflare bot management
+      // that fingerprints the TLS/JA3 handshake; a default yt-dlp request gets a
+      // 403. Route every request through curl_cffi browser impersonation so the
+      // handshake matches a real browser.
+      //
+      // IMPORTANT: this must be the GLOBAL `--impersonate` flag, not the
+      // `--extractor-args generic:impersonate` arg that yt-dlp's own error
+      // message suggests. The extractor-arg only impersonates the initial
+      // webpage fetch; the m3u8 manifest (and segment) downloads still go out
+      // with the default fingerprint and 403. The global flag impersonates the
+      // whole session. Verified directly against surrit.com from the deployment
+      // environment: `--impersonate chrome` succeeds where the extractor-arg
+      // returns 403. Referer is the only extra header the CDN needs.
+      //
+      // Gate on availability: `--impersonate` hard-fails ("target not available")
+      // when curl_cffi is missing, which can happen on non-Docker installs. When
+      // unavailable, omit it and warn — the download proceeds unimpersonated
+      // (works for non-blocked hosts) instead of erroring outright.
+      await withYtDlpRelease(async (release) => {
+        const canImpersonate = await isYtDlpImpersonateAvailable(release);
+        if (!canImpersonate) {
+          logger.warn(
+            "[MissAV] yt-dlp browser impersonation is unavailable (curl_cffi not installed); " +
+              "proceeding without --impersonate. Cloudflare-protected hosts may return 403. " +
+              "Install it with: pip install curl-cffi",
+          );
+        }
+
+        // Prepare flags object - merge user config with required settings
+        const flags: any = {
+          ...networkConfig, // Apply network settings (proxy, etc.)
+          output: videoDownloadPath,
+          format: downloadFormat,
+          mergeOutputFormat: mergeOutputFormat,
+          noOverwrites: true,
+          ...(canImpersonate ? { impersonate: "chrome" } : {}),
+          // Must come after the network config: fragment concurrency is what
+          // keeps a proxied HLS download from serialising on round trips.
+          N: resolveMissAvConcurrentFragments(userConfig),
+          fragmentRetries:
+            userConfig.fragmentRetries ?? MISSAV_DEFAULT_FRAGMENT_RETRIES,
+          retrySleep: resolveMissAvRetrySleep(userConfig),
+          addHeader: [`Referer:${referer}`],
+        };
+
+        // Apply format sort if user specified it
+        if (formatSortValue) {
+          flags.formatSort = formatSortValue;
+          logger.info("Using format sort for MissAV:", formatSortValue);
+        }
+
+        logger.info("Final MissAV yt-dlp flags:", flags);
+
+        // Use ProgressTracker for centralized progress parsing
+        const progressTracker = new ProgressTracker(downloadId);
+        // Capped ring-buffer for stderr: retain only the last 4 KB so that
+        // long downloads with chatty ffmpeg/yt-dlp output don't grow memory unboundedly.
+        const STDERR_MAX_BYTES = 4 * 1024;
+        let stderrBuffer = "";
+        let lastProgressLogAt = 0;
+        const shouldLogDownloadProgress = (line: string): boolean => {
+          const now = Date.now();
+          const percentMatch = line.match(/\[download\]\s+(\d+(?:\.\d+)?)%/);
+          const percent = percentMatch ? Number(percentMatch[1]) : null;
+          const isComplete = percent !== null && percent >= 100;
+
+          if (
+            lastProgressLogAt === 0 ||
+            now - lastProgressLogAt >= MISSAV_PROGRESS_LOG_INTERVAL_MS ||
+            isComplete
+          ) {
+            lastProgressLogAt = now;
+            return true;
+          }
+
+          return false;
+        };
+        const parseProgress = (output: string, source: "stdout" | "stderr") => {
+          const lines = output
+            .split(/[\r\n]+/)
+            .filter((line) => line.trim());
+          for (const line of lines) {
+            if (line.includes("[download]")) {
+              if (shouldLogDownloadProgress(line)) {
+                logger.info(`[MissAV Progress ${source}]:`, line.substring(0, 120));
+              }
+            } else if (source === "stderr" && line.trim()) {
+              // Only log actual errors/warnings, not generic informational lines.
+              // yt-dlp/ffmpeg stderr is very chatty during HLS segment downloads.
+              if (line.startsWith("ERROR") || line.startsWith("WARNING")) {
+                logger.warn(`[MissAV stderr]:`, line);
+              }
+              // Append to ring-buffer, trimming the oldest content when over the cap.
+              stderrBuffer += line + "\n";
+              if (stderrBuffer.length > STDERR_MAX_BYTES) {
+                stderrBuffer = stderrBuffer.slice(stderrBuffer.length - STDERR_MAX_BYTES);
+              }
+            }
+          }
+          progressTracker.parseAndUpdate(output, source);
+        };
+
+        logger.info("Starting yt-dlp process with spawn...");
+
+        // Convert flags object to array of args using the utility function
+        const args = [...flagsToArgs(flags)];
+        appendYtDlpInputOperand(args, m3u8Url);
+
+        // Log the full command for debugging
+        logger.info(
+          `[yt-dlp] executing release=${release.releaseId} version=${release.version ?? "unknown"}`
+        );
+
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const child = spawnYtDlp(release, args);
+
+            child.stdout?.on("data", (data) => {
+              parseProgress(data.toString(), "stdout");
+            });
+
+            child.stderr?.on("data", (data) => {
+              parseProgress(data.toString(), "stderr");
+            });
+
+            child.on("close", (code, signal) => {
+              // Flush any throttled progress and clear the tracker's timer.
+              progressTracker.dispose();
+              skippedFragments = progressTracker.skippedFragments;
+              if (code === 0) {
+                resolve();
+              } else if (
+                cancellationRequested ||
+                signal === "SIGTERM" ||
+                signal === "SIGINT"
+              ) {
+                reject(DownloadCancelledError.create());
+              } else {
+                const err = new Error(`yt-dlp process exited with code ${code}`);
+                (err as any).stderr = stderrBuffer;
+                reject(err);
+              }
+            });
+
+            child.on("error", (err) => {
+              reject(err);
+            });
+
+            if (onStart) {
+              onStart(async () => {
+                cancellationRequested = true;
+                logger.info("Killing subprocess for download:", downloadId);
+                child.kill();
+
+                // Clean up temporary files created by yt-dlp (*.part, *.ytdl, etc.)
+                logger.info("Cleaning up temporary files...");
+                await cleanupVideoDownload();
+              });
+            }
+          });
+
+          logger.info("Video downloaded successfully");
+        } catch (err: unknown) {
+          // Use base class helper for cancellation handling
+          const downloader = new MissAVDownloader();
+          await downloader.handleCancellationError(err, async () => {
+            await cleanupVideoDownload();
+          });
+          logger.error("yt-dlp execution failed:", err);
+          throw err;
+        }
+      });
+
+      const downloader = new MissAVDownloader();
+      downloader.throwIfCancelled(downloadId);
+      // The completeness probe is deliberately fail-open: a file it cannot read
+      // is reported as unknown, not as broken, so a host without ffprobe keeps
+      // working. That means it cannot answer "yt-dlp produced nothing at all",
+      // and unlike the other downloaders - which gate on findVideoFileInTemp and
+      // resolvePlayableMediaFilePath - nothing here asked that question. A run
+      // that exits 0 without writing the expected file would reach the database
+      // and save a row pointing at a file that never existed.
+      if (!pathExistsSafeSync(videoDownloadPath, VIDEOS_DIR)) {
+        throw new Error(
+          `MissAV download produced no output at ${videoDownloadPath}. ` +
+            `The download was discarded; try downloading again.`
+        );
+      }
+      const completeness = await verifyDownloadedMediaComplete(videoDownloadPath, {
+        // Null whenever the playlist could not answer it, which leaves only the
+        // track comparison - the behaviour before the playlist was consulted.
+        sourceDurationSeconds,
+        userConfig,
+      });
+      // Keep the file and record yt-dlp's skipped-fragment warning in history.
+      const incompleteNote = completeness.complete
+        ? createSkippedFragmentNote(skippedFragments)
+        : null;
+      // Cancellation can remove the file before publishing anything.
+      if (cancellationRequested) throw DownloadCancelledError.create();
+      downloader.throwIfCancelled(downloadId);
+      if (!completeness.complete) {
+        throw new Error(
+          `MissAV download is incomplete: ${completeness.reason}. ` +
+            `The file was discarded; try downloading again.`
+        );
+      }
+
+      if (ownedVideoReplacement) {
+        replaceOwnedFileWithBackupSync(
+          ownedVideoReplacement.stagingPath,
+          ownedVideoReplacement.stagingRootDir,
+          ownedVideoReplacement.finalPath,
+          ownedVideoReplacement.destinationRootDir,
+          existingLocalVideo?.id
+        );
+        await cleanupVideoDownload();
+      }
+
+      // 8. Download and save the thumbnail
+      if (thumbnailUrl) {
+        // Use base class method via temporary instance
+        let axiosConfig = {};
+        // An empty string is yt-dlp's "connect directly" value, so it must reach
+        // axios too: it disables axios' own HTTP_PROXY handling, keeping this
+        // request on the same egress path as the download it belongs to.
+        if (typeof userConfig.proxy === "string") {
+          try {
+            axiosConfig = getAxiosProxyConfig(userConfig.proxy);
+          } catch (error) {
+            if (error instanceof InvalidProxyError) {
+              logger.warn(
+                "Invalid proxy configuration for thumbnail download, proceeding without proxy:",
+                error.message,
+              );
+            } else {
+              throw error;
+            }
+          }
+        }
+        const downloader = new MissAVDownloader();
+        thumbnailSaved = await downloader.downloadThumbnail(
+          thumbnailUrl,
+          thumbnailDownloadPath,
+          axiosConfig,
+        );
+        if (thumbnailSaved && ownedThumbnailReplacement) {
+          replaceOwnedFileWithBackupSync(
+            ownedThumbnailReplacement.stagingPath,
+            ownedThumbnailReplacement.stagingRootDir,
+            ownedThumbnailReplacement.finalPath,
+            ownedThumbnailReplacement.destinationRootDir,
+            existingLocalVideo?.id
+          );
+          thumbnailPathForCleanup = null;
+          // Drop the mirror the staging name picked up on its way in; nothing
+          // will reference it again. Regeneration of the published one stays
+          // forced: an owned replacement usually already has a mirror, left by
+          // the download this one supersedes, and accepting that would leave
+          // the preview showing the superseded thumbnail.
+          deleteSmallThumbnailMirrorSync(ownedThumbnailReplacement.stagingPath);
+          await regenerateSmallThumbnailForThumbnailPath(finalThumbnailWebPath);
+        }
+      }
+
+      // 9. Get video duration
+      let duration: string | undefined;
+      let width: number | undefined;
+      let height: number | undefined;
+      try {
+        const { getVideoDuration } =
+          await import("../../services/metadataService");
+        const durationSec = await getVideoDuration(newVideoPath);
+        if (durationSec) {
+          duration = durationSec.toString();
+        }
+      } catch (e) {
+        logger.error("Failed to extract duration from MissAV video:", e);
+      }
+
+      try {
+        const { getVideoDimensions } =
+          await import("../../services/metadataService");
+        const dimensions = await getVideoDimensions(newVideoPath);
+        if (dimensions) {
+          width = dimensions.width;
+          height = dimensions.height;
+        }
+      } catch (e) {
+        logger.error("Failed to extract dimensions from MissAV video:", e);
+      }
+
+      // 10. Get file size
+      let fileSize: string | undefined;
+      try {
+        if (pathExistsSafeSync(newVideoPath, VIDEOS_DIR)) {
+          const stats = statSafeSync(newVideoPath, VIDEOS_DIR);
+          fileSize = stats.size.toString();
+        }
+      } catch (e) {
+        logger.error("Failed to get file size:", e);
+      }
+
+      // 11. Save metadata
+      const videoData: Video = {
+        id: timestamp.toString(),
+        title: videoTitle,
+        author: videoAuthor,
+        date: videoDate,
+        source: "missav",
+        mediaType: "video",
+        sourceUrl: url,
+        sourceVideoId,
+        videoFilename: finalVideoFilename,
+        thumbnailFilename: thumbnailSaved ? finalThumbnailFilename : undefined,
+        thumbnailUrl: thumbnailUrl || undefined,
+        videoPath: finalVideoWebPath,
+        thumbnailPath: thumbnailSaved ? finalThumbnailWebPath : null,
+        duration: duration,
+        fileSize: fileSize,
+        width,
+        height,
+        addedAt: downloadedAtIso,
+        createdAt: downloadedAtIso,
+      };
+
+      let persistedVideoData = videoData;
+      if (existingLocalVideo) {
+        videoData.id = existingLocalVideo.id;
+        videoData.createdAt = existingLocalVideo.createdAt;
+        const updatedVideo = storageService.updateVideo(existingLocalVideo.id, {
+          title: videoData.title,
+          author: videoData.author,
+          date: videoData.date,
+          source: videoData.source,
+          mediaType: videoData.mediaType,
+          sourceUrl: videoData.sourceUrl,
+          sourceVideoId: videoData.sourceVideoId,
+          videoFilename: videoData.videoFilename,
+          videoPath: videoData.videoPath,
+          thumbnailFilename: thumbnailSaved
+            ? videoData.thumbnailFilename
+            : existingLocalVideo.thumbnailFilename,
+          thumbnailUrl: videoData.thumbnailUrl || existingLocalVideo.thumbnailUrl,
+          thumbnailPath: thumbnailSaved
+            ? videoData.thumbnailPath
+            : existingLocalVideo.thumbnailPath,
+          duration: videoData.duration,
+          fileSize: videoData.fileSize,
+          width: videoData.width,
+          height: videoData.height,
+          addedAt: downloadedAtIso,
+        });
+
+        if (!updatedVideo) {
+          throw new Error(`Failed to update existing MissAV video ${existingLocalVideo.id}`);
+        }
+        // The updated row already references the new output, even without a
+        // staging replacement. Protect it before old-file or identity cleanup.
+        videoPathForCleanup = null;
+        if (thumbnailSaved) thumbnailPathForCleanup = null;
+
+        const previousVideoPath = resolveSupersededManagedPath({
+          previousWebPath: existingLocalVideo.videoPath,
+          previousFilename: existingLocalVideo.videoFilename,
+          fallbackRootDir: VIDEOS_DIR,
+          newAbsolutePath: newVideoPath,
+        });
+        if (previousVideoPath) {
+          try {
+            if (
+              pathExistsSafeSync(previousVideoPath, VIDEOS_DIR) &&
+              !storageService.isVideoFileReferencedByOtherVideo(
+                existingLocalVideo,
+                existingLocalVideo.id,
+                previousVideoPath,
+              )
+            ) {
+              unlinkSafeSync(previousVideoPath, VIDEOS_DIR);
+              logger.info(
+                `Deleted superseded MissAV video file: ${existingLocalVideo.videoPath || existingLocalVideo.videoFilename}`
+              );
+            }
+          } catch (e) {
+            logger.error("Failed to delete superseded MissAV video file:", e);
+          }
+        }
+
+        removeMediaServerArtifactsForVideo(existingLocalVideo, { preserveSharedArtifacts: true });
+        persistedVideoData = updatedVideo;
+        if (sourceVideoId) {
+          persistedVideoData = storageService.persistDownloadedMediaIdentity({
+            video: persistedVideoData,
+            identity: {
+              platform: "missav",
+              sourceVideoId,
+              mediaType: "video",
+              localVideoId: persistedVideoData.id,
+            },
+            sourceUrl: url,
+            trackingMode: "redownload",
+            downloadedAtMs: timestamp,
+          });
+        }
+      } else if (sourceVideoId) {
+        persistedVideoData = storageService.persistDownloadedMediaIdentity({
+          video: videoData,
+          identity: {
+            platform: "missav",
+            sourceVideoId,
+            mediaType: "video",
+            localVideoId: videoData.id,
+          },
+          sourceUrl: url,
+          trackingMode: "new",
+          downloadedAtMs: timestamp,
+        });
+        videoPathForCleanup = null;
+        thumbnailPathForCleanup = null;
+      } else {
+        storageService.saveVideo(videoData);
+        videoPathForCleanup = null;
+        thumbnailPathForCleanup = null;
+      }
+      logger.info("MissAV video saved to database");
+
+      // Add video to author collection if enabled
+      const authorOrganization = storageService.organizeVideoByAuthor(
+        persistedVideoData.id,
+        videoAuthor,
+        settings.authorOrganizationMode,
+        settings.downloadFilenamePresetId,
+      );
+
+      if (authorOrganization) {
+        // If video was added to a collection, the file paths might have changed
+        const updatedVideo = storageService.getVideoById(persistedVideoData.id);
+        if (updatedVideo) {
+          syncMediaServerArtifactsForRecord(updatedVideo, {
+            rawSourceInfo: {
+              title: videoTitle,
+              uploader: videoAuthor,
+              upload_date: videoDate,
+              webpage_url: url,
+              thumbnail: thumbnailUrl || undefined,
+              extractor: "missav",
+            },
+          });
+          return storageService.withIncompleteDownloadNote(updatedVideo, incompleteNote);
+        }
+      }
+
+      syncMediaServerArtifactsForRecord(persistedVideoData, {
+        rawSourceInfo: {
+          title: videoTitle,
+          uploader: videoAuthor,
+          upload_date: videoDate,
+          webpage_url: url,
+          thumbnail: thumbnailUrl || undefined,
+          extractor: "missav",
+        },
+      });
+      return storageService.withIncompleteDownloadNote(persistedVideoData, incompleteNote);
+    } catch (error: unknown) {
+      if (isCancelledError(error)) {
+        logger.info("MissAV-family download cancelled:", { downloadId });
+      } else {
+        logger.error("Error in downloadMissAVVideo:", error);
+      }
+      // Never reconstruct legacy filenames: collisions and templates may put
+      // another library item's files there. Published replacements are excluded.
+      try {
+        await cleanupVideoDownload();
+        if (thumbnailPathForCleanup) {
+          await safeRemove(thumbnailPathForCleanup);
+          deleteSmallThumbnailMirrorSync(thumbnailPathForCleanup);
+        }
+      } catch (cleanupError) {
+        logger.warn("Failed to clean up MissAV download:", cleanupError);
+      }
+      throw error;
+    } finally {
+      releaseOutputReservation?.();
+    }
+  }
+
+  // Helper to select best m3u8 URL (delegates to ./missav/m3u8).
+  static selectBestM3u8Url(
+    urls: string[],
+    hasFormatSort: boolean,
+  ): string | null {
+    return selectBestM3u8Url(urls, hasFormatSort);
+  }
+}

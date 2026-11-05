@@ -1,0 +1,632 @@
+import express, { NextFunction, RequestHandler, Router } from "express";
+import * as cleanupController from "../controllers/cleanupController";
+import * as cloudStorageController from "../controllers/cloudStorageController";
+import * as collectionController from "../controllers/collectionController";
+import * as bulkVideoOrganizationController from "../controllers/bulkVideoOrganizationController";
+import * as downloadController from "../controllers/downloadController";
+import * as favoriteController from "../controllers/favoriteController";
+import * as mediaCollisionAuditController from "../controllers/mediaCollisionAuditController";
+import * as mediaIntegrityAuditController from "../controllers/mediaIntegrityAuditController";
+import * as recommendationController from "../controllers/recommendationController";
+import * as rssController from "../controllers/rssController";
+import * as scanController from "../controllers/scanController";
+import * as statisticsController from "../controllers/statisticsController";
+import * as subscriptionController from "../controllers/subscriptionController";
+import * as systemController from "../controllers/systemController";
+import * as userController from "../controllers/userController";
+import * as videoController from "../controllers/videoController";
+import * as videoDownloadController from "../controllers/videoDownloadController";
+import * as videoMetadataController from "../controllers/videoMetadataController";
+import { authorSearchLimiter, searchAuthors } from "../controllers/authorSearchController";
+import { asyncHandler } from "../middleware/errorHandler";
+import { requireAdmin } from "../middleware/requireAdmin";
+
+type ApiRouteMethod = "delete" | "get" | "patch" | "post" | "put";
+
+export type ApiRouteDefinition = {
+  allowApiKey?: boolean;
+  handlers: RequestHandler[];
+  method: ApiRouteMethod;
+  path: string;
+};
+
+const apiRouteDefinitions: ApiRouteDefinition[] = [
+  {
+    method: "post",
+    path: "/videos/batch/tags",
+    allowApiKey: false,
+    handlers: [requireAdmin, asyncHandler(bulkVideoOrganizationController.addTags)],
+  },
+  {
+    method: "post",
+    path: "/collections/batch-add",
+    allowApiKey: false,
+    handlers: [requireAdmin, asyncHandler(bulkVideoOrganizationController.addToCollection)],
+  },
+  // Video routes
+  {
+    method: "get",
+    path: "/search/authors",
+    handlers: [authorSearchLimiter, asyncHandler(searchAuthors)],
+  },
+  {
+    method: "get",
+    path: "/search",
+    handlers: [asyncHandler(videoDownloadController.searchVideos)],
+  },
+  {
+    method: "post",
+    path: "/download",
+    allowApiKey: true,
+    handlers: [asyncHandler(videoDownloadController.downloadVideo)],
+  },
+  {
+    method: "post",
+    path: "/upload",
+    handlers: [
+      videoController.upload.single("video"),
+      asyncHandler(videoController.uploadVideo),
+    ],
+  },
+  {
+    method: "post",
+    path: "/upload/batch",
+    handlers: [
+      videoController.uploadBatch.array("videos"),
+      asyncHandler(videoController.uploadVideosBatch),
+    ],
+  },
+  {
+    method: "get",
+    path: "/videos",
+    allowApiKey: true,
+    handlers: [asyncHandler(videoController.getVideos)],
+  },
+  {
+    method: "get",
+    path: "/videos/author-channel-url",
+    handlers: [asyncHandler(videoController.getAuthorChannelUrl)],
+  },
+  {
+    method: "get",
+    path: "/videos/:id",
+    allowApiKey: true,
+    handlers: [asyncHandler(videoController.getVideoById)],
+  },
+  {
+    method: "get",
+    path: "/mount-video/:id",
+    allowApiKey: true,
+    handlers: [asyncHandler(videoController.serveMountVideo)],
+  },
+  {
+    // Current keepalive/beacon path for body-based progress updates.
+    method: "post",
+    path: "/videos/progress",
+    handlers: [asyncHandler(videoMetadataController.updateProgressByBody)],
+  },
+  {
+    // Back-compat: older cached clients issued this beacon as PUT before the
+    // switch to POST. Kept so their unload progress beacons still succeed.
+    method: "put",
+    path: "/videos/progress",
+    handlers: [asyncHandler(videoMetadataController.updateProgressByBody)],
+  },
+  {
+    method: "put",
+    path: "/videos/:id",
+    handlers: [asyncHandler(videoController.updateVideoDetails)],
+  },
+  {
+    method: "post",
+    path: "/videos/:id/subtitles",
+    handlers: [
+      videoController.uploadSubtitleMiddleware.single("subtitle"),
+      asyncHandler(videoController.uploadSubtitle),
+    ],
+  },
+  {
+    method: "delete",
+    path: "/videos/:id",
+    handlers: [asyncHandler(videoController.deleteVideo)],
+  },
+  {
+    method: "get",
+    path: "/videos/:id/comments",
+    handlers: [asyncHandler(videoController.getVideoComments)],
+  },
+  {
+    method: "post",
+    path: "/videos/:id/rate",
+    handlers: [asyncHandler(videoMetadataController.rateVideo)],
+  },
+  {
+    method: "post",
+    path: "/videos/:id/refresh-thumbnail",
+    handlers: [asyncHandler(videoMetadataController.refreshThumbnail)],
+  },
+  {
+    method: "post",
+    path: "/videos/:id/redownload-thumbnail",
+    handlers: [asyncHandler(videoMetadataController.redownloadThumbnail)],
+  },
+  {
+    method: "post",
+    path: "/videos/:id/upload-thumbnail",
+    handlers: [
+      videoMetadataController.thumbnailUpload.single("thumbnail"),
+      asyncHandler(videoMetadataController.uploadThumbnail),
+    ],
+  },
+  {
+    method: "post",
+    path: "/videos/refresh-file-sizes",
+    handlers: [asyncHandler(videoMetadataController.refreshAllFileSizes)],
+  },
+  {
+    method: "post",
+    path: "/videos/:id/view",
+    handlers: [asyncHandler(videoMetadataController.incrementViewCount)],
+  },
+  {
+    method: "put",
+    path: "/videos/:id/progress",
+    handlers: [asyncHandler(videoMetadataController.updateProgress)],
+  },
+  {
+    method: "get",
+    path: "/scan-status",
+    handlers: [asyncHandler(scanController.getScanStatus)],
+  },
+  {
+    method: "post",
+    path: "/scan-files",
+    handlers: [asyncHandler(scanController.scanFiles)],
+  },
+  {
+    method: "post",
+    path: "/scan-mount-directories",
+    handlers: [asyncHandler(scanController.scanMountDirectories)],
+  },
+  {
+    method: "post",
+    path: "/cleanup-temp-files",
+    handlers: [asyncHandler(cleanupController.cleanupTempFiles)],
+  },
+  {
+    method: "get",
+    path: "/download-status",
+    handlers: [asyncHandler(videoDownloadController.getDownloadStatus)],
+  },
+  {
+    method: "get",
+    path: "/check-video-download",
+    handlers: [asyncHandler(videoDownloadController.checkVideoDownloadStatus)],
+  },
+  {
+    method: "get",
+    path: "/check-bilibili-parts",
+    handlers: [asyncHandler(videoDownloadController.checkBilibiliParts)],
+  },
+  {
+    method: "get",
+    path: "/check-bilibili-collection",
+    handlers: [asyncHandler(videoDownloadController.checkBilibiliCollection)],
+  },
+  {
+    method: "get",
+    path: "/check-playlist",
+    handlers: [asyncHandler(videoDownloadController.checkPlaylist)],
+  },
+  {
+    method: "post",
+    path: "/downloads/channel-playlists",
+    handlers: [asyncHandler(downloadController.processChannelPlaylists)],
+  },
+
+  // Download management
+  {
+    method: "post",
+    path: "/downloads/cancel/:id",
+    handlers: [asyncHandler(downloadController.cancelDownload)],
+  },
+  {
+    method: "delete",
+    path: "/downloads/queue/:id",
+    handlers: [asyncHandler(downloadController.removeFromQueue)],
+  },
+  {
+    method: "delete",
+    path: "/downloads/queue",
+    handlers: [asyncHandler(downloadController.clearQueue)],
+  },
+  {
+    method: "get",
+    path: "/downloads/history",
+    handlers: [asyncHandler(downloadController.getDownloadHistory)],
+  },
+  {
+    method: "delete",
+    path: "/downloads/history/:id",
+    handlers: [asyncHandler(downloadController.removeDownloadHistory)],
+  },
+  {
+    method: "delete",
+    path: "/downloads/history",
+    handlers: [asyncHandler(downloadController.clearDownloadHistory)],
+  },
+
+  // Collection routes
+  {
+    method: "get",
+    path: "/collections",
+    allowApiKey: true,
+    handlers: [asyncHandler(collectionController.getCollections)],
+  },
+  {
+    method: "post",
+    path: "/collections",
+    handlers: [asyncHandler(collectionController.createCollection)],
+  },
+  {
+    method: "put",
+    path: "/collections/:id",
+    handlers: [asyncHandler(collectionController.updateCollection)],
+  },
+  {
+    // Registered before "/collections/:id" so the literal path wins the match
+    // rather than being read as a collection whose id is "empty".
+    method: "delete",
+    path: "/collections/empty",
+    handlers: [asyncHandler(collectionController.deleteEmptyCollections)],
+  },
+  {
+    method: "delete",
+    path: "/collections/:id",
+    handlers: [asyncHandler(collectionController.deleteCollection)],
+  },
+
+  // Favorite routes
+  {
+    method: "get",
+    path: "/favorites/collections",
+    handlers: [asyncHandler(favoriteController.getFavoriteCollections)],
+  },
+  {
+    method: "post",
+    path: "/favorites/collections/:id",
+    handlers: [asyncHandler(favoriteController.addFavoriteCollection)],
+  },
+  {
+    method: "delete",
+    path: "/favorites/collections/:id",
+    handlers: [asyncHandler(favoriteController.removeFavoriteCollection)],
+  },
+  {
+    method: "get",
+    path: "/favorites/authors",
+    handlers: [asyncHandler(favoriteController.getFavoriteAuthors)],
+  },
+  {
+    method: "post",
+    path: "/favorites/authors",
+    handlers: [asyncHandler(favoriteController.addFavoriteAuthor)],
+  },
+  {
+    method: "delete",
+    path: "/favorites/authors",
+    handlers: [asyncHandler(favoriteController.removeFavoriteAuthor)],
+  },
+
+  // Recommendation routes
+  {
+    method: "get",
+    path: "/recommendations/signals",
+    handlers: [asyncHandler(recommendationController.getRecommendationSignalsEndpoint)],
+  },
+
+  // Subscription routes
+  {
+    method: "post",
+    path: "/subscriptions",
+    handlers: [asyncHandler(subscriptionController.createSubscription)],
+  },
+  {
+    method: "get",
+    path: "/subscriptions",
+    handlers: [asyncHandler(subscriptionController.getSubscriptions)],
+  },
+  {
+    method: "put",
+    path: "/subscriptions/:id",
+    handlers: [asyncHandler(subscriptionController.updateSubscription)],
+  },
+  {
+    method: "delete",
+    path: "/subscriptions/:id",
+    handlers: [asyncHandler(subscriptionController.deleteSubscription)],
+  },
+  {
+    method: "put",
+    path: "/subscriptions/:id/pause",
+    handlers: [asyncHandler(subscriptionController.pauseSubscription)],
+  },
+  {
+    method: "put",
+    path: "/subscriptions/:id/resume",
+    handlers: [asyncHandler(subscriptionController.resumeSubscription)],
+  },
+  {
+    method: "post",
+    path: "/subscriptions/playlist",
+    handlers: [asyncHandler(subscriptionController.createPlaylistSubscription)],
+  },
+  {
+    method: "post",
+    path: "/subscriptions/channel-playlists",
+    handlers: [asyncHandler(subscriptionController.subscribeChannelPlaylists)],
+  },
+
+  // Continuous download task routes
+  {
+    method: "get",
+    path: "/subscriptions/tasks",
+    handlers: [asyncHandler(subscriptionController.getContinuousDownloadTasks)],
+  },
+  // Specific routes must come before parameterized routes (:id)
+  {
+    method: "delete",
+    path: "/subscriptions/tasks/clear-finished",
+    handlers: [asyncHandler(subscriptionController.clearFinishedTasks)],
+  },
+  {
+    method: "put",
+    path: "/subscriptions/tasks/:id/pause",
+    handlers: [asyncHandler(subscriptionController.pauseContinuousDownloadTask)],
+  },
+  {
+    method: "put",
+    path: "/subscriptions/tasks/:id/resume",
+    handlers: [asyncHandler(subscriptionController.resumeContinuousDownloadTask)],
+  },
+  {
+    method: "post",
+    path: "/subscriptions/tasks/:id/retry-planning",
+    handlers: [
+      requireAdmin,
+      asyncHandler(subscriptionController.retryContinuousDownloadTaskPlanning),
+    ],
+  },
+  {
+    method: "delete",
+    path: "/subscriptions/tasks/:id",
+    handlers: [asyncHandler(subscriptionController.cancelContinuousDownloadTask)],
+  },
+  {
+    method: "delete",
+    path: "/subscriptions/tasks/:id/delete",
+    handlers: [asyncHandler(subscriptionController.deleteContinuousDownloadTask)],
+  },
+  {
+    method: "post",
+    path: "/subscriptions/tasks/playlist",
+    handlers: [asyncHandler(subscriptionController.createPlaylistTask)],
+  },
+
+  // Cloud storage routes
+  {
+    method: "get",
+    path: "/cloud/signed-url",
+    handlers: [asyncHandler(cloudStorageController.getSignedUrl)],
+  },
+  {
+    method: "post",
+    path: "/cloud/sync",
+    handlers: [asyncHandler(cloudStorageController.syncToCloud)],
+  },
+  {
+    method: "delete",
+    path: "/cloud/thumbnail-cache",
+    handlers: [asyncHandler(cloudStorageController.clearThumbnailCacheEndpoint)],
+  },
+
+  // System routes
+  {
+    method: "get",
+    path: "/system/version",
+    allowApiKey: true,
+    handlers: [asyncHandler(systemController.getLatestVersion)],
+  },
+  {
+    method: "get",
+    path: "/media-collision-audit",
+    handlers: [
+      requireAdmin,
+      asyncHandler(mediaCollisionAuditController.getMediaCollisionAudit),
+    ],
+  },
+  {
+    method: "post",
+    path: "/media-collision-audit/repair",
+    handlers: [
+      requireAdmin,
+      asyncHandler(mediaCollisionAuditController.repairMediaCollisionAuditFinding),
+    ],
+  },
+  {
+    method: "get",
+    path: "/media-integrity-audit",
+    handlers: [
+      requireAdmin,
+      asyncHandler(mediaIntegrityAuditController.getMediaIntegrityAudit),
+    ],
+  },
+
+  // Statistics
+  // POST /api/statistics/events accepts visitor traffic when statisticsTrackVisitorActivity = true.
+  // The dedicated visitor gate is in statisticsController.ingestEvents (not in roleBasedAuthMiddleware).
+  {
+    method: "post",
+    path: "/statistics/events",
+    handlers: [
+      statisticsController.statisticsEventsJsonParser,
+      asyncHandler(statisticsController.ingestEvents),
+    ],
+  },
+  {
+    method: "get",
+    path: "/statistics/overview",
+    handlers: [requireAdmin, asyncHandler(statisticsController.getOverviewEndpoint)],
+  },
+  {
+    method: "get",
+    path: "/statistics/timeseries/:metric",
+    handlers: [
+      requireAdmin,
+      asyncHandler(statisticsController.getTimeseriesEndpoint),
+    ],
+  },
+  {
+    method: "get",
+    path: "/statistics/rankings/:metric",
+    handlers: [
+      requireAdmin,
+      asyncHandler(statisticsController.getRankingEndpoint),
+    ],
+  },
+  {
+    method: "get",
+    path: "/statistics/health",
+    handlers: [requireAdmin, asyncHandler(statisticsController.getHealthEndpoint)],
+  },
+  {
+    method: "get",
+    path: "/statistics/export",
+    handlers: [requireAdmin, asyncHandler(statisticsController.exportEndpoint)],
+  },
+  {
+    method: "post",
+    path: "/statistics/recompute",
+    handlers: [
+      requireAdmin,
+      asyncHandler(statisticsController.recomputeEndpoint),
+    ],
+  },
+  {
+    method: "delete",
+    path: "/statistics",
+    handlers: [requireAdmin, asyncHandler(statisticsController.clearEndpoint)],
+  },
+
+  // Visitor user management (admin only)
+  {
+    method: "get",
+    path: "/users",
+    handlers: [requireAdmin, asyncHandler(userController.listUsers)],
+  },
+  {
+    method: "post",
+    path: "/users",
+    handlers: [requireAdmin, asyncHandler(userController.createUser)],
+  },
+  {
+    method: "patch",
+    path: "/users/:id",
+    handlers: [requireAdmin, asyncHandler(userController.updateUser)],
+  },
+  {
+    method: "delete",
+    path: "/users/:id",
+    handlers: [requireAdmin, asyncHandler(userController.deleteUser)],
+  },
+
+  // RSS token management (admin only)
+  {
+    method: "get",
+    path: "/rss/tokens",
+    handlers: [requireAdmin, asyncHandler(rssController.listTokens)],
+  },
+  {
+    method: "post",
+    path: "/rss/tokens",
+    handlers: [requireAdmin, asyncHandler(rssController.createToken)],
+  },
+  {
+    method: "put",
+    path: "/rss/tokens/:id",
+    handlers: [requireAdmin, asyncHandler(rssController.updateToken)],
+  },
+  {
+    method: "delete",
+    path: "/rss/tokens/:id",
+    handlers: [requireAdmin, asyncHandler(rssController.deleteToken)],
+  },
+  {
+    method: "post",
+    path: "/rss/tokens/:id/reset",
+    handlers: [requireAdmin, asyncHandler(rssController.resetToken)],
+  },
+];
+
+const denyApiKeyRoute: RequestHandler = (_req, _res, next: NextFunction) => {
+  next("router");
+};
+
+const registerRoute = (
+  router: Router,
+  definition: ApiRouteDefinition,
+  handlers: RequestHandler[]
+): void => {
+  switch (definition.method) {
+    case "delete":
+      router.delete(definition.path, ...handlers);
+      return;
+    case "get":
+      router.get(definition.path, ...handlers);
+      return;
+    case "post":
+      router.post(definition.path, ...handlers);
+      return;
+    case "patch":
+      router.patch(definition.path, ...handlers);
+      return;
+    case "put":
+      router.put(definition.path, ...handlers);
+      return;
+  }
+};
+
+export const buildApiRouter = (
+  apiKeyOnly = false,
+  definitions: readonly ApiRouteDefinition[] = apiRouteDefinitions
+): Router => {
+  const router = express.Router();
+
+  if (apiKeyOnly) {
+    router.use((req, _res, next) => {
+      if (req.apiKeyAuthenticated === true) {
+        next();
+        return;
+      }
+
+      next("router");
+    });
+  }
+
+  for (const definition of definitions) {
+    const handlers =
+      apiKeyOnly && definition.allowApiKey !== true
+        ? [denyApiKeyRoute]
+        : definition.handlers;
+
+    registerRoute(router, definition, handlers);
+  }
+
+  return router;
+};
+
+const apiRoutes = buildApiRouter();
+
+export const apiKeyRoutes = buildApiRouter(true);
+
+export default apiRoutes;

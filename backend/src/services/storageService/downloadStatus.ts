@@ -1,0 +1,292 @@
+import { and, eq, inArray, lt } from "drizzle-orm";
+import { db } from "../../db";
+import { downloads } from "../../db/schema";
+import { logger } from "../../utils/logger";
+import { extractSourceVideoId } from "../../utils/helpers";
+import { normalizeMediaPlatform } from "../../utils/mediaIdentity";
+import {
+  DownloadInfo,
+  DownloadStatus,
+  normalizeMediaType,
+} from "./types";
+
+const ACTIVE_DOWNLOAD_STALE_MS = 24 * 60 * 60 * 1000;
+const ACTIVE_DOWNLOAD_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+
+let lastActiveCleanupAt = 0;
+
+type DownloadRow = {
+  id: string;
+  title: string;
+  timestamp: number | null;
+  filename: string | null;
+  totalSize: string | null;
+  downloadedSize: string | null;
+  progress: number | null;
+  speed: string | null;
+  sourceUrl: string | null;
+  type: string | null;
+  sourceVideoId: string | null;
+  platform: string | null;
+  mediaType: string | null;
+  retryMetadata: string | null;
+};
+
+const MUTABLE_DOWNLOAD_FIELDS: Array<
+  keyof Omit<DownloadInfo, "id" | "timestamp">
+> = [
+  "progress",
+  "totalSize",
+  "downloadedSize",
+  "speed",
+  "filename",
+  "sourceUrl",
+  "type",
+  "sourceVideoId",
+  "platform",
+  "mediaType",
+  "title",
+  "retryMetadata",
+];
+
+function toOptionalValue<T>(value: T | null): T | undefined {
+  return value ?? undefined;
+}
+
+function mapDownloadRow(download: DownloadRow): DownloadInfo {
+  let sourceVideoId = toOptionalValue(download.sourceVideoId);
+  let platform = toOptionalValue(download.platform);
+  let mediaType = download.mediaType ? normalizeMediaType(download.mediaType) : undefined;
+
+  // Fallback derivation for legacy rows missing explicit identity columns
+  if ((!sourceVideoId || !platform || !mediaType) && download.sourceUrl) {
+    const extracted = extractSourceVideoId(download.sourceUrl);
+    if (!sourceVideoId && extracted.platform !== "unknown" && extracted.id) {
+      sourceVideoId = extracted.id;
+    }
+    if (!platform) {
+      platform = normalizeMediaPlatform(extracted.platform);
+    }
+    if (!mediaType) {
+      let isAudio = false;
+      if (download.retryMetadata) {
+        try {
+          const parsed = JSON.parse(download.retryMetadata);
+          if (parsed?.shape === "download_mode" && parsed.audioOnly) {
+            isAudio = true;
+          }
+        } catch {
+          // ignore parsing error
+        }
+      }
+      mediaType = isAudio ? "audio" : "video";
+    }
+  }
+
+  return {
+    id: download.id,
+    title: download.title,
+    timestamp: download.timestamp ?? 0,
+    filename: toOptionalValue(download.filename),
+    totalSize: toOptionalValue(download.totalSize),
+    downloadedSize: toOptionalValue(download.downloadedSize),
+    progress: toOptionalValue(download.progress),
+    speed: toOptionalValue(download.speed),
+    sourceUrl: toOptionalValue(download.sourceUrl),
+    type: toOptionalValue(download.type),
+    sourceVideoId,
+    platform,
+    mediaType: mediaType ?? (download.type === "audio" ? "audio" : "video"),
+    retryMetadata: toOptionalValue(download.retryMetadata),
+  };
+}
+
+function cleanupStaleActiveDownloadsIfNeeded(now: number): void {
+  if (now - lastActiveCleanupAt < ACTIVE_DOWNLOAD_CLEANUP_INTERVAL_MS) {
+    return;
+  }
+
+  lastActiveCleanupAt = now;
+  const threshold = now - ACTIVE_DOWNLOAD_STALE_MS;
+  db.delete(downloads)
+    .where(and(lt(downloads.timestamp, threshold), eq(downloads.status, "active")))
+    .run();
+}
+
+export function addActiveDownload(id: string, title: string): void {
+  try {
+    const now = Date.now();
+    db.insert(downloads)
+      .values({
+        id,
+        title,
+        timestamp: now,
+        status: "active",
+      })
+      .onConflictDoUpdate({
+        target: downloads.id,
+        set: {
+          title,
+          timestamp: now,
+          status: "active",
+        },
+      })
+      .run();
+    logger.info(`Added/Updated active download: ${title} (${id})`);
+  } catch (error) {
+    logger.error("Error adding active download", error instanceof Error ? error : new Error(String(error)));
+    // Don't throw - download tracking is non-critical
+  }
+}
+
+export function updateActiveDownload(
+  id: string,
+  updates: Partial<DownloadInfo>
+): void {
+  try {
+    const updateData: Record<string, unknown> = {
+      timestamp: Date.now(),
+    };
+
+    for (const field of MUTABLE_DOWNLOAD_FIELDS) {
+      const value = updates[field];
+      if (value !== undefined) {
+        updateData[field] = value;
+      }
+    }
+
+    db.update(downloads).set(updateData).where(eq(downloads.id, id)).run();
+  } catch (error) {
+    logger.error("Error updating active download", error instanceof Error ? error : new Error(String(error)));
+    // Don't throw - download tracking is non-critical
+  }
+}
+
+export function removeActiveDownload(id: string): void {
+  try {
+    db.delete(downloads).where(eq(downloads.id, id)).run();
+    logger.info(`Removed active download: ${id}`);
+  } catch (error) {
+    logger.error("Error removing active download", error instanceof Error ? error : new Error(String(error)));
+    // Don't throw - download tracking is non-critical
+  }
+}
+
+export function updateActiveDownloadTitle(id: string, title: string): void {
+  updateActiveDownload(id, { title });
+}
+
+export function setQueuedDownloads(queuedDownloads: DownloadInfo[]): void {
+  try {
+    const latestQueuedById = new Map<string, DownloadInfo>();
+    for (const queuedDownload of queuedDownloads) {
+      latestQueuedById.set(queuedDownload.id, queuedDownload);
+    }
+
+    db.transaction(() => {
+      const existingQueued = db
+        .select({ id: downloads.id })
+        .from(downloads)
+        .where(eq(downloads.status, "queued"))
+        .all();
+
+      for (const download of latestQueuedById.values()) {
+        db.insert(downloads)
+          .values({
+            id: download.id,
+            title: download.title,
+            timestamp: download.timestamp,
+            status: "queued",
+            sourceUrl: download.sourceUrl,
+            type: download.type,
+            sourceVideoId: download.sourceVideoId,
+            platform: download.platform,
+            mediaType: download.mediaType,
+            retryMetadata: download.retryMetadata,
+          })
+          .onConflictDoUpdate({
+            target: downloads.id,
+            set: {
+              title: download.title,
+              timestamp: download.timestamp,
+              status: "queued",
+              sourceUrl: download.sourceUrl,
+              type: download.type,
+              sourceVideoId: download.sourceVideoId,
+              platform: download.platform,
+              mediaType: download.mediaType,
+              retryMetadata: download.retryMetadata,
+            },
+          })
+          .run();
+      }
+
+      const latestIds = new Set(latestQueuedById.keys());
+      const staleQueuedIds = existingQueued
+        .map((item) => item.id)
+        .filter((id) => !latestIds.has(id));
+
+      if (staleQueuedIds.length > 0) {
+        db.delete(downloads)
+          .where(
+            and(
+              eq(downloads.status, "queued"),
+              inArray(downloads.id, staleQueuedIds)
+            )
+          )
+          .run();
+      }
+    });
+  } catch (error) {
+    logger.error("Error setting queued downloads", error instanceof Error ? error : new Error(String(error)));
+    // Don't throw - download tracking is non-critical
+  }
+}
+
+export function getDownloadStatus(): DownloadStatus {
+  try {
+    cleanupStaleActiveDownloadsIfNeeded(Date.now());
+
+    const activeDownloads = db
+      .select()
+      .from(downloads)
+      .where(eq(downloads.status, "active"))
+      .all()
+      .map(mapDownloadRow);
+
+    const queuedDownloads = db
+      .select()
+      .from(downloads)
+      .where(eq(downloads.status, "queued"))
+      .all()
+      .map(mapDownloadRow);
+
+    return { activeDownloads, queuedDownloads };
+  } catch (error) {
+    logger.error("Error reading download status", error instanceof Error ? error : new Error(String(error)));
+    // Return empty arrays for backward compatibility
+    return { activeDownloads: [], queuedDownloads: [] };
+  }
+}
+
+export function getActiveDownload(id: string): DownloadInfo | undefined {
+  try {
+    const download = db
+      .select()
+      .from(downloads)
+      .where(and(eq(downloads.id, id), eq(downloads.status, "active")))
+      .get();
+
+    if (download) {
+      return mapDownloadRow(download);
+    }
+
+    return undefined;
+  } catch (error) {
+    logger.error(
+      "Error getting active download",
+      error instanceof Error ? error : new Error(String(error))
+    );
+    return undefined;
+  }
+}

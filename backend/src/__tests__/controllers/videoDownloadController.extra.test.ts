@@ -1,0 +1,1746 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { Request, Response } from "express";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { BilibiliSearchUnavailableError } from "../../errors/BilibiliSearchError";
+import {
+  checkBilibiliCollection,
+  checkBilibiliParts,
+  checkPlaylist,
+  checkVideoDownloadStatus,
+  downloadVideo,
+  getDownloadStatus,
+  searchVideos,
+} from "../../controllers/videoDownloadController";
+import { ValidationError } from "../../errors/DownloadErrors";
+import downloadManager from "../../services/downloadManager";
+import * as downloadService from "../../services/downloadService";
+import * as storageService from "../../services/storageService";
+import { isLoginRequired } from "../../services/passwordService";
+import {
+  extractBilibiliVideoId,
+  getMissAVPlaceholderTitle,
+  isBilibiliShortUrl,
+  isBilibiliUrl,
+  isMissAVUrl,
+  isTwitchVideoUrl,
+  isYouTubeUrl,
+  isValidUrl,
+  processVideoUrl,
+  resolveShortUrl,
+  trimBilibiliUrl,
+} from "../../utils/helpers";
+import { validateUrl } from "../../utils/security";
+
+vi.mock("../../services/downloadManager", () => ({
+  default: {
+    addDownload: vi.fn(),
+    updateTaskTitle: vi.fn(),
+  },
+}));
+
+vi.mock("../../services/downloadService", () => ({
+  searchYouTube: vi.fn(),
+  searchBilibili: vi.fn(),
+  checkBilibiliVideoParts: vi.fn(),
+  checkBilibiliCollectionOrSeries: vi.fn(),
+  downloadBilibiliCollection: vi.fn(),
+  downloadSingleBilibiliPart: vi.fn(),
+  downloadRemainingBilibiliParts: vi.fn(),
+  downloadMissAVVideo: vi.fn(),
+  downloadYouTubeVideo: vi.fn(),
+  getVideoInfo: vi.fn(),
+  checkPlaylist: vi.fn(),
+}));
+
+vi.mock("../../services/storageService", () => ({
+  checkVideoDownloadBySourceId: vi.fn(),
+  checkVideoDownloadByUrl: vi.fn(),
+  verifyVideoExists: vi.fn(),
+  getVideoById: vi.fn(),
+  getSettings: vi.fn(),
+  handleVideoDownloadCheck: vi.fn(),
+  addDownloadHistoryItem: vi.fn(),
+  getActiveDownload: vi.fn(),
+  getLatestRetryHistoryItemBySourceUrl: vi.fn(),
+  getLatestDeletedHistoryItemBySourceUrl: vi.fn(),
+  updateActiveDownloadTitle: vi.fn(),
+  addActiveDownload: vi.fn(),
+  getVideoBySourceUrl: vi.fn(),
+  getCollectionsByVideoId: vi.fn(),
+  getCollectionByName: vi.fn(),
+  getCollectionBySourceKey: vi.fn(),
+  saveCollection: vi.fn(),
+  getCollectionById: vi.fn(),
+  atomicUpdateCollection: vi.fn(),
+  linkVideoToCollection: vi.fn(),
+  cleanupCollectionDirectories: vi.fn(),
+  getDownloadStatus: vi.fn(),
+}));
+
+vi.mock("../../services/passwordService", () => ({
+  isLoginRequired: vi.fn(() => true),
+}));
+
+vi.mock("../../services/statistics", () => ({
+  recordEvent: vi.fn(() => null),
+  normalizeSourceKind: vi.fn((value?: string | null) => value ?? "unknown"),
+  normalizeSurface: vi.fn((value?: string | null) => value ?? "web"),
+  platformFromUrl: vi.fn((url?: string | null) => {
+    if (!url) return "unknown";
+    if (url.includes("bilibili")) return "bilibili";
+    if (url.includes("missav")) return "missav";
+    if (url.includes("twitch")) return "twitch";
+    return "youtube";
+  }),
+}));
+
+vi.mock("../../utils/helpers", () => ({
+  extractBilibiliVideoId: vi.fn(),
+  getMissAVPlaceholderTitle: vi.fn(),
+  isBilibiliShortUrl: vi.fn(),
+  isBilibiliUrl: vi.fn(),
+  isMissAVUrl: vi.fn(),
+  isTwitchVideoUrl: vi.fn(),
+  isYouTubeUrl: vi.fn(),
+  isValidUrl: vi.fn(),
+  bilibiliPartSourceUrlAliases: vi.fn((url: string) => {
+    const base = url.split("?")[0];
+    const m = /[?&]p=(\d+)/.exec(url);
+    const part = m ? Number(m[1]) : 1;
+    return part === 1 ? [base, base + "?p=1"] : [base + "?p=" + part];
+  }),
+  getBilibiliPartNumber: vi.fn((url: string) => {
+    const match = /[?&]p=(\d+)/.exec(url);
+    const part = match ? Number(match[1]) : 0;
+    return part > 0 ? part : null;
+  }),
+  processVideoUrl: vi.fn(),
+  resolveShortUrl: vi.fn(),
+  trimBilibiliUrl: vi.fn((url: string) => url),
+}));
+
+vi.mock("../../utils/security", () => ({
+  validateUrl: vi.fn((url: string) => url),
+}));
+
+vi.mock("../../utils/logger", () => ({
+  logger: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
+}));
+
+const flushBackgroundTasks = async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+};
+
+describe("videoDownloadController extra coverage", () => {
+  let req: Partial<Request>;
+  let res: Partial<Response>;
+  let json: any;
+  let status: any;
+  const setupMultipartDownloadWithResolvedCollectionName = () => {
+    req.body = {
+      youtubeUrl: "https://www.bilibili.com/video/BVdownload",
+      downloadAllParts: true,
+      collectionName: "Collection With Download",
+    };
+    vi.mocked(processVideoUrl).mockResolvedValue({
+      videoUrl: "https://www.bilibili.com/video/BVdownload",
+      sourceVideoId: "bv-download",
+      platform: "bilibili",
+    } as any);
+    vi.mocked(isBilibiliUrl).mockReturnValue(true);
+    vi.mocked(extractBilibiliVideoId).mockReturnValue("BVdownload");
+    vi.mocked(downloadService.checkBilibiliVideoParts).mockResolvedValue({
+      success: true,
+      videosNumber: 3,
+      title: "Parts Title",
+    } as any);
+    vi.mocked(storageService.getVideoBySourceUrl).mockReturnValue(undefined);
+    // No per-item tombstone by default; tests opt into a deleted part.
+    vi.mocked(
+      storageService.getLatestDeletedHistoryItemBySourceUrl
+    ).mockReturnValue(undefined);
+    vi.mocked(storageService.getCollectionsByVideoId).mockReturnValue([]);
+    vi.mocked(storageService.getCollectionById).mockReturnValue({
+      id: "col-download",
+      name: "Resolved Collection Name",
+      videos: [],
+    } as any);
+    vi.mocked(storageService.getLatestRetryHistoryItemBySourceUrl).mockReturnValue({
+      id: "retry-download",
+      title: "Collection With Download",
+      status: "failed",
+      finishedAt: Date.now(),
+      sourceUrl: "https://www.bilibili.com/video/BVdownload",
+      downloadType: "bilibili",
+      retryMetadata: JSON.stringify({
+        shape: "bilibili_all_parts",
+        collectionName: "Collection With Download",
+        linkedCollectionId: "col-download",
+      }),
+    } as any);
+    vi.mocked(storageService.getActiveDownload).mockReturnValue(undefined);
+    vi.mocked(downloadService.downloadSingleBilibiliPart).mockResolvedValue({
+      success: true,
+      videoData: { id: "part-new" },
+    } as any);
+    vi.mocked(storageService.linkVideoToCollection).mockReturnValue(undefined as any);
+    vi.mocked(downloadService.downloadRemainingBilibiliParts).mockResolvedValue({
+      success: false,
+      partial: true,
+      expectedCount: 2,
+      downloadedCount: 1,
+      skippedCount: 0,
+      failedPartNumbers: [3],
+      error: "remaining failed",
+    } as any);
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    json = vi.fn();
+    status = vi.fn(() => ({ json }));
+    req = {
+      query: {},
+      body: {},
+      headers: {},
+    };
+    res = {
+      status,
+      json,
+      send: vi.fn(),
+    } as any;
+
+    vi.mocked(isValidUrl).mockReturnValue(true);
+    vi.mocked(isYouTubeUrl).mockReturnValue(false);
+    vi.mocked(isBilibiliUrl).mockReturnValue(false);
+    vi.mocked(isMissAVUrl).mockReturnValue(false);
+    vi.mocked(isTwitchVideoUrl).mockReturnValue(false);
+    vi.mocked(isBilibiliShortUrl).mockReturnValue(false);
+    vi.mocked(getMissAVPlaceholderTitle).mockReturnValue("MissAV Video");
+    vi.mocked(trimBilibiliUrl).mockImplementation((url: string) => url);
+    vi.mocked(resolveShortUrl).mockImplementation(async (url: string) => url);
+    vi.mocked(validateUrl).mockImplementation((url: string) => url);
+    vi.mocked(storageService.getSettings).mockReturnValue({
+      dontSkipDeletedVideo: false,
+    } as any);
+    vi.mocked(storageService.getLatestRetryHistoryItemBySourceUrl).mockReturnValue(
+      undefined,
+    );
+    vi.mocked(storageService.handleVideoDownloadCheck).mockReturnValue({
+      shouldSkip: false,
+      response: null,
+    } as any);
+    vi.mocked(storageService.getDownloadStatus).mockReturnValue({
+      activeDownloads: [],
+      queuedDownloads: [],
+    } as any);
+    vi.mocked(isLoginRequired).mockReturnValue(true);
+    vi.mocked(downloadManager.addDownload).mockImplementation(
+      async (task: any) => task(vi.fn())
+    );
+    vi.mocked(downloadService.getVideoInfo).mockResolvedValue({
+      title: "Fetched Title",
+    } as any);
+    vi.mocked(processVideoUrl).mockResolvedValue({
+      videoUrl: "https://youtube.com/watch?v=abc",
+      sourceVideoId: "yt-1",
+      platform: "youtube",
+    } as any);
+  });
+
+  it("searchVideos validates query and forwards limit/offset", async () => {
+    req.query = { query: "music", limit: "12", offset: "3" } as any;
+    vi.mocked(downloadService.searchYouTube).mockResolvedValue([{ id: "v1" }] as any);
+
+    await searchVideos(req as Request, res as Response);
+
+    expect(downloadService.searchYouTube).toHaveBeenCalledWith("music", 12, 3);
+    expect(status).toHaveBeenCalledWith(200);
+    expect(json).toHaveBeenCalledWith({ results: [{ id: "v1" }] });
+  });
+
+  it("searchVideos routes an explicit bilibili source to the Bilibili search", async () => {
+    req.query = { query: "music", source: "bilibili", limit: "12", offset: "3" } as any;
+    vi.mocked(downloadService.searchBilibili).mockResolvedValue([{ id: "BV1" }] as any);
+
+    await searchVideos(req as Request, res as Response);
+
+    expect(downloadService.searchBilibili).toHaveBeenCalledWith("music", 12, 3);
+    expect(downloadService.searchYouTube).not.toHaveBeenCalled();
+    expect(json).toHaveBeenCalledWith({ results: [{ id: "BV1" }] });
+  });
+
+  it.each(["BILIBILI_SEARCH_RISK_CONTROLLED", "BILIBILI_SEARCH_UNAVAILABLE"] as const)("searchVideos returns an explicit Bilibili failure: %s", async (code) => {
+    req.query = { query: "music", source: "bilibili" } as any;
+    const error = new BilibiliSearchUnavailableError(code);
+    vi.mocked(downloadService.searchBilibili).mockRejectedValue(error);
+    await searchVideos(req as Request, res as Response);
+    expect(status).toHaveBeenCalledWith(502);
+    expect(json).toHaveBeenCalledWith({ error: error.message, code });
+    expect(downloadService.searchYouTube).not.toHaveBeenCalled();
+  });
+
+  it("searchVideos rejects a source it does not serve", async () => {
+    req.query = { query: "music", source: "vimeo" } as any;
+
+    await expect(
+      searchVideos(req as Request, res as Response)
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(downloadService.searchYouTube).not.toHaveBeenCalled();
+    expect(downloadService.searchBilibili).not.toHaveBeenCalled();
+  });
+
+  it("checkVideoDownloadStatus handles invalid URL validation", async () => {
+    req.query = { url: "http://bad" } as any;
+    vi.mocked(validateUrl).mockImplementation(() => {
+      throw new Error("Blocked URL");
+    });
+
+    await expect(
+      checkVideoDownloadStatus(req as Request, res as Response)
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it("checkVideoDownloadStatus validates the URL extracted from Telegram-style text", async () => {
+    req.query = {
+      url: "Shared from Telegram: https://youtube.com/watch?v=status123",
+    } as any;
+    vi.mocked(processVideoUrl).mockResolvedValue({
+      videoUrl: "https://youtube.com/watch?v=status123",
+      sourceVideoId: "status123",
+      platform: "youtube",
+    } as any);
+    vi.mocked(validateUrl).mockImplementation((candidate: string) => {
+      if (candidate.startsWith("Shared from Telegram")) {
+        throw new Error("raw text should not be validated");
+      }
+      return candidate;
+    });
+    vi.mocked(storageService.checkVideoDownloadBySourceId).mockReturnValue({
+      found: false,
+    } as any);
+
+    await checkVideoDownloadStatus(req as Request, res as Response);
+
+    expect(validateUrl).toHaveBeenCalledWith(
+      "https://youtube.com/watch?v=status123"
+    );
+    expect(json).toHaveBeenCalledWith({ found: false });
+  });
+
+  // Every part of a multipart Bilibili video shares one tracking row, so the
+  // id-keyed lookup alone cannot tell which part it matched.
+  const arrangeBilibiliPartCheck = (
+    requestedUrl: string,
+    matchedSourceUrl: string
+  ) => {
+    req.query = { url: requestedUrl } as any;
+    vi.mocked(processVideoUrl).mockResolvedValue({
+      videoUrl: requestedUrl,
+      sourceVideoId: "BV1x",
+      platform: "bilibili",
+    } as any);
+    vi.mocked(isBilibiliUrl).mockReturnValue(true);
+    vi.mocked(storageService.checkVideoDownloadBySourceId).mockReturnValue({
+      found: true,
+      status: "exists",
+      videoId: "other-part-video",
+      sourceUrl: matchedSourceUrl,
+    } as any);
+  };
+
+  it("checkVideoDownloadStatus does not report part 2 as downloaded when only part 1 exists", async () => {
+    arrangeBilibiliPartCheck(
+      "https://www.bilibili.com/video/BV1x?p=2",
+      "https://www.bilibili.com/video/BV1x?p=1"
+    );
+
+    await checkVideoDownloadStatus(req as Request, res as Response);
+
+    expect(json).toHaveBeenCalledWith({ found: false });
+  });
+
+  it("checkVideoDownloadStatus does not report part 1 as downloaded when only part 2 exists", async () => {
+    // The reverse direction: a bare URL is part 1, and the row is part 2.
+    arrangeBilibiliPartCheck(
+      "https://www.bilibili.com/video/BV1x",
+      "https://www.bilibili.com/video/BV1x?p=2"
+    );
+
+    await checkVideoDownloadStatus(req as Request, res as Response);
+
+    expect(json).toHaveBeenCalledWith({ found: false });
+  });
+
+  it("checkVideoDownloadStatus finds a part the tracking row has forgotten", async () => {
+    // The tracking row's sourceUrl is overwritten by whichever part was saved
+    // last, so after parts 1 and 2 it only remembers ?p=2. Part 1 still exists
+    // as its own video row and must not be re-downloaded.
+    arrangeBilibiliPartCheck(
+      "https://www.bilibili.com/video/BV1x?p=1",
+      "https://www.bilibili.com/video/BV1x?p=2"
+    );
+    vi.mocked(storageService.getVideoBySourceUrl).mockImplementation(
+      (url: string) =>
+        url === "https://www.bilibili.com/video/BV1x?p=1"
+          ? ({
+              id: "part-1-video",
+              title: "Part One",
+              author: "Author",
+              sourceUrl: "https://www.bilibili.com/video/BV1x?p=1",
+              createdAt: "2024-01-01T00:00:00.000Z",
+            } as any)
+          : undefined
+    );
+    vi.mocked(storageService.verifyVideoExists).mockReturnValue({
+      exists: true,
+      video: { id: "part-1-video", title: "Part One" },
+    } as any);
+    vi.mocked(storageService.getVideoById).mockReturnValue({
+      id: "part-1-video",
+    } as any);
+
+    await checkVideoDownloadStatus(req as Request, res as Response);
+
+    expect(storageService.getVideoBySourceUrl).toHaveBeenCalledWith(
+      "https://www.bilibili.com/video/BV1x?p=1",
+      "video"
+    );
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({ found: true, videoId: "part-1-video" })
+    );
+  });
+
+  it("checkVideoDownloadStatus does not trust the tracking row's representative videoId", async () => {
+    // persistDownloadedMediaIdentity keeps videoId on the lowest-numbered
+    // surviving part while sourceUrl follows the last saved one, so the row can
+    // read ?p=2 while pointing at part 1. Returning it would permanently skip
+    // re-downloading a deleted part 2.
+    arrangeBilibiliPartCheck(
+      "https://www.bilibili.com/video/BV1x?p=2",
+      "https://www.bilibili.com/video/BV1x?p=2"
+    );
+    vi.mocked(storageService.checkVideoDownloadBySourceId).mockReturnValue({
+      found: true,
+      status: "exists",
+      videoId: "part-1-video",
+      sourceUrl: "https://www.bilibili.com/video/BV1x?p=2",
+    } as any);
+    vi.mocked(storageService.getVideoBySourceUrl).mockReturnValue(undefined);
+
+    await checkVideoDownloadStatus(req as Request, res as Response);
+
+    expect(json).toHaveBeenCalledWith({ found: false });
+  });
+
+  it("checkVideoDownloadStatus still reports a deleted part from the tracking row", async () => {
+    arrangeBilibiliPartCheck(
+      "https://www.bilibili.com/video/BV1x?p=2",
+      "https://www.bilibili.com/video/BV1x?p=2"
+    );
+    vi.mocked(storageService.checkVideoDownloadBySourceId).mockReturnValue({
+      found: true,
+      status: "deleted",
+      title: "Part Two",
+      author: "Author",
+      sourceUrl: "https://www.bilibili.com/video/BV1x?p=2",
+    } as any);
+    vi.mocked(storageService.getVideoBySourceUrl).mockReturnValue(undefined);
+    // Nothing on disk to verify; the deleted status comes from the tracking row.
+    vi.mocked(storageService.verifyVideoExists).mockReturnValue({} as any);
+
+    await checkVideoDownloadStatus(req as Request, res as Response);
+
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({ found: true, status: "deleted" })
+    );
+  });
+
+  it("checkVideoDownloadStatus matches part 1 stored under either canonical alias", async () => {
+    // Saved from a bare URL, later requested as ?p=1 (and vice versa).
+    for (const [requested, stored] of [
+      ["https://www.bilibili.com/video/BV1x?p=1", "https://www.bilibili.com/video/BV1x"],
+      ["https://www.bilibili.com/video/BV1x", "https://www.bilibili.com/video/BV1x?p=1"],
+    ]) {
+      vi.clearAllMocks();
+      arrangeBilibiliPartCheck(requested, "https://www.bilibili.com/video/BV1x?p=3");
+      vi.mocked(storageService.getVideoBySourceUrl).mockImplementation(
+        (url: string) =>
+          url === stored ? ({ id: "part-1-video", title: "One" } as any) : undefined
+      );
+      vi.mocked(storageService.verifyVideoExists).mockReturnValue({
+        exists: true,
+        video: { id: "part-1-video", title: "One" },
+      } as any);
+      vi.mocked(storageService.getVideoById).mockReturnValue({
+        id: "part-1-video",
+      } as any);
+
+      await checkVideoDownloadStatus(req as Request, res as Response);
+
+      expect(json).toHaveBeenCalledWith(
+        expect.objectContaining({ found: true, videoId: "part-1-video" })
+      );
+    }
+  });
+
+  it("checkVideoDownloadStatus reports a part deleted from history when the tracking row moved on", async () => {
+    // Deleting part 2 hands the shared tracking row to surviving part 1 and
+    // leaves it reading "exists", so only the per-item history row records that
+    // part 2 was downloaded and then deleted.
+    arrangeBilibiliPartCheck(
+      "https://www.bilibili.com/video/BV1x?p=2",
+      "https://www.bilibili.com/video/BV1x?p=1"
+    );
+    vi.mocked(storageService.getVideoBySourceUrl).mockReturnValue(undefined);
+    vi.mocked(
+      storageService.getLatestDeletedHistoryItemBySourceUrl
+    ).mockReturnValue({
+      title: "Part Two",
+      author: "Author",
+      videoId: "part-2-video",
+      downloadedAt: 1000,
+      deletedAt: 2000,
+    } as any);
+    vi.mocked(storageService.verifyVideoExists).mockReturnValue({} as any);
+
+    await checkVideoDownloadStatus(req as Request, res as Response);
+
+    expect(
+      storageService.getLatestDeletedHistoryItemBySourceUrl
+    ).toHaveBeenCalledWith("https://www.bilibili.com/video/BV1x?p=2", "video");
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({ found: true, status: "deleted" })
+    );
+  });
+
+  it("checkVideoDownloadStatus scopes the deleted-part tombstone to the requested media type", async () => {
+    // A deleted video item must not suppress a first-time audio request for the
+    // same part, even when an audio tracking row exists via a sibling part.
+    req.query = {
+      url: "https://www.bilibili.com/video/BV1x?p=2",
+      audioOnly: "true",
+    } as any;
+    vi.mocked(processVideoUrl).mockResolvedValue({
+      videoUrl: "https://www.bilibili.com/video/BV1x?p=2",
+      sourceVideoId: "BV1x",
+      platform: "bilibili",
+    } as any);
+    vi.mocked(isBilibiliUrl).mockReturnValue(true);
+    vi.mocked(isMissAVUrl).mockReturnValue(false);
+    // Audio part 1 survives, so the source-level audio row is found.
+    vi.mocked(storageService.checkVideoDownloadBySourceId).mockReturnValue({
+      found: true,
+      status: "exists",
+      videoId: "audio-part-1",
+      sourceUrl: "https://www.bilibili.com/video/BV1x?p=1",
+    } as any);
+    vi.mocked(storageService.getVideoBySourceUrl).mockReturnValue(undefined);
+    // Only a video tombstone exists for part 2; the audio-scoped query misses.
+    vi.mocked(
+      storageService.getLatestDeletedHistoryItemBySourceUrl
+    ).mockReturnValue(undefined);
+
+    await checkVideoDownloadStatus(req as Request, res as Response);
+
+    expect(
+      storageService.getLatestDeletedHistoryItemBySourceUrl
+    ).toHaveBeenCalledWith("https://www.bilibili.com/video/BV1x?p=2", "audio");
+    expect(json).toHaveBeenCalledWith({ found: false });
+  });
+
+  it("checkVideoDownloadStatus treats a part with no history as new", async () => {
+    arrangeBilibiliPartCheck(
+      "https://www.bilibili.com/video/BV1x?p=2",
+      "https://www.bilibili.com/video/BV1x?p=1"
+    );
+    vi.mocked(storageService.getVideoBySourceUrl).mockReturnValue(undefined);
+    vi.mocked(
+      storageService.getLatestDeletedHistoryItemBySourceUrl
+    ).mockReturnValue(undefined);
+
+    await checkVideoDownloadStatus(req as Request, res as Response);
+
+    expect(json).toHaveBeenCalledWith({ found: false });
+  });
+
+  it("checkVideoDownloadStatus scopes the per-part fallback to the media type", async () => {
+    arrangeBilibiliPartCheck(
+      "https://www.bilibili.com/video/BV1x?p=1",
+      "https://www.bilibili.com/video/BV1x?p=2"
+    );
+    req.query = {
+      url: "https://www.bilibili.com/video/BV1x?p=1",
+      audioOnly: "true",
+    } as any;
+    vi.mocked(isMissAVUrl).mockReturnValue(false);
+
+    await checkVideoDownloadStatus(req as Request, res as Response);
+
+    expect(storageService.getVideoBySourceUrl).toHaveBeenCalledWith(
+      "https://www.bilibili.com/video/BV1x?p=1",
+      "audio"
+    );
+  });
+
+  // The bare/?p=1 equivalence is covered by "matches part 1 stored under either
+  // canonical alias" above, which asserts both directions with explicit rows.
+
+  it("checkVideoDownloadStatus leaves non-bilibili lookups untouched", async () => {
+    req.query = { url: "https://youtube.com/watch?v=abc" } as any;
+    vi.mocked(processVideoUrl).mockResolvedValue({
+      videoUrl: "https://youtube.com/watch?v=abc",
+      sourceVideoId: "abc",
+      platform: "youtube",
+    } as any);
+    vi.mocked(isBilibiliUrl).mockReturnValue(false);
+    vi.mocked(storageService.checkVideoDownloadBySourceId).mockReturnValue({
+      found: false,
+    } as any);
+
+    await checkVideoDownloadStatus(req as Request, res as Response);
+
+    expect(storageService.checkVideoDownloadBySourceId).toHaveBeenCalledWith(
+      "abc",
+      "youtube",
+      "video"
+    );
+    expect(json).toHaveBeenCalledWith({ found: false });
+  });
+
+  it("checkVideoDownloadStatus throws when url is missing", async () => {
+    req.query = {} as any;
+
+    await expect(
+      checkVideoDownloadStatus(req as Request, res as Response)
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it("checkVideoDownloadStatus returns deleted status when verification updates check", async () => {
+    req.query = { url: "http://ok" } as any;
+    vi.mocked(processVideoUrl).mockResolvedValue({
+      sourceVideoId: "id-1",
+      platform: "youtube",
+    } as any);
+    vi.mocked(storageService.checkVideoDownloadBySourceId).mockReturnValue({
+      found: true,
+      status: "exists",
+      title: "Old",
+      author: "A",
+      downloadedAt: "2026-01-01",
+    } as any);
+    vi.mocked(storageService.verifyVideoExists).mockReturnValue({
+      updatedCheck: {
+        title: "Deleted",
+        author: "A",
+        downloadedAt: "2026-01-01",
+      },
+    } as any);
+
+    await checkVideoDownloadStatus(req as Request, res as Response);
+
+    expect(json).toHaveBeenCalledWith({
+      found: true,
+      status: "deleted",
+      title: "Deleted",
+      author: "A",
+      downloadedAt: "2026-01-01",
+    });
+  });
+
+  it("checkVideoDownloadStatus returns exists with file paths", async () => {
+    req.query = { url: "http://ok" } as any;
+    vi.mocked(processVideoUrl).mockResolvedValue({
+      sourceVideoId: "id-2",
+      platform: "youtube",
+    } as any);
+    vi.mocked(storageService.checkVideoDownloadBySourceId).mockReturnValue({
+      found: true,
+      status: "exists",
+      videoId: "video-2",
+      title: "Title",
+      author: "Author",
+      downloadedAt: "2026-01-02",
+    } as any);
+    vi.mocked(storageService.verifyVideoExists).mockReturnValue({
+      exists: true,
+      video: {
+        id: "video-2",
+        title: "Stored Title",
+        author: "Stored Author",
+        videoPath: "/videos/v2.mp4",
+        thumbnailPath: "/images/v2.jpg",
+      },
+    } as any);
+
+    await checkVideoDownloadStatus(req as Request, res as Response);
+
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        found: true,
+        status: "exists",
+        videoId: "video-2",
+        videoPath: "/videos/v2.mp4",
+      })
+    );
+  });
+
+  it("checkVideoDownloadStatus hides existing hidden downloads from visitors", async () => {
+    req.query = { url: "http://ok" } as any;
+    req.user = { role: "visitor" } as any;
+    vi.mocked(processVideoUrl).mockResolvedValue({
+      sourceVideoId: "id-hidden",
+      platform: "youtube",
+    } as any);
+    vi.mocked(storageService.checkVideoDownloadBySourceId).mockReturnValue({
+      found: true,
+      status: "exists",
+      videoId: "hidden-video",
+      title: "Hidden Title",
+      author: "Hidden Author",
+      downloadedAt: "2026-01-03",
+    } as any);
+    vi.mocked(storageService.getVideoById).mockReturnValue(undefined);
+
+    await checkVideoDownloadStatus(req as Request, res as Response);
+
+    expect(storageService.getVideoById).toHaveBeenCalledWith(
+      "hidden-video",
+      "visitor"
+    );
+    expect(storageService.verifyVideoExists).not.toHaveBeenCalled();
+    expect(json).toHaveBeenCalledWith({ found: false });
+  });
+
+  it("checkVideoDownloadStatus ignores stale visitor roles when login is disabled", async () => {
+    req.query = { url: "http://ok" } as any;
+    req.user = { role: "visitor" } as any;
+    vi.mocked(isLoginRequired).mockReturnValue(false);
+    vi.mocked(processVideoUrl).mockResolvedValue({
+      sourceVideoId: "id-owner",
+      platform: "youtube",
+    } as any);
+    vi.mocked(storageService.checkVideoDownloadBySourceId).mockReturnValue({
+      found: true,
+      status: "exists",
+      videoId: "owner-video",
+    } as any);
+    vi.mocked(storageService.verifyVideoExists).mockReturnValue({
+      exists: true,
+      video: {
+        id: "owner-video",
+        title: "Owner Visible",
+        videoPath: "/videos/owner.mp4",
+        thumbnailPath: "/images/owner.jpg",
+      },
+    } as any);
+
+    await checkVideoDownloadStatus(req as Request, res as Response);
+
+    const getVideoById = vi.mocked(storageService.verifyVideoExists).mock
+      .calls[0][1];
+    getVideoById("owner-video");
+    expect(storageService.getVideoById).toHaveBeenCalledWith(
+      "owner-video",
+      undefined
+    );
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        found: true,
+        status: "exists",
+        videoId: "owner-video",
+      })
+    );
+  });
+
+  it("checkVideoDownloadStatus returns found false when source id cannot be extracted", async () => {
+    req.query = { url: "http://ok" } as any;
+    vi.mocked(processVideoUrl).mockResolvedValue({ sourceVideoId: null } as any);
+
+    await checkVideoDownloadStatus(req as Request, res as Response);
+
+    expect(json).toHaveBeenCalledWith({ found: false });
+  });
+
+  it("checkVideoDownloadStatus returns stored status when verification does not find a file", async () => {
+    req.query = { url: "http://ok" } as any;
+    vi.mocked(processVideoUrl).mockResolvedValue({
+      sourceVideoId: "id-fallback",
+      platform: "youtube",
+    } as any);
+    vi.mocked(storageService.checkVideoDownloadBySourceId).mockReturnValue({
+      found: true,
+      status: "deleted",
+      title: "Gone",
+      author: "Tester",
+      downloadedAt: "2026-01-03",
+      deletedAt: "2026-01-04",
+    } as any);
+    vi.mocked(storageService.verifyVideoExists).mockReturnValue({
+      exists: false,
+      video: null,
+      updatedCheck: null,
+    } as any);
+
+    await checkVideoDownloadStatus(req as Request, res as Response);
+
+    expect(json).toHaveBeenCalledWith({
+      found: true,
+      status: "deleted",
+      title: "Gone",
+      author: "Tester",
+      downloadedAt: "2026-01-03",
+      deletedAt: "2026-01-04",
+    });
+  });
+
+  it("downloadVideo returns bad request for missing URL", async () => {
+    req.body = {};
+
+    await downloadVideo(req as Request, res as Response);
+
+    expect(status).toHaveBeenCalledWith(400);
+    expect(json).toHaveBeenCalledWith({
+      success: false,
+      error: "Video URL is required",
+    });
+  });
+
+  it("downloadVideo returns bad request when URL validation fails", async () => {
+    req.body = { youtubeUrl: "https://youtube.com/watch?v=bad" };
+    vi.mocked(validateUrl).mockImplementation(() => {
+      throw new Error("validation failed");
+    });
+
+    await downloadVideo(req as Request, res as Response);
+
+    expect(status).toHaveBeenCalledWith(400);
+    expect(json).toHaveBeenCalledWith({
+      success: false,
+      error: "validation failed",
+    });
+  });
+
+  it("downloadVideo queues the URL extracted from Telegram-style text", async () => {
+    req.body = {
+      youtubeUrl: "Shared from Telegram: https://youtube.com/watch?v=tele123",
+    };
+    vi.mocked(processVideoUrl).mockResolvedValue({
+      videoUrl: "https://youtube.com/watch?v=tele123",
+      sourceVideoId: "tele123",
+      platform: "youtube",
+    } as any);
+    vi.mocked(validateUrl).mockImplementation((candidate: string) => {
+      if (candidate.startsWith("Shared from Telegram")) {
+        throw new Error("raw text should not be validated");
+      }
+      return candidate;
+    });
+    vi.mocked(isYouTubeUrl).mockReturnValue(true);
+    vi.mocked(downloadService.downloadYouTubeVideo).mockResolvedValue({
+      id: "video-telegram",
+      title: "Telegram Video",
+      sourceUrl: "https://youtube.com/watch?v=tele123",
+    } as any);
+
+    await downloadVideo(req as Request, res as Response);
+    await flushBackgroundTasks();
+
+    expect(validateUrl).toHaveBeenCalledWith(
+      "https://youtube.com/watch?v=tele123"
+    );
+    expect(downloadManager.addDownload).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.any(String),
+      "YouTube Video",
+      "https://youtube.com/watch?v=tele123",
+      "youtube",
+      expect.objectContaining({
+        actorRole: "admin",
+        surface: "web",
+        sourceKind: "manual",
+      }),
+      undefined,
+    );
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({ success: true, message: "Download queued" })
+    );
+  });
+
+  it("downloadVideo skips already-downloaded items when handler says skip", async () => {
+    req.body = { youtubeUrl: "https://youtube.com/watch?v=skip" };
+    vi.mocked(storageService.handleVideoDownloadCheck).mockReturnValue({
+      shouldSkip: true,
+      response: { found: true, status: "exists" },
+    } as any);
+
+    await downloadVideo(req as Request, res as Response);
+
+    expect(downloadManager.addDownload).not.toHaveBeenCalled();
+    expect(json).toHaveBeenCalledWith({ found: true, status: "exists" });
+  });
+
+  it("downloadVideo queues youtube tasks and updates title asynchronously", async () => {
+    req.body = { youtubeUrl: "https://youtube.com/watch?v=new" };
+    vi.mocked(isYouTubeUrl).mockReturnValue(true);
+    vi.mocked(downloadService.downloadYouTubeVideo).mockResolvedValue({ id: "video-yt" } as any);
+    vi.mocked(storageService.getDownloadStatus).mockImplementation(() => ({
+      activeDownloads: [],
+      queuedDownloads: [
+        {
+          id: vi.mocked(downloadManager.addDownload).mock.calls[0]?.[1],
+          title: "YouTube Video",
+          timestamp: Date.now(),
+        },
+      ],
+    } as any));
+
+    await downloadVideo(req as Request, res as Response);
+    await flushBackgroundTasks();
+
+    expect(downloadManager.addDownload).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.any(String),
+      "YouTube Video",
+      "https://youtube.com/watch?v=abc",
+      "youtube",
+      expect.objectContaining({
+        actorRole: "admin",
+        surface: "web",
+        sourceKind: "manual",
+      }),
+      undefined,
+    );
+    expect(downloadService.downloadYouTubeVideo).toHaveBeenCalled();
+    expect(downloadManager.updateTaskTitle).toHaveBeenCalled();
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({ success: true, message: "Download queued" })
+    );
+  });
+
+  it("downloadVideo reuses persisted Bilibili collection retry metadata for URL-only retries", async () => {
+    req.body = {
+      youtubeUrl: "https://www.bilibili.com/video/BVrestore?spm_id_from=foo",
+    };
+    vi.mocked(processVideoUrl).mockResolvedValue({
+      videoUrl: "https://www.bilibili.com/video/BVrestore?spm_id_from=foo",
+      sourceVideoId: "bv-restore",
+      platform: "bilibili",
+    } as any);
+    vi.mocked(isBilibiliUrl).mockReturnValue(true);
+    vi.mocked(trimBilibiliUrl).mockReturnValue(
+      "https://www.bilibili.com/video/BVrestore",
+    );
+    vi.mocked(storageService.getLatestRetryHistoryItemBySourceUrl).mockReturnValue({
+      id: "retry-restore",
+      title: "Series",
+      status: "failed",
+      finishedAt: Date.now(),
+      sourceUrl: "https://www.bilibili.com/video/BVrestore",
+      downloadType: "bilibili",
+      retryMetadata: JSON.stringify({
+        shape: "bilibili_collection",
+        collectionName: "Series",
+        collectionInfo: {
+          success: true,
+          type: "collection",
+          id: 42,
+          mid: 9,
+          title: "Series",
+        },
+        linkedCollectionId: "col-restore",
+        completedVideoBvids: ["BV1"],
+        failedVideoBvids: ["BV2"],
+      }),
+    } as any);
+    vi.mocked(downloadService.downloadBilibiliCollection).mockResolvedValue({
+      success: true,
+      partial: false,
+      expectedCount: 2,
+      downloadedCount: 1,
+      skippedCount: 1,
+      failedPartNumbers: [],
+      collectionId: "col-restore",
+      videosDownloaded: 1,
+    } as any);
+
+    await downloadVideo(req as Request, res as Response);
+    await flushBackgroundTasks();
+
+    expect(storageService.getLatestRetryHistoryItemBySourceUrl).toHaveBeenCalledWith(
+      "https://www.bilibili.com/video/BVrestore",
+      "bilibili",
+    );
+    expect(downloadManager.addDownload).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.any(String),
+      "Bilibili Video",
+      "https://www.bilibili.com/video/BVrestore",
+      "bilibili",
+      expect.anything(),
+      expect.objectContaining({
+        shape: "bilibili_collection",
+        linkedCollectionId: "col-restore",
+        completedVideoBvids: ["BV1"],
+        failedVideoBvids: ["BV2"],
+        normalizedSourceUrl: "https://www.bilibili.com/video/BVrestore",
+      }),
+    );
+    expect(downloadService.downloadBilibiliCollection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: true,
+        type: "collection",
+        id: 42,
+        mid: 9,
+        title: "Series",
+      }),
+      "Series",
+      expect.any(String),
+      expect.any(Function),
+      expect.objectContaining({
+        shape: "bilibili_collection",
+        linkedCollectionId: "col-restore",
+      }),
+    );
+  });
+
+  it("downloadVideo ignores prior aggregate retry state for an explicit audio-only request", async () => {
+    req.body = {
+      youtubeUrl: "https://www.bilibili.com/video/BVaudio",
+      audioOnly: true,
+    };
+    vi.mocked(processVideoUrl).mockResolvedValue({
+      videoUrl: "https://www.bilibili.com/video/BVaudio",
+      sourceVideoId: "bv-audio",
+      platform: "bilibili",
+    } as any);
+    vi.mocked(isBilibiliUrl).mockReturnValue(true);
+    vi.mocked(extractBilibiliVideoId).mockReturnValue("BVaudio");
+    // A previous all-parts run failed for the same URL.
+    vi.mocked(storageService.getLatestRetryHistoryItemBySourceUrl).mockReturnValue({
+      id: "retry-audio",
+      title: "Aggregate Series",
+      status: "failed",
+      finishedAt: Date.now(),
+      sourceUrl: "https://www.bilibili.com/video/BVaudio",
+      downloadType: "bilibili",
+      retryMetadata: JSON.stringify({
+        shape: "bilibili_all_parts",
+        collectionName: "Aggregate Series",
+        linkedCollectionId: "col-audio",
+      }),
+    } as any);
+    vi.mocked(storageService.checkVideoDownloadBySourceId).mockReturnValue({
+      found: false,
+    } as any);
+    vi.mocked(downloadService.downloadSingleBilibiliPart).mockResolvedValue({
+      success: true,
+      videoData: { id: "audio-item", mediaType: "audio" },
+    } as any);
+
+    await downloadVideo(req as Request, res as Response);
+    await flushBackgroundTasks();
+
+    // The audio button must not resurrect the aggregate run: download-mode audio
+    // retry metadata is stored, not the bilibili_all_parts metadata, and the
+    // aggregate part/collection downloaders are never invoked.
+    expect(downloadManager.addDownload).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.any(String),
+      "Bilibili Video",
+      "https://www.bilibili.com/video/BVaudio",
+      "bilibili",
+      expect.anything(),
+      { shape: "download_mode", audioOnly: true, audioFormat: "m4a" },
+    );
+    expect(downloadService.downloadRemainingBilibiliParts).not.toHaveBeenCalled();
+    expect(downloadService.downloadBilibiliCollection).not.toHaveBeenCalled();
+  });
+
+  it("downloadVideo reuses persisted multipart retry metadata for URL-only retries", async () => {
+    req.body = {
+      youtubeUrl: "https://www.bilibili.com/video/BVretryonly",
+    };
+    vi.mocked(processVideoUrl).mockResolvedValue({
+      videoUrl: "https://www.bilibili.com/video/BVretryonly",
+      sourceVideoId: "bv-retry-only",
+      platform: "bilibili",
+    } as any);
+    vi.mocked(isBilibiliUrl).mockReturnValue(true);
+    vi.mocked(extractBilibiliVideoId).mockReturnValue("BVretryonly");
+    vi.mocked(downloadService.checkBilibiliVideoParts).mockResolvedValue({
+      success: true,
+      videosNumber: 1,
+      title: "Retry Only Series",
+    } as any);
+    vi.mocked(storageService.getLatestRetryHistoryItemBySourceUrl).mockReturnValue({
+      id: "retry-multipart",
+      title: "Retry Only Series",
+      status: "partial",
+      finishedAt: Date.now(),
+      sourceUrl: "https://www.bilibili.com/video/BVretryonly",
+      downloadType: "bilibili",
+      retryMetadata: JSON.stringify({
+        shape: "bilibili_all_parts",
+        collectionName: "Retry Only Series",
+        linkedCollectionId: "col-multipart",
+        failedPartNumbers: [3],
+      }),
+    } as any);
+    vi.mocked(storageService.getVideoBySourceUrl).mockReturnValue({
+      id: "existing-retry-part",
+    } as any);
+    vi.mocked(storageService.getCollectionsByVideoId).mockReturnValue([]);
+    vi.mocked(storageService.getCollectionById).mockReturnValue({
+      id: "col-multipart",
+      name: "Retry Only Series",
+      videos: [],
+    } as any);
+    vi.mocked(storageService.linkVideoToCollection).mockReturnValue(undefined as any);
+
+    await downloadVideo(req as Request, res as Response);
+    await flushBackgroundTasks();
+
+    expect(storageService.getLatestRetryHistoryItemBySourceUrl).toHaveBeenCalledWith(
+      "https://www.bilibili.com/video/BVretryonly",
+      "bilibili",
+    );
+    expect(downloadService.checkBilibiliVideoParts).toHaveBeenCalledWith(
+      "BVretryonly",
+    );
+    expect(downloadService.downloadSingleBilibiliPart).not.toHaveBeenCalledWith(
+      "https://www.bilibili.com/video/BVretryonly",
+      1,
+      1,
+      "",
+      expect.any(String),
+      expect.any(Function),
+    );
+  });
+
+  it("downloadVideo skips background title lookup once the task is active", async () => {
+    req.body = { youtubeUrl: "https://youtube.com/watch?v=active" };
+    vi.mocked(isYouTubeUrl).mockReturnValue(true);
+    vi.mocked(downloadService.downloadYouTubeVideo).mockResolvedValue({ id: "video-active" } as any);
+    vi.mocked(storageService.getDownloadStatus).mockReturnValue({
+      activeDownloads: [{ id: "active-id", title: "YouTube Video", timestamp: Date.now() }],
+      queuedDownloads: [],
+    } as any);
+
+    await downloadVideo(req as Request, res as Response);
+    await flushBackgroundTasks();
+
+    expect(downloadService.getVideoInfo).not.toHaveBeenCalled();
+    expect(downloadManager.updateTaskTitle).not.toHaveBeenCalled();
+  });
+
+  it("downloadVideo skips queued MissAV title lookup to avoid extra Puppeteer work", async () => {
+    req.body = { youtubeUrl: "https://missav.ws/cn/san-467" };
+    vi.mocked(processVideoUrl).mockResolvedValue({
+      videoUrl: "https://missav.ws/cn/san-467",
+      sourceVideoId: "san-467",
+      platform: "missav",
+    } as any);
+    vi.mocked(isMissAVUrl).mockReturnValue(true);
+    vi.mocked(getMissAVPlaceholderTitle).mockReturnValue("MissAV: SAN-467");
+    vi.mocked(downloadService.downloadMissAVVideo).mockResolvedValue({
+      id: "video-missav",
+      title: "Real MissAV Title",
+    } as any);
+    vi.mocked(storageService.getDownloadStatus).mockReturnValue({
+      activeDownloads: [],
+      queuedDownloads: [
+        { id: "queued-missav", title: "MissAV: SAN-467", timestamp: Date.now() },
+      ],
+    } as any);
+
+    await downloadVideo(req as Request, res as Response);
+    await flushBackgroundTasks();
+
+    expect(downloadManager.addDownload).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.any(String),
+      "MissAV: SAN-467",
+      "https://missav.ws/cn/san-467",
+      "missav",
+      expect.objectContaining({
+        actorRole: "admin",
+        surface: "web",
+        sourceKind: "manual",
+      }),
+      undefined,
+    );
+    expect(downloadService.getVideoInfo).not.toHaveBeenCalled();
+    expect(downloadManager.updateTaskTitle).not.toHaveBeenCalled();
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({ success: true, message: "Download queued" })
+    );
+  });
+
+  it("downloadVideo handles bilibili collection download task", async () => {
+    req.body = {
+      youtubeUrl: "https://www.bilibili.com/video/BV1xx",
+      downloadCollection: true,
+      collectionName: "Series",
+      collectionInfo: { title: "Series Title" },
+    };
+    vi.mocked(processVideoUrl).mockResolvedValue({
+      videoUrl: "https://www.bilibili.com/video/BV1xx",
+      sourceVideoId: "bv-1",
+      platform: "bilibili",
+    } as any);
+    vi.mocked(isBilibiliUrl).mockReturnValue(true);
+    vi.mocked(downloadService.downloadBilibiliCollection).mockResolvedValue({
+      success: true,
+      partial: false,
+      expectedCount: 5,
+      downloadedCount: 5,
+      skippedCount: 0,
+      failedPartNumbers: [],
+      collectionId: "c-1",
+      videosDownloaded: 5,
+    } as any);
+
+    await downloadVideo(req as Request, res as Response);
+
+    expect(downloadService.downloadBilibiliCollection).toHaveBeenCalledWith(
+      { title: "Series Title" },
+      "Series",
+      expect.any(String),
+      expect.any(Function),
+      expect.objectContaining({
+        shape: "bilibili_collection",
+        collectionName: "Series",
+        normalizedSourceUrl: "https://www.bilibili.com/video/BV1xx",
+      }),
+    );
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({ success: true, message: "Download queued" })
+    );
+  });
+
+  it("downloadVideo handles bilibili collection task failure branch", async () => {
+    req.body = {
+      youtubeUrl: "https://www.bilibili.com/video/BVfail",
+      downloadCollection: true,
+      collectionName: "Fallback Name",
+      collectionInfo: { title: "Collection Info Name" },
+    };
+    vi.mocked(processVideoUrl).mockResolvedValue({
+      videoUrl: "https://www.bilibili.com/video/BVfail",
+      sourceVideoId: "bv-fail",
+      platform: "bilibili",
+    } as any);
+    vi.mocked(isBilibiliUrl).mockReturnValue(true);
+    vi.mocked(storageService.getActiveDownload).mockReturnValue({
+      title: "Bilibili Video",
+    } as any);
+    vi.mocked(downloadService.downloadBilibiliCollection).mockResolvedValue({
+      success: false,
+      partial: false,
+      expectedCount: 1,
+      downloadedCount: 0,
+      skippedCount: 0,
+      failedPartNumbers: [],
+      error: "collection failed",
+    } as any);
+
+    await downloadVideo(req as Request, res as Response);
+    await flushBackgroundTasks();
+
+    expect(downloadService.downloadBilibiliCollection).toHaveBeenCalled();
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({ success: true, message: "Download queued" })
+    );
+  });
+
+  it("downloadVideo handles multipart failure when bilibili id cannot be extracted", async () => {
+    req.body = {
+      youtubeUrl: "https://www.bilibili.com/video/BVnoid",
+      downloadAllParts: true,
+    };
+    vi.mocked(processVideoUrl).mockResolvedValue({
+      videoUrl: "https://www.bilibili.com/video/BVnoid",
+      sourceVideoId: "bv-noid",
+      platform: "bilibili",
+    } as any);
+    vi.mocked(isBilibiliUrl).mockReturnValue(true);
+    vi.mocked(extractBilibiliVideoId).mockReturnValue(null);
+
+    await downloadVideo(req as Request, res as Response);
+    await flushBackgroundTasks();
+
+    expect(downloadService.checkBilibiliVideoParts).not.toHaveBeenCalled();
+  });
+
+  it("downloadVideo handles multipart failure when parts info request fails", async () => {
+    req.body = {
+      youtubeUrl: "https://www.bilibili.com/video/BVparts",
+      downloadAllParts: true,
+    };
+    vi.mocked(processVideoUrl).mockResolvedValue({
+      videoUrl: "https://www.bilibili.com/video/BVparts",
+      sourceVideoId: "bv-parts",
+      platform: "bilibili",
+    } as any);
+    vi.mocked(isBilibiliUrl).mockReturnValue(true);
+    vi.mocked(extractBilibiliVideoId).mockReturnValue("BVparts");
+    vi.mocked(downloadService.checkBilibiliVideoParts).mockResolvedValue({
+      success: false,
+      videosNumber: 0,
+    } as any);
+
+    await downloadVideo(req as Request, res as Response);
+    await flushBackgroundTasks();
+
+    expect(downloadService.checkBilibiliVideoParts).toHaveBeenCalledWith("BVparts");
+  });
+
+  it("downloadVideo reuses existing collection by video id for multipart downloads", async () => {
+    req.body = {
+      youtubeUrl: "https://www.bilibili.com/video/BVexisting",
+      downloadAllParts: true,
+      collectionName: "Series Reuse",
+    };
+    vi.mocked(processVideoUrl).mockResolvedValue({
+      videoUrl: "https://www.bilibili.com/video/BVexisting",
+      sourceVideoId: "bv-existing",
+      platform: "bilibili",
+    } as any);
+    vi.mocked(isBilibiliUrl).mockReturnValue(true);
+    vi.mocked(extractBilibiliVideoId).mockReturnValue("BVexisting");
+    vi.mocked(downloadService.checkBilibiliVideoParts).mockResolvedValue({
+      success: true,
+      videosNumber: 1,
+      title: "Existing Series",
+    } as any);
+    vi.mocked(storageService.getVideoBySourceUrl).mockReturnValue({
+      id: "part-existing",
+    } as any);
+    vi.mocked(storageService.getCollectionsByVideoId).mockReturnValue([
+      {
+        id: "col-existing",
+        name: "Existing Collection",
+      } as any,
+    ]);
+    vi.mocked(storageService.getCollectionById).mockReturnValue({
+      id: "col-existing",
+      videos: [],
+    } as any);
+    vi.mocked(storageService.linkVideoToCollection).mockReturnValue(undefined as any);
+
+    await downloadVideo(req as Request, res as Response);
+    await flushBackgroundTasks();
+
+    expect(storageService.getCollectionsByVideoId).toHaveBeenCalledWith("part-existing");
+    expect(storageService.linkVideoToCollection).toHaveBeenCalledWith(
+      "col-existing",
+      "part-existing",
+      expect.objectContaining({ moveFiles: false, order: 1 }),
+    );
+  });
+
+  it("downloadVideo reuses persisted linked collection for multipart downloads", async () => {
+    req.body = {
+      youtubeUrl: "https://www.bilibili.com/video/BVname",
+      downloadAllParts: true,
+      collectionName: "Collection From Retry",
+    };
+    vi.mocked(processVideoUrl).mockResolvedValue({
+      videoUrl: "https://www.bilibili.com/video/BVname",
+      sourceVideoId: "bv-name",
+      platform: "bilibili",
+    } as any);
+    vi.mocked(isBilibiliUrl).mockReturnValue(true);
+    vi.mocked(extractBilibiliVideoId).mockReturnValue("BVname");
+    vi.mocked(downloadService.checkBilibiliVideoParts).mockResolvedValue({
+      success: true,
+      videosNumber: 1,
+      title: "Name Series",
+    } as any);
+    vi.mocked(storageService.getVideoBySourceUrl).mockReturnValue({
+      id: "part-name",
+    } as any);
+    vi.mocked(storageService.getCollectionsByVideoId).mockReturnValue([]);
+    vi.mocked(storageService.getLatestRetryHistoryItemBySourceUrl).mockReturnValue({
+      id: "retry-name",
+      title: "Collection From Retry",
+      status: "failed",
+      finishedAt: Date.now(),
+      sourceUrl: "https://www.bilibili.com/video/BVname",
+      downloadType: "bilibili",
+      retryMetadata: JSON.stringify({
+        shape: "bilibili_all_parts",
+        collectionName: "Collection From Retry",
+        linkedCollectionId: "col-retry",
+      }),
+    } as any);
+    vi.mocked(storageService.getCollectionById).mockReturnValue({
+      id: "col-retry",
+      name: "Collection From Retry",
+    } as any);
+
+    await downloadVideo(req as Request, res as Response);
+    await flushBackgroundTasks();
+
+    expect(storageService.getLatestRetryHistoryItemBySourceUrl).toHaveBeenCalledWith(
+      "https://www.bilibili.com/video/BVname",
+      "bilibili",
+    );
+    // The persisted collection is reused, not duplicated. Any saveCollection call
+    // is a source-key backfill onto the SAME collection id, never a new one.
+    for (const call of vi.mocked(storageService.saveCollection).mock.calls) {
+      expect(call[0]).toEqual(expect.objectContaining({ id: "col-retry" }));
+    }
+  });
+
+  it("downloadVideo passes resolved collection name to first-part downloader and awaits aggregate completion", async () => {
+    setupMultipartDownloadWithResolvedCollectionName();
+
+    await downloadVideo(req as Request, res as Response);
+    await flushBackgroundTasks();
+
+    expect(downloadService.downloadSingleBilibiliPart).toHaveBeenCalledWith(
+      "https://www.bilibili.com/video/BVdownload?p=1",
+      1,
+      3,
+      "Parts Title",
+      expect.any(String),
+      expect.any(Function),
+      "Resolved Collection Name",
+      {
+        sourceCollectionName: "Resolved Collection Name",
+        sourceCollectionType: "playlist",
+        mediaPlaylistIndex: 1,
+      },
+    );
+    expect(storageService.linkVideoToCollection).toHaveBeenCalledWith(
+      "col-download",
+      "part-new",
+      expect.objectContaining({ moveFiles: false, order: 1 }),
+    );
+  });
+
+  it("downloadVideo handles single-part bilibili failure branch", async () => {
+    req.body = {
+      youtubeUrl: "https://www.bilibili.com/video/BVsingle",
+    };
+    vi.mocked(processVideoUrl).mockResolvedValue({
+      videoUrl: "https://www.bilibili.com/video/BVsingle",
+      sourceVideoId: "bv-single",
+      platform: "bilibili",
+    } as any);
+    vi.mocked(isBilibiliUrl).mockReturnValue(true);
+    vi.mocked(downloadService.downloadSingleBilibiliPart).mockResolvedValue({
+      success: false,
+      error: "single part failed",
+    } as any);
+
+    await downloadVideo(req as Request, res as Response);
+    await flushBackgroundTasks();
+
+    expect(downloadService.downloadSingleBilibiliPart).toHaveBeenCalledWith(
+      "https://www.bilibili.com/video/BVsingle",
+      1,
+      1,
+      "",
+      expect.any(String),
+      expect.any(Function)
+    );
+  });
+
+  it("downloadVideo handles bilibili multi-part flow with existing part and aggregate remaining downloads", async () => {
+    req.body = {
+      youtubeUrl: "https://www.bilibili.com/video/BV2xx",
+      downloadAllParts: true,
+      collectionName: "My Collection",
+    };
+    vi.mocked(processVideoUrl).mockResolvedValue({
+      videoUrl: "https://www.bilibili.com/video/BV2xx?spm_id_from=333.1007.tianma.1-1-1.click",
+      sourceVideoId: "bv-2",
+      platform: "bilibili",
+    } as any);
+    vi.mocked(isBilibiliUrl).mockReturnValue(true);
+    vi.mocked(extractBilibiliVideoId).mockReturnValue("BV2xx");
+    vi.mocked(downloadService.checkBilibiliVideoParts).mockResolvedValue({
+      success: true,
+      videosNumber: 3,
+      title: "Series Name",
+    } as any);
+    vi.mocked(storageService.getVideoBySourceUrl).mockReturnValue({
+      id: "part1-existing",
+    } as any);
+    vi.mocked(storageService.getCollectionsByVideoId).mockReturnValue([]);
+    vi.mocked(storageService.getCollectionByName).mockReturnValue(null as any);
+    vi.mocked(storageService.getCollectionById).mockReturnValue({
+      id: "new-col",
+      videos: [],
+    } as any);
+    vi.mocked(storageService.linkVideoToCollection).mockReturnValue(undefined as any);
+    vi.mocked(storageService.getActiveDownload).mockReturnValue({
+      title: "Queue Title",
+    } as any);
+    vi.mocked(downloadService.downloadRemainingBilibiliParts).mockResolvedValue({
+      success: true,
+      partial: false,
+      expectedCount: 2,
+      downloadedCount: 1,
+      skippedCount: 1,
+      failedPartNumbers: [],
+      isMultiPart: true,
+      totalParts: 3,
+    } as any);
+
+    await downloadVideo(req as Request, res as Response);
+
+    expect(downloadService.checkBilibiliVideoParts).toHaveBeenCalledWith("BV2xx");
+    expect(storageService.saveCollection).toHaveBeenCalled();
+    expect(downloadService.downloadRemainingBilibiliParts).toHaveBeenCalledWith(
+      "https://www.bilibili.com/video/BV2xx",
+      2,
+      3,
+      "Queue Title",
+      expect.any(String),
+      expect.any(String),
+      expect.any(Function),
+      expect.objectContaining({
+        shape: "bilibili_all_parts",
+        collectionName: "My Collection",
+        expectedCount: 3,
+        completedPartNumbers: [1],
+      }),
+    );
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({ success: true, message: "Download queued" })
+    );
+  });
+
+  it("downloadVideo handles MissAV downloads", async () => {
+    req.body = { youtubeUrl: "https://missav.com/watch/1" };
+    vi.mocked(processVideoUrl).mockResolvedValue({
+      videoUrl: "https://missav.com/watch/1",
+      sourceVideoId: "m-1",
+      platform: "missav",
+    } as any);
+    vi.mocked(isMissAVUrl).mockReturnValue(true);
+    vi.mocked(downloadService.downloadMissAVVideo).mockResolvedValue({ id: "missav-video" } as any);
+
+    await downloadVideo(req as Request, res as Response);
+
+    expect(downloadService.downloadMissAVVideo).toHaveBeenCalled();
+    expect(downloadManager.addDownload).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.any(String),
+      "MissAV Video",
+      "https://missav.com/watch/1",
+      "missav",
+      expect.objectContaining({
+        actorRole: "admin",
+        surface: "web",
+        sourceKind: "manual",
+      }),
+      undefined,
+    );
+  });
+
+  it("downloadVideo returns internal error on unexpected exception", async () => {
+    req.body = { youtubeUrl: "https://youtube.com/watch?v=oops" };
+    vi.mocked(processVideoUrl).mockRejectedValue(new Error("process failed"));
+
+    await downloadVideo(req as Request, res as Response);
+
+    expect(status).toHaveBeenCalledWith(500);
+    expect(json).toHaveBeenCalledWith({
+      success: false,
+      error: "Failed to queue download",
+    });
+  });
+
+  it("downloadVideo handles addDownload rejection branch", async () => {
+    req.body = { youtubeUrl: "https://youtube.com/watch?v=queue-error" };
+    vi.mocked(downloadManager.addDownload).mockRejectedValueOnce(
+      new Error("queue failed")
+    );
+
+    await downloadVideo(req as Request, res as Response);
+    await flushBackgroundTasks();
+
+    expect(status).toHaveBeenCalledWith(200);
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({ success: true, message: "Download queued" })
+    );
+  });
+
+  it("downloadVideo tolerates background getVideoInfo failures", async () => {
+    req.body = { youtubeUrl: "https://youtube.com/watch?v=noinfo" };
+    vi.mocked(storageService.getDownloadStatus).mockImplementation(() => ({
+      activeDownloads: [],
+      queuedDownloads: [
+        {
+          id: vi.mocked(downloadManager.addDownload).mock.calls[0]?.[1],
+          title: "YouTube Video",
+          timestamp: Date.now(),
+        },
+      ],
+    } as any));
+    vi.mocked(downloadService.getVideoInfo).mockRejectedValueOnce(
+      new Error("info failed")
+    );
+
+    await downloadVideo(req as Request, res as Response);
+    await flushBackgroundTasks();
+
+    expect(downloadService.getVideoInfo).toHaveBeenCalled();
+  });
+
+  it("checkBilibiliParts resolves short URLs and forwards video ID", async () => {
+    req.query = { url: "https://b23.tv/short" } as any;
+    vi.mocked(isBilibiliUrl).mockReturnValue(true);
+    vi.mocked(isBilibiliShortUrl).mockReturnValue(true);
+    vi.mocked(resolveShortUrl).mockResolvedValue(
+      "https://www.bilibili.com/video/BV1short"
+    );
+    vi.mocked(trimBilibiliUrl).mockReturnValue(
+      "https://www.bilibili.com/video/BV1short"
+    );
+    vi.mocked(extractBilibiliVideoId).mockReturnValue("BV1short");
+    vi.mocked(downloadService.checkBilibiliVideoParts).mockResolvedValue({
+      success: true,
+      videosNumber: 2,
+    } as any);
+
+    await checkBilibiliParts(req as Request, res as Response);
+
+    expect(downloadService.checkBilibiliVideoParts).toHaveBeenCalledWith("BV1short");
+    expect(json).toHaveBeenCalledWith({ success: true, videosNumber: 2 });
+  });
+
+  it("checkBilibiliParts throws when bilibili id cannot be extracted", async () => {
+    req.query = { url: "https://www.bilibili.com/video/unknown" } as any;
+    vi.mocked(isBilibiliUrl).mockReturnValue(true);
+    vi.mocked(isBilibiliShortUrl).mockReturnValue(false);
+    vi.mocked(extractBilibiliVideoId).mockReturnValue(null);
+
+    await expect(checkBilibiliParts(req as Request, res as Response)).rejects.toBeInstanceOf(
+      ValidationError
+    );
+  });
+
+  it("checkBilibiliCollection validates and forwards video ID", async () => {
+    req.query = { url: "https://www.bilibili.com/video/BV9x" } as any;
+    vi.mocked(isBilibiliUrl).mockReturnValue(true);
+    vi.mocked(extractBilibiliVideoId).mockReturnValue("BV9x");
+    vi.mocked(downloadService.checkBilibiliCollectionOrSeries).mockResolvedValue({
+      success: true,
+      type: "collection",
+    } as any);
+
+    await checkBilibiliCollection(req as Request, res as Response);
+
+    expect(downloadService.checkBilibiliCollectionOrSeries).toHaveBeenCalledWith("BV9x");
+    expect(json).toHaveBeenCalledWith({ success: true, type: "collection" });
+  });
+
+  it("checkBilibiliCollection throws on non-bilibili url", async () => {
+    req.query = { url: "https://example.com/video/1" } as any;
+    vi.mocked(isBilibiliUrl).mockReturnValue(false);
+
+    await expect(
+      checkBilibiliCollection(req as Request, res as Response)
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it("checkBilibiliCollection resolves short url then throws when id is missing", async () => {
+    req.query = { url: "https://b23.tv/noid" } as any;
+    vi.mocked(isBilibiliUrl).mockReturnValue(true);
+    vi.mocked(isBilibiliShortUrl).mockReturnValue(true);
+    vi.mocked(resolveShortUrl).mockResolvedValue(
+      "https://www.bilibili.com/video/not-found"
+    );
+    vi.mocked(trimBilibiliUrl).mockReturnValue(
+      "https://www.bilibili.com/video/not-found"
+    );
+    vi.mocked(extractBilibiliVideoId).mockReturnValue(null);
+
+    await expect(
+      checkBilibiliCollection(req as Request, res as Response)
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it("getDownloadStatus logs progress branch and returns status", async () => {
+    vi.mocked(storageService.getDownloadStatus).mockReturnValue({
+      activeDownloads: [
+        { id: "d1", progress: 50, speed: "1MB/s", totalSize: "100MB" },
+      ],
+      queuedDownloads: [],
+    } as any);
+
+    await getDownloadStatus(req as Request, res as Response);
+
+    expect(json).toHaveBeenCalledWith({
+      activeDownloads: [
+        { id: "d1", progress: 50, speed: "1MB/s", totalSize: "100MB" },
+      ],
+      queuedDownloads: [],
+    });
+  });
+
+  it("checkPlaylist rejects youtube links without list parameter", async () => {
+    req.query = { url: "https://youtube.com/watch?v=only-video" } as any;
+    vi.mocked(isYouTubeUrl).mockReturnValue(true);
+
+    await expect(checkPlaylist(req as Request, res as Response)).rejects.toBeInstanceOf(
+      ValidationError
+    );
+  });
+
+  it("checkPlaylist throws when url is missing", async () => {
+    req.query = {} as any;
+
+    await expect(checkPlaylist(req as Request, res as Response)).rejects.toBeInstanceOf(
+      ValidationError
+    );
+  });
+
+  it("checkPlaylist rejects option-like input before calling yt-dlp", async () => {
+    req.query = { url: "--config-locations=/tmp/attacker.conf" } as any;
+    vi.mocked(validateUrl).mockImplementationOnce(() => {
+      throw new Error("Invalid URL format");
+    });
+
+    await expect(checkPlaylist(req as Request, res as Response)).rejects.toBeInstanceOf(
+      ValidationError
+    );
+    expect(downloadService.checkPlaylist).not.toHaveBeenCalled();
+  });
+
+  it("checkPlaylist returns service result on success", async () => {
+    req.query = { url: "https://youtube.com/playlist?list=PLok" } as any;
+    vi.mocked(isYouTubeUrl).mockReturnValue(true);
+    vi.mocked(downloadService.checkPlaylist).mockResolvedValue({
+      success: true,
+      count: 10,
+    } as any);
+
+    await checkPlaylist(req as Request, res as Response);
+
+    expect(json).toHaveBeenCalledWith({ success: true, count: 10 });
+  });
+
+  it("checkPlaylist returns error payload when service throws", async () => {
+    req.query = { url: "https://youtube.com/playlist?list=PL123" } as any;
+    vi.mocked(isYouTubeUrl).mockReturnValue(true);
+    vi.mocked(downloadService.checkPlaylist).mockRejectedValue(new Error("playlist failed"));
+
+    await checkPlaylist(req as Request, res as Response);
+
+    expect(json).toHaveBeenCalledWith({ success: false, error: "playlist failed" });
+  });
+});

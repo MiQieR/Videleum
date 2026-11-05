@@ -1,0 +1,410 @@
+import axios from "axios";
+import { logger } from "../../../utils/logger";
+import {
+  executeYtDlpJson,
+  getEffectiveUserYtDlpConfig,
+  getNetworkConfigFromUserConfig,
+  getUserYtDlpConfig,
+} from "../../../utils/ytDlpUtils";
+import { VideoInfo } from "../BaseDownloader";
+import {
+  resolveProxiedAxiosConfig,
+  resolveProxiedAxiosConfigForUrl,
+} from "./bilibiliConfig";
+import { buildBilibiliApiHeaders } from "./bilibiliHeaders";
+import {
+  BilibiliCollectionCheckResult,
+  BilibiliPartsCheckResult,
+} from "./types";
+
+function buildUnknownVideoInfo(): VideoInfo {
+  return {
+    title: "Bilibili Video",
+    author: "Bilibili User",
+    date: new Date().toISOString().slice(0, 10).replace(/-/g, ""),
+    thumbnailUrl: null,
+  };
+}
+
+/**
+ * Get video info from Bilibili (uses Bilibili Web API first in production, falls back if needed)
+ */
+export async function getVideoInfo(videoId: string): Promise<VideoInfo> {
+  const videoUrl = `https://www.bilibili.com/video/${videoId}`;
+  // Get user config for network options. Resolved outside the try so the API
+  // fallback in the catch can route through the same proxy yt-dlp used.
+  const userConfig = getUserYtDlpConfig(videoUrl);
+  const isYtDlpMocked = Boolean(
+    (process.env.VITEST === "true" ||
+      process.env.NODE_ENV === "test" ||
+      (executeYtDlpJson as unknown as { mock?: unknown })?.mock) &&
+      !(globalThis as Record<string, unknown>)
+        .__FORCE_NATIVE_BILIBILI_DOWNLOADER__,
+  );
+
+  const fetchFromWebApi = async (): Promise<VideoInfo | null> => {
+    const axiosConfig = resolveProxiedAxiosConfig(userConfig);
+    if (!axiosConfig) {
+      logger.warn(
+        "Skipping Bilibili video info API lookup: proxy is configured but unusable",
+      );
+      return null;
+    }
+
+    const isBvId = videoId.startsWith("BV");
+    const apiUrl = isBvId
+      ? `https://api.bilibili.com/x/web-interface/view?bvid=${videoId}`
+      : `https://api.bilibili.com/x/web-interface/view?aid=${videoId.replace(/^av/i, "")}`;
+    const response = await axios.get(apiUrl, {
+      ...axiosConfig,
+      headers: buildBilibiliApiHeaders(apiUrl),
+      timeout: 15000,
+    });
+
+    if (response.data && response.data.data) {
+      const videoInfo = response.data.data;
+      return {
+        title: videoInfo.title || "Bilibili Video",
+        author: videoInfo.owner?.name || "Bilibili User",
+        date: new Date(videoInfo.pubdate * 1000)
+          .toISOString()
+          .slice(0, 10)
+          .replace(/-/g, ""),
+        thumbnailUrl: videoInfo.pic || null,
+        description: videoInfo.desc,
+      };
+    }
+    return null;
+  };
+
+  if (!isYtDlpMocked) {
+    try {
+      const apiResult = await fetchFromWebApi();
+      if (apiResult) {
+        return apiResult;
+      }
+    } catch (apiError) {
+      logger.warn("Primary Bilibili Web API lookup failed, falling back:", apiError);
+    }
+  }
+
+  try {
+    const networkConfig = getNetworkConfigFromUserConfig(userConfig);
+    const info = await executeYtDlpJson(videoUrl, {
+      ...networkConfig,
+      noWarnings: true,
+    });
+
+    return {
+      title: info.title || "Bilibili Video",
+      author: info.uploader || info.channel || "Bilibili User",
+      date:
+        info.upload_date ||
+        info.release_date ||
+        new Date().toISOString().slice(0, 10).replace(/-/g, ""),
+      thumbnailUrl: info.thumbnail || null,
+      description: info.description,
+    };
+  } catch (error) {
+    logger.error("Error fetching Bilibili video info with yt-dlp:", error);
+    // Fallback to API
+    try {
+      const apiResult = await fetchFromWebApi();
+      if (apiResult) {
+        return apiResult;
+      }
+    } catch (apiError) {
+      logger.error("Error fetching Bilibili video info from API:", apiError);
+    }
+    return buildUnknownVideoInfo();
+  }
+}
+
+/**
+ * Get author info from Bilibili space URL
+ */
+export async function getAuthorInfo(
+  mid: string,
+  subscriptionYtdlpConfig?: string | null
+): Promise<{
+  name: string;
+  mid: string;
+}> {
+  try {
+    // No URL in scope, so the config is keyed off the author's space URL —
+    // the page this lookup is about. The subscription's own proxy has to reach
+    // here too: this runs while the subscription is being created, before any
+    // of its settings are persisted anywhere else.
+    const axiosConfig = resolveProxiedAxiosConfigForUrl(
+      `https://space.bilibili.com/${mid}`,
+      subscriptionYtdlpConfig,
+    );
+    if (!axiosConfig) {
+      logger.warn(
+        "Skipping Bilibili author info lookup: proxy is configured but unusable",
+      );
+      return { name: "Bilibili User", mid };
+    }
+
+    // Use the card API which doesn't require WBI signing
+    const apiUrl = `https://api.bilibili.com/x/web-interface/card?mid=${mid}`;
+    logger.info("Fetching Bilibili author info from:", apiUrl);
+
+    const response = await axios.get(apiUrl, {
+      ...axiosConfig,
+      headers: buildBilibiliApiHeaders(apiUrl),
+    });
+
+    if (response.data && response.data.data && response.data.data.card) {
+      const card = response.data.data.card;
+      return {
+        name: card.name || "Bilibili User",
+        mid: mid,
+      };
+    }
+
+    return { name: "Bilibili User", mid };
+  } catch (error) {
+    logger.error("Error fetching Bilibili author info:", error);
+    return { name: "Bilibili User", mid };
+  }
+}
+
+/**
+ * Get the latest video URL from a Bilibili author's space
+ */
+export async function getLatestVideoUrl(
+  spaceUrl: string,
+  subscriptionYtdlpConfig?: string | null
+): Promise<string | null> {
+  try {
+    logger.info("Fetching latest video for Bilibili space:", spaceUrl);
+
+    // Extract mid from the space URL
+    const { extractBilibiliMid } = await import("../../../utils/helpers");
+    const mid = extractBilibiliMid(spaceUrl);
+
+    if (!mid) {
+      logger.error("Could not extract mid from Bilibili space URL:", spaceUrl);
+      return null;
+    }
+
+    logger.info("Extracted mid:", mid);
+
+    // Get user config for network options (cookies, proxy, etc.), layering any
+    // per-subscription override on top of the global config (#345) so the
+    // scheduled space probe can reach the source the download will use.
+    const userConfig = getEffectiveUserYtDlpConfig(
+      spaceUrl,
+      subscriptionYtdlpConfig
+    );
+    const networkConfig = getNetworkConfigFromUserConfig(userConfig);
+
+    // Use yt-dlp to get the latest video from the user's space
+    // Bilibili space URL format: https://space.bilibili.com/{mid}/video
+    const videosUrl = `https://space.bilibili.com/${mid}/video`;
+
+    try {
+      const result = await executeYtDlpJson(videosUrl, {
+        ...networkConfig,
+        playlistEnd: 1, // Only get the first (latest) video
+        flatPlaylist: true, // Don't download, just get info
+        noWarnings: true,
+      });
+
+      // If it's a playlist/channel, 'entries' will contain the videos
+      if (result.entries && result.entries.length > 0) {
+        const latestVideo = result.entries[0];
+        const bvid = latestVideo.id;
+
+        if (bvid) {
+          const videoUrl = `https://www.bilibili.com/video/${bvid}`;
+          logger.info("Found latest Bilibili video:", videoUrl);
+          return videoUrl;
+        }
+
+        // Fallback to url if id is not available
+        if (latestVideo.url) {
+          logger.info("Found latest Bilibili video:", latestVideo.url);
+          return latestVideo.url;
+        }
+      }
+    } catch (ytdlpError) {
+      logger.error("yt-dlp failed, trying API fallback:", ytdlpError);
+
+      // Reuse the config yt-dlp just used, so the fallback takes the same route.
+      const axiosConfig = resolveProxiedAxiosConfig(userConfig);
+      if (!axiosConfig) {
+        // null here would read as "no new video": the caller updates lastCheck
+        // and records a successful check, hiding the broken configuration.
+        // Only a verified-empty space may return null.
+        throw new Error(
+          "Could not probe Bilibili space: proxy is configured but unusable",
+        );
+      }
+
+      // Fallback: Try the non-WBI API endpoint
+      const apiUrl = `https://api.bilibili.com/x/space/arc/search?mid=${mid}&pn=1&ps=1&order=pubdate`;
+
+      const response = await axios.get(apiUrl, {
+        ...axiosConfig,
+        headers: buildBilibiliApiHeaders(apiUrl),
+      });
+
+      // Risk control answers with HTTP 200 and a nonzero code, so axios does
+      // not throw. Falling through to `return null` on those would report the
+      // space as empty and let the subscription record a successful check —
+      // the very thing the rethrow above exists to prevent. Only a valid,
+      // genuinely empty vlist may reach that null.
+      const data = response.data;
+      const vlist = data?.data?.list?.vlist;
+      if (!data || data.code !== 0 || !Array.isArray(vlist)) {
+        throw new Error(
+          `Bilibili space API returned an unusable response (code ${
+            data?.code ?? "unknown"
+          })`,
+        );
+      }
+
+      if (vlist.length > 0) {
+        const bvid = vlist[0]?.bvid;
+        if (!bvid) {
+          throw new Error(
+            "Bilibili space API returned a video entry without a bvid",
+          );
+        }
+
+        const videoUrl = `https://www.bilibili.com/video/${bvid}`;
+        logger.info("Found latest Bilibili video (API fallback):", videoUrl);
+        return videoUrl;
+      }
+    }
+
+    logger.info("No videos found for Bilibili space:", spaceUrl);
+    return null;
+  } catch (error) {
+    // Same reasoning as the proxy branch: swallowing this made every probe
+    // failure look like an empty space, so the subscription recorded a
+    // successful check and advanced past it. null now means only that the
+    // space was read and has no videos.
+    logger.error("Error fetching latest Bilibili video:", error);
+    throw error;
+  }
+}
+
+/**
+ * Check if a Bilibili video has multiple parts
+ */
+export async function checkVideoParts(
+  videoId: string,
+  subscriptionYtdlpConfig?: string | null
+): Promise<BilibiliPartsCheckResult> {
+  try {
+    // No URL in scope, so the config is keyed off the video URL this lookup is
+    // about — which also applies the "proxy only for YouTube" setting the same
+    // way it applies to the yt-dlp call for that URL.
+    const axiosConfig = resolveProxiedAxiosConfigForUrl(
+      `https://www.bilibili.com/video/${videoId}`,
+      subscriptionYtdlpConfig
+    );
+    if (!axiosConfig) {
+      logger.warn(
+        "Skipping Bilibili parts check: proxy is configured but unusable"
+      );
+      return { success: false, videosNumber: 1 };
+    }
+
+    // Try to get video info from Bilibili API
+    // Handle both BV and av formats
+    const isBvId = videoId.startsWith("BV");
+    const apiUrl = isBvId
+      ? `https://api.bilibili.com/x/web-interface/view?bvid=${videoId}`
+      : `https://api.bilibili.com/x/web-interface/view?aid=${videoId.replace(
+          "av",
+          ""
+        )}`;
+    logger.info("Fetching video info from API to check parts:", apiUrl);
+
+    const response = await axios.get(apiUrl, {
+      ...axiosConfig,
+      headers: buildBilibiliApiHeaders(apiUrl),
+    });
+
+    if (response.data && response.data.data) {
+      const videoInfo = response.data.data;
+      const videosNumber = videoInfo.videos || 1;
+
+      logger.info(`Bilibili video has ${videosNumber} parts`);
+
+      return {
+        success: true,
+        videosNumber,
+        title: videoInfo.title || "Bilibili Video",
+      };
+    }
+
+    return { success: false, videosNumber: 1 };
+  } catch (error) {
+    logger.error("Error checking Bilibili video parts:", error);
+    return { success: false, videosNumber: 1 };
+  }
+}
+
+/**
+ * Check if a Bilibili video belongs to a collection or series
+ */
+export async function checkCollectionOrSeries(
+  videoId: string,
+  subscriptionYtdlpConfig?: string | null
+): Promise<BilibiliCollectionCheckResult> {
+  try {
+    // Same reasoning as checkVideoParts: this is the other preflight the
+    // frontend runs before a Bilibili download, and resolving short links now
+    // lets it reach the API instead of failing ID extraction first.
+    const axiosConfig = resolveProxiedAxiosConfigForUrl(
+      `https://www.bilibili.com/video/${videoId}`,
+      subscriptionYtdlpConfig
+    );
+    if (!axiosConfig) {
+      logger.warn(
+        "Skipping Bilibili collection check: proxy is configured but unusable"
+      );
+      return { success: false, type: "none" };
+    }
+
+    const apiUrl = `https://api.bilibili.com/x/web-interface/view?bvid=${videoId}`;
+    logger.info("Checking if video belongs to collection/series:", apiUrl);
+
+    const response = await axios.get(apiUrl, {
+      ...axiosConfig,
+      headers: buildBilibiliApiHeaders(apiUrl),
+    });
+
+    if (response.data && response.data.data) {
+      const videoInfo = response.data.data;
+      const mid = videoInfo.owner?.mid;
+
+      // Check for collection (ugc_season)
+      if (videoInfo.ugc_season) {
+        const season = videoInfo.ugc_season;
+        logger.info(`Video belongs to collection: ${season.title}`);
+        return {
+          success: true,
+          type: "collection",
+          id: season.id,
+          title: season.title,
+          count: season.ep_count || 0,
+          mid: mid,
+        };
+      }
+
+      // If no collection found, return none
+      return { success: true, type: "none" };
+    }
+
+    return { success: false, type: "none" };
+  } catch (error) {
+    logger.error("Error checking collection/series:", error);
+    return { success: false, type: "none" };
+  }
+}

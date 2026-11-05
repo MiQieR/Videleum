@@ -1,0 +1,364 @@
+import {
+    Box,
+    Button,
+    FormControlLabel,
+    Link,
+    Switch,
+    TextField,
+    Typography
+} from '@mui/material';
+import React, { useState } from 'react';
+import { useLanguage } from '../../contexts/LanguageContext';
+import { SETTINGS_CONTROL_MAX_WIDTH } from './settingsLayout';
+
+interface YtDlpSettingsProps {
+    config: string;
+    proxyOnlyYoutube?: boolean;
+    proxyBypassHosts?: string;
+    onChange: (config: string) => void;
+    onProxyOnlyYoutubeChange?: (checked: boolean) => void;
+    onProxyBypassHostsChange?: (hosts: string) => void;
+}
+
+// Default yt-dlp configuration
+// Reference: https://github.com/yt-dlp/yt-dlp?tab=readme-ov-file#configuration
+const DEFAULT_CONFIG = `# yt-dlp Configuration File
+# Lines starting with # are comments
+# Remove the # at the beginning of a line to enable an option
+# For full documentation: https://github.com/yt-dlp/yt-dlp#configuration
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VIDEO FORMAT & RESOLUTION (Default: best available quality)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# RECOMMENDED: Use -S (format sort) for reliable resolution limits
+# -S sorts formats by preference and is more reliable than -f filters
+
+# Limit to 4320p (8K) maximum
+# -S res:4320
+
+# Limit to 2160p (4K) maximum
+# -S res:2160
+
+# Limit to 1080p maximum (RECOMMENDED)
+# -S res:1080
+
+# Limit to 720p maximum
+# -S res:720
+
+# Limit to 480p maximum (for slower connections or storage savings)
+# -S res:480
+
+# Limit to 360p maximum (minimum quality)
+# -S res:360
+
+# Prefer H.264 codec with 1080p limit (Safari/iOS compatible)
+# -S res:1080,vcodec:h264
+
+# Force H.264 codec only (required for Safari/iOS playback)
+# -S vcodec:h264
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# FORMAT SELECTION (Alternative to -S, less reliable with some sources)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Note: -f filters may not work reliably with all video sources
+# Use -S above for more consistent results
+
+# Videleum defaults to high-quality browser-playable formats.
+# YouTube downloads prefer VP9/WebM for high resolution and avoid AV1 by default.
+# For 8K: -S res:4320
+# For 4K: -S res:2160
+
+# Explicit best-quality format selection
+# -f bestvideo*+bestaudio/best
+
+# Limit to 1080p maximum using filter
+# -f bestvideo[height<=1080]+bestaudio/best[height<=1080]
+
+# Prefer MP4 format (better compatibility, may reduce max resolution)
+# -f bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best
+
+# Prefer H.264 codec (required for Safari/iOS playback)
+# -f bestvideo[vcodec^=avc1]+bestaudio/best
+# -f bestvideo[ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]/best[ext=mp4]/best
+
+# Download only audio (extract audio)
+# -x
+# --audio-format mp3
+# --audio-quality 0
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# OUTPUT CONTAINER FORMAT
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Force MP4 container for all downloads (including 4K+)
+# Note: YouTube only offers VP9/AV1 codecs for 4K+, not H.264
+# This wraps VP9/AV1 in MP4 container instead of WebM
+# WARNING: VP9/AV1 in MP4 does NOT work in Safari/QuickTime!
+# Works in: Chrome, Firefox, Edge, VLC
+# Broken in: Safari, iOS, QuickTime, macOS Preview
+# --merge-output-format mp4
+
+# Force WebM container (default for high-resolution YouTube unless overridden)
+# Best compatibility for VP9 codecs in Chromium-based browsers
+# --merge-output-format webm
+
+# Force MKV container (best for local playback with VLC/Plex)
+# Does NOT work in browsers - download required for playback
+# --merge-output-format mkv
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DOWNLOAD OPTIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Limit download speed (e.g., 1M = 1MB/s, 500K = 500KB/s)
+# -r 2M
+
+# Number of retries for failed downloads
+# -R 10
+
+# Number of concurrent fragment downloads (for DASH/HLS)
+# -N 4
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SUBTITLES
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Download subtitles
+# --write-subs
+
+# Download auto-generated subtitles
+# --write-auto-subs
+
+# Subtitle languages (comma-separated, e.g., en,zh,ja)
+# --sub-langs en,zh
+
+# Convert subtitles to specific format
+# --convert-subs vtt
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NETWORK OPTIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Use proxy (HTTP/HTTPS/SOCKS5)
+# --proxy http://127.0.0.1:7890
+# --proxy socks5://127.0.0.1:1080
+
+# Force IPv4
+# -4
+
+# Force IPv6
+# -6
+
+# Socket timeout in seconds
+# --socket-timeout 30
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# WORKAROUNDS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Sleep between requests (helps avoid rate limiting)
+# --sleep-requests 1
+
+# Sleep between downloads (seconds)
+# --sleep-interval 5
+
+# Random sleep between downloads (min-max)
+# --min-sleep-interval 3
+# --max-sleep-interval 10
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# GEO RESTRICTION BYPASS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Bypass geo-restriction using X-Forwarded-For header
+# --xff default
+
+# Use specific country code
+# --xff US
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# YOUTUBE SPECIFIC
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Use specific player client (web, android, ios, tv)
+# --extractor-args youtube:player_client=android
+
+# Skip HLS or DASH formats
+# --extractor-args youtube:skip=hls
+# --extractor-args youtube:skip=dash
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# BILIBILI SPECIFIC
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Note: By default, Videleum keeps Bilibili codec selection neutral to allow
+# higher resolutions when only HEVC/AV1 streams are available.
+# If you need Safari/iOS compatibility, force H.264 explicitly.
+
+# Force H.264 codec (best compatibility with Safari/iOS)
+# -S vcodec:h264
+
+# Prefer H.264 with resolution limit
+# -S res:1080,vcodec:h264
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# AUTHENTICATION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Use cookies from browser (chrome, firefox, edge, safari, opera, brave)
+# --cookies-from-browser chrome
+
+# Use netrc file for authentication
+# --netrc
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# POST-PROCESSING
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Embed thumbnail in video file
+# --embed-thumbnail
+
+# Embed subtitles in video file (for mp4, webm, mkv)
+# --embed-subs
+
+# Embed metadata
+# --embed-metadata
+
+# Keep original video after post-processing
+# -k
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SPONSORBLOCK (YouTube only)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Mark sponsor segments as chapters
+# --sponsorblock-mark all
+
+# Remove sponsor segments from video
+# --sponsorblock-remove sponsor,intro,outro
+
+`;
+
+const YtDlpSettings: React.FC<YtDlpSettingsProps> = ({ config, proxyOnlyYoutube = false, proxyBypassHosts = '', onChange, onProxyOnlyYoutubeChange, onProxyBypassHostsChange }) => {
+    const { t } = useLanguage();
+    const [isExpanded, setIsExpanded] = useState(false);
+    const [localConfigState, setLocalConfigState] = useState({
+        sourceConfig: config,
+        value: config || DEFAULT_CONFIG,
+    });
+    const localConfig =
+        localConfigState.sourceConfig === config
+            ? localConfigState.value
+            : config || DEFAULT_CONFIG;
+
+    const handleCustomize = () => {
+        setIsExpanded(!isExpanded);
+        if (!isExpanded) {
+            // When expanding, sync local config with prop
+            setLocalConfigState({
+                sourceConfig: config,
+                value: config || DEFAULT_CONFIG,
+            });
+        }
+    };
+
+    const handleConfigChange = (value: string) => {
+        setLocalConfigState({ sourceConfig: config, value });
+        onChange(value);
+    };
+
+    const handleReset = () => {
+        setLocalConfigState({ sourceConfig: config, value: DEFAULT_CONFIG });
+        onChange(DEFAULT_CONFIG);
+    };
+
+    return (
+        <Box>
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, mb: 2 }}>
+                <Box>
+                    <Typography variant="body2" color="text.secondary">
+                        {t('ytDlpConfigurationDescription') || 'Configure yt-dlp options. See '}
+                        <Link
+                            href="https://github.com/yt-dlp/yt-dlp?tab=readme-ov-file#configuration"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                        >
+                            {t('ytDlpConfigurationDocs') || 'documentation'}
+                        </Link>
+                        {' '}
+                        {t('ytDlpConfigurationDescriptionEnd') || 'for more information.'}
+                    </Typography>
+                </Box>
+                <Button
+                    variant="outlined"
+                    onClick={handleCustomize}
+                >
+                    {isExpanded ? (t('hide') || 'Hide') : (t('customize') || 'Customize')}
+                </Button>
+            </Box>
+
+            {isExpanded && (
+                <Box sx={{ mt: 2 }}>
+
+                    {/* Proxy Toggle */}
+                    <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+                        <FormControlLabel
+                            control={
+                                <Switch
+                                    checked={proxyOnlyYoutube}
+                                    onChange={(e) => onProxyOnlyYoutubeChange && onProxyOnlyYoutubeChange(e.target.checked)}
+                                    color="primary"
+                                />
+                            }
+                            label={t('proxyOnlyApplyToYoutube') || "Proxy only apply to Youtube"}
+                        />
+                    </Box>
+
+                    {/* Hosts that must bypass an HTTP_PROXY inherited from the container */}
+                    <TextField
+                        fullWidth
+                        size="small"
+                        sx={{ mb: 2, maxWidth: SETTINGS_CONTROL_MAX_WIDTH }}
+                        value={proxyBypassHosts}
+                        onChange={(e) => onProxyBypassHostsChange && onProxyBypassHostsChange(e.target.value)}
+                        label={t('proxyBypassHosts') || 'Bypass proxy for hosts'}
+                        placeholder="surrit.com, example.com"
+                        helperText={
+                            t('proxyBypassHostsHelp') ||
+                            "Comma-separated host names yt-dlp reaches directly instead of through HTTP_PROXY. Subdomains are included automatically (surrit.com also covers cdn.surrit.com). Applies to yt-dlp's downloads only — to take a host off the proxy for every request Videleum makes, set the system's own NO_PROXY instead. No effect when --proxy is set below, which replaces the environment proxy entirely."
+                        }
+                    />
+
+                    <TextField
+                        fullWidth
+                        multiline
+                        minRows={12}
+                        maxRows={12}
+                        value={localConfig}
+                        onChange={(e) => handleConfigChange(e.target.value)}
+                        placeholder={DEFAULT_CONFIG}
+                        sx={{
+                            '& .MuiInputBase-root': {
+                                fontFamily: 'monospace',
+                                fontSize: '0.875rem'
+                            }
+                        }}
+                    />
+                    <Box sx={{ display: 'flex', justifyContent: 'flex-start', mt: 2 }}>
+                        <Button
+                            variant="outlined"
+                            color="warning"
+                            onClick={handleReset}
+                        >
+                            {t('reset') || 'Reset'}
+                        </Button>
+                    </Box>
+                </Box>
+            )}
+        </Box>
+    );
+};
+
+export default YtDlpSettings;

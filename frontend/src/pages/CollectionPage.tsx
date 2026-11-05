@@ -1,0 +1,410 @@
+import { Folder, LocalOffer, ViewSidebar } from '@mui/icons-material';
+import {
+    Alert,
+    Avatar,
+    Box,
+    Button,
+    Container,
+    Grid,
+    IconButton,
+    Pagination,
+    Tooltip,
+    Typography
+} from '@mui/material';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate, useParams, useSearchParams } from 'react-router';
+import DeleteCollectionModal from '../components/DeleteCollectionModal';
+import FavoriteToggle from '../components/FavoriteToggle';
+import SortControl from '../components/SortControl';
+import TagsModal from '../components/TagsModal';
+import { TagsSidebar } from '../components/TagsSidebar';
+import VideoCard from '../components/VideoCard';
+import { useCollection } from '../contexts/CollectionContext';
+import { useLanguage } from '../contexts/LanguageContext';
+import { usePageTagFilter } from '../contexts/PageTagFilterContext';
+import { useSnackbar } from '../contexts/SnackbarContext';
+import { useVideo } from '../contexts/VideoContext';
+import { usePaginationKeyboardNavigation } from '../hooks/usePaginationKeyboardNavigation';
+import { usePaginationSwipeNavigation } from '../hooks/usePaginationSwipeNavigation';
+import { useSettings } from '../hooks/useSettings';
+import { useVideoSort } from '../hooks/useVideoSort';
+import { useFavoriteCollections } from '../hooks/useFavoriteCollections';
+import type { Video } from '../types';
+
+
+const CollectionPage: React.FC = () => {
+    const { t } = useLanguage();
+    const { id } = useParams<{ id: string }>();
+    const [searchParams] = useSearchParams();
+    const navigate = useNavigate();
+    const { showSnackbar } = useSnackbar();
+    const { collections, deleteCollection } = useCollection();
+    const { videos, deleteVideo, availableTags: globalAvailableTags, updateVideo } = useVideo();
+    const { setPageTagFilter } = usePageTagFilter();
+    const { data: settings } = useSettings();
+    const {
+        isFavorite: isFavoriteCollection,
+        toggle: toggleFavoriteCollection,
+        isToggling: isFavoriteToggling,
+    } = useFavoriteCollections();
+
+    const [showDeleteModal, setShowDeleteModal] = useState<boolean>(false);
+    const [isTagsModalOpen, setIsTagsModalOpen] = useState(false);
+    const [page, setPage] = useState(1);
+    const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+    const [selectedTags, setSelectedTags] = useState<string[]>([]);
+    const ITEMS_PER_PAGE = 12;
+
+    const collection = collections.find(c => c.id === id);
+    const videosById = useMemo(
+        () => new Map(videos.map(video => [video.id, video])),
+        [videos]
+    );
+    const collectionVideos = useMemo(() => {
+        if (!collection) return [];
+        return collection.videos
+            .map(videoId => videosById.get(videoId))
+            .filter((video): video is Video => Boolean(video));
+    }, [collection, videosById]);
+    const availableTags = useMemo(
+        () => Array.from(new Set(collectionVideos.flatMap(v => v.tags || []))).sort(),
+        [collectionVideos]
+    );
+
+    const commonTags = useMemo(() => {
+        if (collectionVideos.length === 0) return [];
+        // Start with tags from first video
+        let intersection = new Set(collectionVideos[0].tags || []);
+        // Intersect with rest
+        for (let i = 1; i < collectionVideos.length; i++) {
+            const vTags = new Set(collectionVideos[i].tags || []);
+            intersection = new Set([...intersection].filter(x => vTags.has(x)));
+        }
+        return Array.from(intersection).sort();
+    }, [collectionVideos]);
+    const showTagsOnThumbnail = settings?.showTagsOnThumbnail ?? true;
+
+    const [filterVersion, setFilterVersion] = useState(0);
+
+    const handleTagToggle = useCallback((tag: string) => {
+        setSelectedTags(prev =>
+            prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]
+        );
+        setPage(1);
+        setFilterVersion(v => v + 1);
+    }, []);
+
+    const videosFilteredByTags = useMemo(() => {
+        if (selectedTags.length === 0) return collectionVideos;
+        return collectionVideos.filter(video =>
+            selectedTags.every(tag => (video.tags || []).includes(tag))
+        );
+    }, [collectionVideos, selectedTags]);
+
+    const pageTagFilter = useMemo(() => ({
+        availableTags,
+        selectedTags,
+        onTagToggle: handleTagToggle,
+        _version: filterVersion,
+    }), [availableTags, filterVersion, handleTagToggle, selectedTags]);
+
+    // Register page tag filter; bump filterVersion only in handleTagToggle so Header re-renders on tag click.
+    useEffect(() => {
+        setPageTagFilter(pageTagFilter);
+        return () => setPageTagFilter(null);
+    }, [pageTagFilter, setPageTagFilter]);
+
+    // Sort videos (after tag filter)
+    const {
+        sortedVideos,
+        sortOption,
+        sortAnchorEl,
+        handleSortClick,
+        handleSortClose
+    } = useVideoSort({
+        videos: videosFilteredByTags,
+        defaultSort: 'dateDesc',
+        onSortChange: () => setPage(1),
+        preserveOrder: !searchParams.has('sort'),
+    });
+
+    // Pagination logic
+    const totalPages = Math.ceil(sortedVideos.length / ITEMS_PER_PAGE);
+    const displayedVideos = sortedVideos.slice(
+        (page - 1) * ITEMS_PER_PAGE,
+        page * ITEMS_PER_PAGE
+    );
+    const playbackQueueVideoIds = useMemo(
+        () => sortedVideos.map(video => video.id),
+        [sortedVideos]
+    );
+
+    const goToPage = useCallback((value: number) => {
+        setPage(value);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    }, []);
+
+    const handlePageChange = (_: React.ChangeEvent<unknown>, value: number) => {
+        goToPage(value);
+    };
+
+    // Arrow keys page through the grid here exactly as they do on Home.
+    usePaginationKeyboardNavigation({ page, totalPages, onPageChange: goToPage });
+
+    // ...and so do horizontal swipes, for screens with no keyboard.
+    const swipeHandlers = usePaginationSwipeNavigation({ page, totalPages, onPageChange: goToPage });
+
+    const handleCloseDeleteModal = () => {
+        setShowDeleteModal(false);
+    };
+
+    const handleSaveCollectionTags = async (newCommonTags: string[]) => {
+        if (!collection || collectionVideos.length === 0) return;
+
+        try {
+            // Find tags to add (in new but not in old common)
+            const tagsToAdd = newCommonTags.filter(tag => !commonTags.includes(tag));
+
+            // Find tags to remove (in old common but not in new)
+            const tagsToRemove = commonTags.filter(tag => !newCommonTags.includes(tag));
+
+            if (tagsToAdd.length === 0 && tagsToRemove.length === 0) {
+                setIsTagsModalOpen(false);
+                return;
+            }
+
+            // Apply changes to all videos in this collection
+            await Promise.all(
+                collectionVideos.map(async video => {
+                    let currentTags = video.tags || [];
+
+                    // Add new tags
+                    if (tagsToAdd.length > 0) {
+                        currentTags = Array.from(new Set([...currentTags, ...tagsToAdd]));
+                    }
+
+                    // Remove tags
+                    if (tagsToRemove.length > 0) {
+                        currentTags = currentTags.filter(tag => !tagsToRemove.includes(tag));
+                    }
+
+                    if (JSON.stringify(video.tags) !== JSON.stringify(currentTags)) {
+                        await updateVideo(video.id, { tags: currentTags });
+                    }
+                })
+            );
+            showSnackbar(t('videoUpdated'));
+            setIsTagsModalOpen(false);
+        } catch (error) {
+            console.error('Error updating tags:', error);
+            showSnackbar(t('error'), 'error');
+        }
+    };
+
+    const handleDeleteCollectionOnly = async () => {
+        if (!id) return;
+        const result = await deleteCollection(id, false);
+        if (result.success) {
+            navigate('/');
+        }
+        setShowDeleteModal(false);
+    };
+
+    const handleDeleteCollectionAndVideos = async () => {
+        if (!id) return;
+        const result = await deleteCollection(id, true);
+        if (result.success) {
+            navigate('/');
+        }
+        setShowDeleteModal(false);
+    };
+
+    if (!collection) {
+        return (
+            <Container sx={{ mt: 4 }}>
+                <Alert severity="error">{t('collectionNotFound')}</Alert>
+            </Container>
+        );
+    }
+
+    return (
+        <Container maxWidth="xl" sx={{ py: 4 }}>
+            <Box sx={{ display: 'flex', alignItems: 'stretch' }}>
+                <TagsSidebar
+                    isSidebarOpen={isSidebarOpen}
+                    availableTags={availableTags}
+                    selectedTags={selectedTags}
+                    onTagToggle={handleTagToggle}
+                />
+
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, mb: 3 }}>
+                        <Box sx={{ display: 'flex', alignItems: { xs: 'flex-start', md: 'center' }, flex: '1 1 auto', minWidth: 0 }}>
+                            <Button
+                                onClick={() => setIsSidebarOpen(prev => !prev)}
+                                variant="outlined"
+                                size="small"
+                                sx={{
+                                    minWidth: 'auto',
+                                    p: 1,
+                                    display: { xs: 'none', md: 'inline-flex' },
+                                    color: 'text.secondary',
+                                    borderColor: 'text.secondary',
+                                    mr: 2,
+                                    height: 38,
+                                }}
+                            >
+                                <ViewSidebar sx={{ transform: 'rotate(180deg)' }} />
+                            </Button>
+                            <Avatar
+                                sx={{
+                                    display: { xs: 'none', md: 'flex' },
+                                    width: 56,
+                                    height: 56,
+                                    bgcolor: 'secondary.main',
+                                    mr: 2,
+                                    flexShrink: 0,
+                                }}
+                            >
+                                <Folder fontSize="large" />
+                            </Avatar>
+                            <Box sx={{ minWidth: 0 }}>
+                                <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: { xs: 0, md: 1 } }}>
+                                    <Typography
+                                        variant="h4"
+                                        component="h1"
+                                        fontWeight="bold"
+                                        sx={{
+                                            fontSize: { xs: '1.5rem', md: '2.125rem' },
+                                            lineHeight: { xs: 1.25, md: 1.235 },
+                                            overflowWrap: 'anywhere',
+                                            minWidth: 0,
+                                        }}
+                                    >
+                                        <Avatar
+                                            component="span"
+                                            aria-hidden
+                                            sx={{
+                                                display: { xs: 'inline-flex', md: 'none' },
+                                                width: 40,
+                                                height: 40,
+                                                mr: 1,
+                                                verticalAlign: 'middle',
+                                                bgcolor: 'secondary.main',
+                                            }}
+                                        >
+                                            <Folder sx={{ fontSize: 24 }} />
+                                        </Avatar>
+                                        {collection.name}
+                                    </Typography>
+                                </Box>
+                                <Typography variant="subtitle1" color="text.secondary">
+                                    {collectionVideos.length === 0
+                                        ? `0 ${t('videos')}`
+                                        : selectedTags.length > 0
+                                            ? `${sortedVideos.length} / ${collectionVideos.length} ${t('videos')}`
+                                            : `${collectionVideos.length} ${t('videos')}`}
+                                </Typography>
+                            </Box>
+                        </Box>
+
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
+                                <Tooltip title={t('addTags')}>
+                                    <IconButton
+                                        color="primary"
+                                        onClick={() => setIsTagsModalOpen(true)}
+                                        aria-label="add tags to collection"
+                                    >
+                                        <LocalOffer />
+                                    </IconButton>
+                                </Tooltip>
+                                <FavoriteToggle
+                                    active={isFavoriteCollection(collection.id)}
+                                    onToggle={() => toggleFavoriteCollection(collection.id, {
+                                        name: collection.name,
+                                        title: collection.title,
+                                        videoCount: collectionVideos.length,
+                                    })}
+                                    label={t('favoriteCollection')}
+                                    activeLabel={t('unfavorite')}
+                                    disabled={isFavoriteToggling}
+                                />
+                            </Box>
+                            {collectionVideos.length > 0 && (
+                                <SortControl
+                                    sortOption={sortOption}
+                                    sortAnchorEl={sortAnchorEl}
+                                    onSortClick={handleSortClick}
+                                    onSortClose={handleSortClose}
+                                    sx={{ height: 38 }}
+                                />
+                            )}
+                        </Box>
+                    </Box>
+
+                    {collectionVideos.length === 0 ? (
+                        <Alert severity="info" variant="outlined">{t('noVideosInCollection')}</Alert>
+                    ) : sortedVideos.length === 0 ? (
+                        <Alert severity="info" variant="outlined">
+                            {t('noVideosFoundMatching')}
+                        </Alert>
+                    ) : (
+                        <Box>
+                            <Grid container spacing={3} {...swipeHandlers}>
+                                {displayedVideos.map(video => (
+                                    <Grid size={{ xs: 12, sm: 6, md: 4, lg: 3 }} key={video.id}>
+                                        <VideoCard
+                                            video={video}
+                                            collections={collections}
+                                            onDeleteVideo={deleteVideo}
+                                            showDeleteButton={true}
+                                            disableCollectionGrouping={true}
+                                            sourceCollectionId={id}
+                                            playbackQueueVideoIds={playbackQueueVideoIds}
+                                            showTagsOnThumbnail={showTagsOnThumbnail}
+                                        />
+                                    </Grid>
+                                ))}
+                            </Grid>
+
+                            {totalPages > 1 && (
+                                <Box sx={{ mt: 4, display: 'flex', justifyContent: 'center' }}>
+                                    <Pagination
+                                        count={totalPages}
+                                        page={page}
+                                        onChange={handlePageChange}
+                                        color="primary"
+                                        size="large"
+                                        showFirstButton
+                                        showLastButton
+                                    />
+                                </Box>
+                            )}
+                        </Box>
+                    )}
+                </Box>
+            </Box>
+
+            <DeleteCollectionModal
+                isOpen={showDeleteModal}
+                onClose={handleCloseDeleteModal}
+                onDeleteCollectionOnly={handleDeleteCollectionOnly}
+                onDeleteCollectionAndVideos={handleDeleteCollectionAndVideos}
+                collectionName={collection?.name || ''}
+                videoCount={collectionVideos.length}
+            />
+
+            <TagsModal
+                open={isTagsModalOpen}
+                onClose={() => setIsTagsModalOpen(false)}
+                identityKey={`collection:${collection.id}`}
+                videoTags={commonTags}
+                availableTags={globalAvailableTags ?? []}
+                onSave={handleSaveCollectionTags}
+            />
+        </Container>
+    );
+};
+
+export default CollectionPage;

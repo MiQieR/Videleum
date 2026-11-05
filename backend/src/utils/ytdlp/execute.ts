@@ -1,0 +1,609 @@
+import { type ChildProcess } from "child_process";
+import path from "path";
+import { PassThrough } from "stream";
+import { isBilibiliUrl, isYouTubeUrl } from "../helpers";
+import {
+  moveSafeSync,
+  pathExistsSafeSync,
+  resolveSafeChildPath,
+} from "../security";
+import { logger } from "../logger";
+import { ensureCookiesFileIsNormalized } from "./cookies";
+import {
+  YOUTUBE_COOKIES_EXPIRED_MESSAGE,
+  YOUTUBE_COOKIES_REQUIRED_MESSAGE,
+  isHttpForbiddenError,
+  isMembersOnlyError,
+  isYouTubeBotCheckError,
+} from "./errorClassification";
+import {
+  resolveYouTubeRemoteComponents,
+  withDefaultYouTubeExtractorArgs,
+} from "./extractorArgs";
+import { appendYtDlpInputOperand, flagsToArgs } from "./flags";
+import { spawnYtDlp, withYtDlpRelease } from "./release";
+import type { YtDlpRelease } from "./release/types";
+import { appendYouTubeJsRuntimeArg } from "./runtime";
+
+/**
+ * Error thrown when a yt-dlp invocation fails. Carries the captured `stderr` and
+ * the exit `code`/signal as typed fields so callers can inspect them without
+ * `(error as any)` casts.
+ */
+export class YtDlpExecutionError extends Error {
+  readonly stderr?: string;
+  readonly code?: string | number | null;
+
+  constructor(
+    message: string,
+    options: { stderr?: string; code?: string | number | null } = {}
+  ) {
+    super(message);
+    this.name = "YtDlpExecutionError";
+    this.stderr = options.stderr;
+    this.code = options.code;
+  }
+}
+
+/**
+ * Preprocess URL to handle specific domain replacements
+ * e.g. xvideos.red -> xvideos.com to support yt-dlp extraction
+ */
+function preprocessUrl(url: string): string {
+  if (!url) return url;
+
+  // Handle XVideos mirrors
+  if (url.includes("xvideos.red")) {
+    logger.info(`Preprocessing URL: replacing xvideos.red with xvideos.com`);
+    return url.replace("xvideos.red", "xvideos.com");
+  }
+
+  return url;
+}
+
+/**
+ * Execute yt-dlp with JSON output and return parsed result
+ * @param url - Video URL
+ * @param flags - yt-dlp flags
+ * @param retryWithoutFormatRestrictions - If true, retry without format restrictions if format error occurs
+ */
+export async function executeYtDlpJson(
+  rawUrl: string,
+  flags: Record<string, any> = {},
+  retryWithoutFormatRestrictions: boolean = true
+): Promise<any> {
+  return withYtDlpRelease((release) =>
+    executeYtDlpJsonWithRelease(
+      release,
+      rawUrl,
+      flags,
+      retryWithoutFormatRestrictions
+    )
+  );
+}
+
+async function executeYtDlpJsonWithRelease(
+  release: YtDlpRelease,
+  rawUrl: string,
+  flags: Record<string, any>,
+  retryWithoutFormatRestrictions: boolean
+): Promise<any> {
+  const url = preprocessUrl(rawUrl);
+  const partialFlags = withDefaultYouTubeExtractorArgs(url, flags);
+  const effectiveFlags = await resolveYouTubeRemoteComponents(
+    url,
+    partialFlags,
+    release
+  );
+  const { noWarnings: _noWarnings, ...jsonFlags } = effectiveFlags;
+  const args = [
+    "--dump-single-json",
+    "--no-warnings",
+    ...flagsToArgs(jsonFlags),
+  ];
+
+  const cookiesPath = ensureCookiesFileIsNormalized();
+  if (cookiesPath) {
+    args.push("--cookies", cookiesPath);
+  }
+
+  await appendYouTubeJsRuntimeArg(args, url, release);
+  appendYtDlpInputOperand(args, url);
+
+  logger.info(
+    `[yt-dlp] executing release=${release.releaseId} version=${release.version ?? "unknown"}`
+  );
+
+  return new Promise<any>((resolve, reject) => {
+    const subprocess = spawnYtDlp(release, args);
+
+    let stdout = "";
+    let stderr = "";
+
+    subprocess.stdout?.on("data", (data: Buffer) => {
+      stdout += data.toString();
+    });
+
+    subprocess.stderr?.on("data", (data: Buffer) => {
+      stderr += data.toString();
+    });
+
+    subprocess.on("close", async (code) => {
+      if (code !== 0) {
+        const isFormatError =
+          stderr.includes("Requested format is not available") ||
+          stderr.includes("format is not available") ||
+          stderr.includes("No video formats found");
+
+        const resolveJsonYtDlpErrorMessage = (exitCode: number | null): string =>
+          isYouTubeUrl(url) && isYouTubeBotCheckError(stderr)
+            ? YOUTUBE_COOKIES_REQUIRED_MESSAGE
+            : cookiesPath !== null &&
+                isYouTubeUrl(url) &&
+                isHttpForbiddenError(stderr)
+              ? YOUTUBE_COOKIES_EXPIRED_MESSAGE
+              : `yt-dlp process exited with code ${exitCode}`;
+
+        if (isFormatError && retryWithoutFormatRestrictions) {
+          const hasFormatRestrictions =
+            (effectiveFlags.formatSort !== undefined &&
+              effectiveFlags.formatSort !== null) ||
+            (effectiveFlags.format !== undefined &&
+              effectiveFlags.format !== null) ||
+            (effectiveFlags.S !== undefined && effectiveFlags.S !== null) ||
+            (effectiveFlags.f !== undefined && effectiveFlags.f !== null);
+
+          if (hasFormatRestrictions) {
+            logger.info(
+              "Format not available, retrying without format restrictions and with --ignore-config..."
+            );
+            try {
+              const retryFlags: Record<string, any> = {
+                ...effectiveFlags,
+                ignoreConfig: true,
+              };
+              delete retryFlags.formatSort;
+              delete retryFlags.format;
+              delete retryFlags.S;
+              delete retryFlags.f;
+              const result = await executeYtDlpJsonWithRelease(
+                release,
+                url,
+                retryFlags,
+                false
+              );
+              resolve(result);
+              return;
+            } catch {
+              reject(
+                new YtDlpExecutionError(resolveJsonYtDlpErrorMessage(code), {
+                  stderr,
+                  code,
+                })
+              );
+              return;
+            }
+          } else if (!effectiveFlags.ignoreConfig) {
+            logger.info(
+              "Format not available without explicit format flags, retrying with --ignore-config..."
+            );
+            try {
+              const retryFlags: Record<string, any> = {
+                ...effectiveFlags,
+                ignoreConfig: true,
+              };
+              const result = await executeYtDlpJsonWithRelease(
+                release,
+                url,
+                retryFlags,
+                false
+              );
+              resolve(result);
+              return;
+            } catch {
+              reject(
+                new YtDlpExecutionError(resolveJsonYtDlpErrorMessage(code), {
+                  stderr,
+                  code,
+                })
+              );
+              return;
+            }
+          }
+        }
+
+        reject(
+          new YtDlpExecutionError(resolveJsonYtDlpErrorMessage(code), {
+            stderr,
+            code,
+          })
+        );
+        return;
+      }
+
+      if (
+        stderr &&
+        !stderr.includes("[download]") &&
+        !stderr.includes("[info]")
+      ) {
+        logger.warn("yt-dlp stderr:", stderr);
+      }
+
+      try {
+        resolve(JSON.parse(stdout));
+      } catch (parseError) {
+        logger.error("Failed to parse yt-dlp JSON output:", parseError);
+        logger.error("Output:", stdout);
+        reject(new Error("Failed to parse yt-dlp output as JSON"));
+      }
+    });
+
+    subprocess.on("error", (error) => {
+      reject(error);
+    });
+  });
+}
+
+/**
+ * Get channel URL from a video URL
+ * Uses: yt-dlp <video_url> --print channel_url --skip-download
+ */
+export async function getChannelUrlFromVideo(
+  videoUrlRaw: string,
+  networkConfig: Record<string, any> = {}
+): Promise<string | null> {
+  try {
+    return await withYtDlpRelease(async (release) => {
+      const videoUrl = preprocessUrl(videoUrlRaw);
+      const args = [
+        "--print",
+        "channel_url",
+        "--skip-download",
+        "--no-warnings",
+        ...flagsToArgs(networkConfig),
+      ];
+
+      const cookiesPath = ensureCookiesFileIsNormalized();
+      if (cookiesPath) {
+        args.push("--cookies", cookiesPath);
+      }
+
+      await appendYouTubeJsRuntimeArg(args, videoUrl, release);
+      appendYtDlpInputOperand(args, videoUrl);
+
+      return await new Promise<string | null>((resolve) => {
+        const subprocess = spawnYtDlp(release, args);
+        let stdout = "";
+        let stderr = "";
+
+        subprocess.stdout?.on("data", (data: Buffer) => {
+          stdout += data.toString();
+        });
+        subprocess.stderr?.on("data", (data: Buffer) => {
+          stderr += data.toString();
+        });
+        subprocess.on("close", (code) => {
+          if (code !== 0) {
+            logger.warn(`Failed to get channel URL: ${stderr}`);
+            resolve(null);
+            return;
+          }
+          resolve(stdout.trim() || null);
+        });
+        subprocess.on("error", (error) => {
+          logger.warn(`Error getting channel URL:`, error);
+          resolve(null);
+        });
+      });
+    });
+  } catch (error) {
+    logger.warn("yt-dlp unavailable when fetching channel URL:", error);
+    return null;
+  }
+}
+
+/**
+ * Download channel avatar/thumbnail from channel URL
+ * Uses: yt-dlp <channel_url> --write-thumbnail --playlist-items 0 -o <output_path>
+ */
+export async function downloadChannelAvatar(
+  channelUrlRaw: string,
+  outputPath: string,
+  networkConfig: Record<string, any> = {}
+): Promise<boolean> {
+  try {
+    return await withYtDlpRelease(async (release) => {
+      const channelUrl = preprocessUrl(channelUrlRaw);
+      const outputDir = path.dirname(outputPath);
+      const outputFilename = path.basename(outputPath, path.extname(outputPath));
+      const outputTemplate = resolveSafeChildPath(
+        outputDir,
+        `${outputFilename}.%(ext)s`
+      );
+
+      const args = [
+        "--write-thumbnail",
+        "--playlist-items",
+        "0",
+        "--skip-download",
+        "--no-warnings",
+        "--output",
+        outputTemplate,
+        ...flagsToArgs(networkConfig),
+      ];
+
+      const cookiesPath = ensureCookiesFileIsNormalized();
+      if (cookiesPath) {
+        args.push("--cookies", cookiesPath);
+      }
+
+      await appendYouTubeJsRuntimeArg(args, channelUrl, release);
+      appendYtDlpInputOperand(args, channelUrl);
+
+      return await new Promise<boolean>((resolve) => {
+        const subprocess = spawnYtDlp(release, args);
+
+        let stderr = "";
+
+        subprocess.stderr?.on("data", (data: Buffer) => {
+          stderr += data.toString();
+        });
+
+        subprocess.on("close", (code) => {
+          if (code !== 0) {
+            logger.warn(`Failed to download channel avatar: ${stderr}`);
+            // For Bilibili, this might be expected - log but don't fail completely
+            if (isBilibiliUrl(channelUrl)) {
+              logger.warn(`Bilibili channel avatar download may not be supported by yt-dlp`);
+            }
+            resolve(false);
+            return;
+          }
+
+          // Check if the file was created (yt-dlp might save with different extension)
+          const possibleExtensions = ["jpg", "jpeg", "png", "webp"];
+          let foundFile = false;
+          for (const ext of possibleExtensions) {
+            const possiblePath = resolveSafeChildPath(
+              outputDir,
+              `${outputFilename}.${ext}`
+            );
+            if (pathExistsSafeSync(possiblePath, outputDir)) {
+              // If it's not a jpg, rename it to jpg
+              if (ext !== "jpg" && outputPath.endsWith(".jpg")) {
+                try {
+                  moveSafeSync(possiblePath, outputDir, outputPath, outputDir, {
+                    overwrite: true,
+                  });
+                } catch (error) {
+                  logger.warn(`Failed to rename avatar to .jpg:`, error);
+                  // If rename fails, just use the original file
+                  resolve(true);
+                  return;
+                }
+              } else if (ext !== "jpg") {
+                // File exists but with different extension - that's okay, we'll handle it
+                resolve(true);
+                return;
+              }
+              foundFile = true;
+              break;
+            }
+          }
+
+          // If no file found, check if outputPath exists (might have been created directly)
+          if (pathExistsSafeSync(outputPath, outputDir)) {
+            resolve(true);
+            return;
+          }
+
+          if (!foundFile) {
+            logger.warn(`Channel avatar file not found after download. Checked extensions: ${possibleExtensions.join(", ")}`);
+            logger.warn(`Output directory: ${outputDir}, Output filename: ${outputFilename}`);
+          }
+          resolve(foundFile);
+        });
+
+        subprocess.on("error", (error) => {
+          logger.warn(`Error downloading channel avatar:`, error);
+          resolve(false);
+        });
+      });
+    });
+  } catch (error) {
+    logger.warn("yt-dlp unavailable when downloading channel avatar:", error);
+    return false;
+  }
+}
+
+/**
+ * Execute yt-dlp with spawn for progress tracking.
+ * Returns a subprocess-like object with kill() method.
+ *
+ * Uses PassThrough streams so the actual spawn can be deferred until
+ * ensureYtDlpAvailable() confirms (and auto-installs) yt-dlp.
+ */
+export function executeYtDlpSpawn(
+  rawUrl: string,
+  flags: Record<string, any> = {}
+): {
+  stdout: NodeJS.ReadableStream | null;
+  stderr: NodeJS.ReadableStream | null;
+  kill: (signal?: NodeJS.Signals) => boolean;
+  then: (
+    onFulfilled?: (value: void) => void | Promise<void>,
+    onRejected?: (reason: any) => void | Promise<void>
+  ) => Promise<void>;
+} {
+  const url = preprocessUrl(rawUrl);
+  const partialFlags = withDefaultYouTubeExtractorArgs(url, flags);
+
+  // PassThrough streams let callers attach handlers before the subprocess starts.
+  const stdoutPass = new PassThrough();
+  const stderrPass = new PassThrough();
+
+  let activeSubprocess: ChildProcess | null = null;
+  let killRequested = false;
+  let killSignal: NodeJS.Signals | undefined;
+  let resolved = false;
+  let rejected = false;
+  let stderr = "";
+
+  const endPassThroughStreams = () => {
+    if (!stdoutPass.destroyed && !stdoutPass.readableEnded) {
+      stdoutPass.end();
+    }
+    if (!stderrPass.destroyed && !stderrPass.readableEnded) {
+      stderrPass.end();
+    }
+  };
+
+  const pipeOrForward = (
+    source: NodeJS.ReadableStream | null | undefined,
+    target: PassThrough
+  ) => {
+    if (!source) {
+      target.end();
+      return;
+    }
+
+    if (typeof (source as { pipe?: unknown }).pipe === "function") {
+      source.pipe(target, { end: true });
+      return;
+    }
+
+    // Fallback used by tests that mock child streams as plain EventEmitters.
+    source.on("data", (chunk: Buffer | string) => target.write(chunk));
+    source.on("end", () => target.end());
+  };
+
+  // Accumulate stderr for error reporting (callers may also attach their own handlers).
+  stderrPass.on("data", (data: Buffer) => {
+    stderr += data.toString();
+  });
+
+  const promise = withYtDlpRelease(async (release) => {
+        const effectiveFlags = await resolveYouTubeRemoteComponents(
+          url,
+          partialFlags,
+          release
+        );
+        const baseArgs = [...flagsToArgs(effectiveFlags)];
+
+        const cookiesPath = ensureCookiesFileIsNormalized();
+        if (cookiesPath) {
+          baseArgs.push("--cookies", cookiesPath);
+        }
+
+        const args = [...baseArgs];
+        await appendYouTubeJsRuntimeArg(args, url, release);
+        appendYtDlpInputOperand(args, url);
+
+        logger.info(
+          `[yt-dlp] spawning release=${release.releaseId} version=${release.version ?? "unknown"}`
+        );
+
+        return await new Promise<void>((resolve, reject) => {
+          if (killRequested) {
+            rejected = true;
+            endPassThroughStreams();
+            reject(
+              new YtDlpExecutionError("yt-dlp process cancelled before start", {
+                code: "SIGTERM",
+              })
+            );
+            return;
+          }
+
+          activeSubprocess = spawnYtDlp(release, args);
+
+          pipeOrForward(activeSubprocess.stdout, stdoutPass);
+          pipeOrForward(activeSubprocess.stderr, stderrPass);
+
+          // Cancellation might happen between availability check and spawn.
+          if (killRequested && !activeSubprocess.killed) {
+            activeSubprocess.kill(killSignal);
+          }
+
+          activeSubprocess.on("close", (code, signal) => {
+            if (!resolved && !rejected) {
+              if (code === 0) {
+                resolved = true;
+                resolve();
+              } else if (killRequested) {
+                rejected = true;
+                reject(
+                  new YtDlpExecutionError(
+                    signal
+                      ? `yt-dlp process cancelled by ${signal}`
+                      : "yt-dlp process cancelled",
+                    { stderr, code: signal || killSignal || "SIGTERM" }
+                  )
+                );
+              } else {
+                rejected = true;
+                // Members-only content is an expected, benign skip rather than
+                // a real failure — keep it out of the error log so the
+                // subscription path stays informational-only (issue #393).
+                if (isMembersOnlyError(stderr)) {
+                  logger.info("yt-dlp skipped members-only content:", stderr);
+                } else {
+                  logger.error("yt-dlp error output:", stderr);
+                }
+                // A 403 on a YouTube download that sent cookies usually means
+                // the cookie session was invalidated; say so instead of the
+                // bare exit code so the user knows to re-upload cookies.
+                const youtubeCookiesRequired =
+                  !signal &&
+                  isYouTubeUrl(url) &&
+                  isYouTubeBotCheckError(stderr);
+                const youtubeCookiesExpired =
+                  !signal &&
+                  cookiesPath !== null &&
+                  isYouTubeUrl(url) &&
+                  isHttpForbiddenError(stderr);
+                reject(
+                  new YtDlpExecutionError(
+                    signal
+                      ? `yt-dlp process exited due to signal ${signal}`
+                      : youtubeCookiesRequired
+                        ? YOUTUBE_COOKIES_REQUIRED_MESSAGE
+                        : youtubeCookiesExpired
+                          ? YOUTUBE_COOKIES_EXPIRED_MESSAGE
+                          : `yt-dlp process exited with code ${code}`,
+                    { stderr, code: signal || code }
+                  )
+                );
+              }
+            }
+          });
+
+          activeSubprocess.on("error", (error) => {
+            if (!resolved && !rejected) {
+              rejected = true;
+              reject(error);
+            }
+          });
+        });
+      })
+    .catch((err) => {
+      // End streams without emitting stream "error" events that callers don't subscribe to.
+      endPassThroughStreams();
+      throw err;
+    });
+
+  return {
+    stdout: stdoutPass,
+    stderr: stderrPass,
+    kill: (signal?: NodeJS.Signals) => {
+      killRequested = true;
+      killSignal = signal;
+      if (activeSubprocess && !activeSubprocess.killed) {
+        return activeSubprocess.kill(signal);
+      }
+      // Allow cancelling before spawn starts.
+      return activeSubprocess === null ? true : false;
+    },
+    then: promise.then.bind(promise),
+  };
+}

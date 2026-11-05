@@ -1,0 +1,227 @@
+import { describe, expect, it, vi } from "vitest";
+import {
+  buildSetupMessage,
+  GeminiLiveTranslationClient,
+  GeminiSocketLike,
+} from "../../../services/liveTranslation/geminiLiveTranslationClient";
+
+class FakeSocket implements GeminiSocketLike {
+  readyState = 0;
+  sent: string[] = [];
+  private handlers: Record<string, ((...args: any[]) => void)[]> = {};
+
+  on(event: string, cb: (...args: any[]) => void): void {
+    (this.handlers[event] ||= []).push(cb);
+  }
+  send(data: string): void {
+    this.sent.push(data);
+  }
+  close(): void {
+    this.emit("close", 1000, "");
+  }
+  emit(event: string, ...args: any[]): void {
+    for (const cb of this.handlers[event] || []) cb(...args);
+  }
+  open(): void {
+    this.readyState = 1;
+    this.emit("open");
+  }
+  message(obj: unknown): void {
+    this.emit("message", Buffer.from(JSON.stringify(obj)), true);
+  }
+}
+
+function makeClient(handlers = {}) {
+  const fake = new FakeSocket();
+  const client = new GeminiLiveTranslationClient({
+    apiKey: "k",
+    model: "gemini-3.5-live-translate-preview",
+    targetLanguage: "en",
+    handlers,
+    socketFactory: () => fake,
+  });
+  return { client, fake };
+}
+
+describe("buildSetupMessage", () => {
+  it("nests translationConfig in generationConfig and transcriptions at setup level", () => {
+    const msg = buildSetupMessage({ model: "gemini-3.5-live-translate-preview", targetLanguage: "es" }) as any;
+    expect(msg.setup.model).toBe("models/gemini-3.5-live-translate-preview");
+    expect(msg.setup.generationConfig.responseModalities).toEqual(["AUDIO"]);
+    expect(msg.setup.generationConfig.translationConfig.targetLanguageCode).toBe("es");
+    // Transcription configs must NOT be inside generationConfig.
+    expect(msg.setup.generationConfig.inputAudioTranscription).toBeUndefined();
+    expect(msg.setup.inputAudioTranscription).toEqual({});
+    expect(msg.setup.outputAudioTranscription).toEqual({});
+  });
+
+  it("does not double-prefix an already-qualified model name", () => {
+    const msg = buildSetupMessage({ model: "models/gemini-3.5-live-translate-preview", targetLanguage: "en" }) as any;
+    expect(msg.setup.model).toBe("models/gemini-3.5-live-translate-preview");
+  });
+});
+
+describe("GeminiLiveTranslationClient", () => {
+  it("sends the setup message with the target language on open", () => {
+    const { client, fake } = makeClient();
+    client.connect();
+    fake.open();
+    expect(fake.sent).toHaveLength(1);
+    const setup = JSON.parse(fake.sent[0]);
+    expect(setup.setup.generationConfig.translationConfig.targetLanguageCode).toBe("en");
+  });
+
+  it("emits ready on setupComplete", () => {
+    const onReady = vi.fn();
+    const { client, fake } = makeClient({ onReady });
+    client.connect();
+    fake.open();
+    expect(client.ready).toBe(false);
+    fake.message({ setupComplete: {} });
+    expect(onReady).toHaveBeenCalledOnce();
+    expect(client.ready).toBe(true);
+  });
+
+  it("forwards audio as audio/pcm;rate=16000 only when ready", () => {
+    const { client, fake } = makeClient();
+    client.connect();
+    fake.open();
+    expect(client.sendAudio("AAAA")).toBe(false); // not ready yet
+    fake.message({ setupComplete: {} });
+    expect(client.sendAudio("AAAA")).toBe(true);
+    const audioMsg = JSON.parse(fake.sent[fake.sent.length - 1]);
+    expect(audioMsg.realtimeInput.audio.mimeType).toBe("audio/pcm;rate=16000");
+    expect(audioMsg.realtimeInput.audio.data).toBe("AAAA");
+  });
+
+  it("maps input/output transcripts and inline audio", () => {
+    const onInputTranscript = vi.fn();
+    const onOutputTranscript = vi.fn();
+    const onAudio = vi.fn();
+    const { client, fake } = makeClient({ onInputTranscript, onOutputTranscript, onAudio });
+    client.connect();
+    fake.open();
+    fake.message({ setupComplete: {} });
+
+    fake.message({ serverContent: { inputTranscription: { text: "hola", languageCode: "es" } } });
+    expect(onInputTranscript).toHaveBeenCalledWith("hola", "es");
+
+    fake.message({ serverContent: { outputTranscription: { text: "hello", languageCode: "en" } } });
+    expect(onOutputTranscript).toHaveBeenCalledWith("hello", "en");
+
+    fake.message({
+      serverContent: { modelTurn: { parts: [{ inlineData: { mimeType: "audio/pcm;rate=24000", data: "QUJD" } }] } },
+    });
+    expect(onAudio).toHaveBeenCalledWith("QUJD");
+  });
+
+  it("emits onInterrupted when Gemini reports a barge-in", () => {
+    const onInterrupted = vi.fn();
+    const onAudio = vi.fn();
+    const { client, fake } = makeClient({ onInterrupted, onAudio });
+    client.connect();
+    fake.open();
+    fake.message({ setupComplete: {} });
+
+    fake.message({ serverContent: { interrupted: true } });
+    expect(onInterrupted).toHaveBeenCalledOnce();
+    // A non-interrupted serverContent must not trigger it.
+    fake.message({ serverContent: { outputTranscription: { text: "hi" } } });
+    expect(onInterrupted).toHaveBeenCalledOnce();
+  });
+
+  it("drops same-frame audio on an interrupted frame", () => {
+    const onInterrupted = vi.fn();
+    const onAudio = vi.fn();
+    const { client, fake } = makeClient({ onInterrupted, onAudio });
+    client.connect();
+    fake.open();
+    fake.message({ setupComplete: {} });
+
+    // Audio in an interrupted frame is the abandoned response's tail: it arrives
+    // after the downstream flush, so forwarding it would play over the replacement.
+    fake.message({
+      serverContent: {
+        interrupted: true,
+        modelTurn: { parts: [{ inlineData: { mimeType: "audio/pcm;rate=24000", data: "QUJD" } }] },
+      },
+    });
+    expect(onInterrupted).toHaveBeenCalledOnce();
+    expect(onAudio).not.toHaveBeenCalled();
+
+    // Audio on an ordinary frame is still forwarded.
+    fake.message({
+      serverContent: {
+        modelTurn: { parts: [{ inlineData: { mimeType: "audio/pcm;rate=24000", data: "REVG" } }] },
+      },
+    });
+    expect(onAudio).toHaveBeenCalledWith("REVG");
+  });
+
+  it("dispatches a same-frame output transcript before the interruption boundary", () => {
+    const calls: string[] = [];
+    const onOutputTranscript = vi.fn(() => calls.push("output"));
+    const onInterrupted = vi.fn(() => calls.push("interrupted"));
+    const { client, fake } = makeClient({ onOutputTranscript, onInterrupted });
+    client.connect();
+    fake.open();
+    fake.message({ setupComplete: {} });
+
+    // A frame carrying both a trailing abandoned delta and the barge-in must
+    // deliver the delta first, so it closes the current caption rather than
+    // seeding a new cue the replacement turn would be concatenated onto.
+    fake.message({
+      serverContent: {
+        outputTranscription: { text: "abandoned" },
+        interrupted: true,
+      },
+    });
+    expect(calls).toEqual(["output", "interrupted"]);
+  });
+
+  it("emits onTurnComplete only on turnComplete, after the output", () => {
+    const onOutputTranscript = vi.fn();
+    const onTurnComplete = vi.fn();
+    const { client, fake } = makeClient({ onOutputTranscript, onTurnComplete });
+    client.connect();
+    fake.open();
+    fake.message({ setupComplete: {} });
+
+    // generationComplete is NOT a boundary: Gemini's final transcription delta
+    // can still arrive after it, so closing here would split one translation.
+    fake.message({
+      serverContent: {
+        outputTranscription: { text: "wor" },
+        generationComplete: true,
+      },
+    });
+    expect(onOutputTranscript).toHaveBeenCalledWith("wor", undefined);
+    expect(onTurnComplete).not.toHaveBeenCalled();
+
+    // The late delta arrives, then turnComplete closes the caption — delivered
+    // last, so the boundary follows the final text in the same message.
+    fake.message({
+      serverContent: {
+        outputTranscription: { text: "ld" },
+        turnComplete: true,
+      },
+    });
+    expect(onOutputTranscript).toHaveBeenLastCalledWith("ld", undefined);
+    expect(onTurnComplete).toHaveBeenCalledOnce();
+
+    // Ordinary content without a boundary must not trigger it.
+    fake.message({ serverContent: { outputTranscription: { text: "again" } } });
+    expect(onTurnComplete).toHaveBeenCalledOnce();
+  });
+
+  it("reports a setup failure when closed before setupComplete (code 1007)", () => {
+    const onError = vi.fn();
+    const onClose = vi.fn();
+    const { client, fake } = makeClient({ onError, onClose });
+    client.connect();
+    fake.open();
+    fake.emit("close", 1007, Buffer.from("Invalid JSON payload"));
+    expect(onError).toHaveBeenCalledWith("gemini_setup_failed", expect.any(String), true);
+    expect(onClose).toHaveBeenCalled();
+  });
+});

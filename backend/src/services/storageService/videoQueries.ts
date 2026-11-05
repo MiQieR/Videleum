@@ -1,0 +1,297 @@
+import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
+import { db } from "../../db";
+import { videos } from "../../db/schema";
+import { DatabaseError } from "../../errors/DownloadErrors";
+import { logger } from "../../utils/logger";
+import { isSubtitleArray } from "./types";
+
+export type VideoCallerRole = "admin" | "visitor";
+
+function parseVideoMetadata(id: string, field: "tags" | "subtitles", value: string | null) {
+  try {
+    const parsed: unknown = value ? JSON.parse(value) : [];
+    if (!Array.isArray(parsed) || (field === "subtitles" && !isSubtitleArray(parsed))) {
+      throw new Error("Expected an array of valid metadata entries");
+    }
+    // Legacy arrays may contain non-string entries written before API validation.
+    // Keep reads usable without rewriting stored data; write paths validate separately.
+    return field === "tags" ? parsed.filter((tag): tag is string => typeof tag === "string") : parsed;
+  } catch (error) {
+    throw new DatabaseError(
+      `Cannot read video library: video ${id} has invalid ${field} metadata. Repair this record before deleting files.`,
+      error instanceof Error ? error : new Error(String(error)),
+      "readVideoMetadata"
+    );
+  }
+}
+
+/** Shared metadata validation for list, detail, and export reads. */
+export function mapVideoRow(row: typeof videos.$inferSelect): import("./types").Video {
+  return {
+    ...row,
+    tags: parseVideoMetadata(row.id, "tags", row.tags),
+    subtitles: row.subtitles ? parseVideoMetadata(row.id, "subtitles", row.subtitles) : undefined,
+  } as import("./types").Video;
+}
+
+/** Sidecar ownership depends on paths, never on tags or subtitles being readable. */
+export function getMediaServerArtifactOwners(): import("./types").Video[] {
+  return db.select({
+    id: videos.id, title: videos.title, createdAt: videos.createdAt, sourceUrl: videos.sourceUrl,
+    videoPath: videos.videoPath,
+  }).from(videos).all() as import("./types").Video[];
+}
+
+/** Ownership checks do not need tags, descriptions, or playback metadata. */
+export function getArtifactOwners(): import("./types").Video[] {
+  try {
+    return db.select({
+      id: videos.id, title: videos.title, sourceUrl: videos.sourceUrl,
+      createdAt: videos.createdAt, author: videos.author,
+      videoPath: videos.videoPath, videoFilename: videos.videoFilename,
+      thumbnailPath: videos.thumbnailPath, thumbnailFilename: videos.thumbnailFilename,
+      authorAvatarPath: videos.authorAvatarPath, authorAvatarFilename: videos.authorAvatarFilename,
+      subtitles: videos.subtitles,
+    }).from(videos).all().map((v) => ({
+      ...v, subtitles: parseVideoMetadata(v.id, "subtitles", v.subtitles),
+    })) as import("./types").Video[];
+  } catch (error) {
+    if (error instanceof DatabaseError) throw error;
+    throw new DatabaseError("Cannot verify file ownership: failed to read video library. File removal was stopped.",
+      error instanceof Error ? error : new Error(String(error)), "getArtifactOwners");
+  }
+}
+
+// Visibility: 0 = hidden, 1 = public (see db/schema.ts). Visitors are only
+// allowed to see public videos; admins see everything. Mirrors the existing
+// RSS feed filter (rssService.ts). Used to fix GHSA-hcm6-w6x8-6jhr.
+// A NULL visibility is treated as public to match the `(visibility ?? 1) === 1`
+// contract in isVideoPublic and the media classifier; a plain `= 1` would hide
+// imported/legacy rows that wrote NULL from visitors only.
+// Built lazily so the schema reference is not evaluated at module load time
+// (which would break tests that partially mock the db schema).
+const publicOnlyVisitorFilter = () =>
+  or(eq(videos.visibility, 1), isNull(videos.visibility));
+
+export function getVideos(
+  role?: VideoCallerRole
+): import("./types").Video[] {
+  try {
+    return getVideosStrict(role);
+  } catch {
+    // Preserve the existing list API fallback. Destructive callers must use
+    // getVideosStrict: a failed read is not evidence that a file has no owners.
+    return [];
+  }
+}
+
+/** Read-only export input: skip damaged records without weakening ownership checks. */
+export function getVideosForExport(ids?: readonly string[]): import("./types").Video[] {
+  if (ids?.length === 0) return [];
+  const query = db.select().from(videos).orderBy(desc(videos.createdAt));
+  const rows = ids ? query.where(inArray(videos.id, [...ids])).all() : query.all();
+  const result: import("./types").Video[] = [];
+  for (const row of rows) {
+    try {
+      result.push(mapVideoRow(row));
+    } catch (error) {
+      logger.error("Skipping damaged video during media export", error, { videoId: row.id });
+    }
+  }
+  return result;
+}
+
+export function getVideosStrict(
+  role?: VideoCallerRole
+): import("./types").Video[] {
+  try {
+    const baseQuery = db
+      .select()
+      .from(videos)
+      .orderBy(desc(videos.createdAt));
+    const allVideos =
+      role === "visitor"
+        ? baseQuery.where(publicOnlyVisitorFilter()).all()
+        : baseQuery.all();
+    return allVideos.map(mapVideoRow);
+  } catch (error) {
+    logger.error(
+      "Error getting videos",
+      error instanceof Error ? error : new Error(String(error))
+    );
+    if (error instanceof DatabaseError) throw error;
+    throw new DatabaseError(
+      "Failed to read video library",
+      error instanceof Error ? error : new Error(String(error)),
+      "getVideosStrict"
+    );
+  }
+}
+
+// Every videos column except the heavy free-text ones. `description` (KBs of
+// YouTube description per row) and `subtitles` (JSON blobs) are only consumed
+// by the player, which fetches the full row via getVideoById — omitting them
+// here keeps the list payload and its per-row JSON.parse cost proportional to
+// what list views actually render.
+// Built lazily (like publicOnlyVisitorFilter above) so the schema reference is
+// not evaluated at module load time, which would break tests that partially
+// mock the db schema.
+const videoSummaryColumns = () => ({
+  id: videos.id,
+  title: videos.title,
+  author: videos.author,
+  date: videos.date,
+  source: videos.source,
+  sourceUrl: videos.sourceUrl,
+  sourceVideoId: videos.sourceVideoId,
+  videoFilename: videos.videoFilename,
+  thumbnailFilename: videos.thumbnailFilename,
+  videoPath: videos.videoPath,
+  thumbnailPath: videos.thumbnailPath,
+  thumbnailUrl: videos.thumbnailUrl,
+  addedAt: videos.addedAt,
+  createdAt: videos.createdAt,
+  updatedAt: videos.updatedAt,
+  partNumber: videos.partNumber,
+  totalParts: videos.totalParts,
+  seriesTitle: videos.seriesTitle,
+  rating: videos.rating,
+  viewCount: videos.viewCount,
+  duration: videos.duration,
+  width: videos.width,
+  height: videos.height,
+  tags: videos.tags,
+  progress: videos.progress,
+  progressUpdatedAt: videos.progressUpdatedAt,
+  fileSize: videos.fileSize,
+  lastPlayedAt: videos.lastPlayedAt,
+  channelUrl: videos.channelUrl,
+  visibility: videos.visibility,
+  authorAvatarFilename: videos.authorAvatarFilename,
+  authorAvatarPath: videos.authorAvatarPath,
+  mediaType: videos.mediaType,
+  autoDeleteLocked: videos.autoDeleteLocked,
+});
+
+export interface VideoSummaryPage {
+  limit: number;
+  offset: number;
+}
+
+/**
+ * List-view projection of the library: all columns except `description` and
+ * `subtitles`. Used by the GET /videos list endpoint; internal callers that
+ * need full rows keep using getVideos().
+ *
+ * `page` is opt-in pagination groundwork: when omitted the full list is
+ * returned unchanged (the current frontend contract).
+ */
+export function getVideoSummaries(
+  role?: VideoCallerRole,
+  page?: VideoSummaryPage
+): import("./types").Video[] {
+  try {
+    const baseQuery = db
+      .select(videoSummaryColumns())
+      .from(videos)
+      .orderBy(desc(videos.createdAt))
+      .$dynamic();
+    const scopedQuery =
+      role === "visitor"
+        ? baseQuery.where(publicOnlyVisitorFilter())
+        : baseQuery;
+    const pagedQuery = page
+      ? scopedQuery.limit(page.limit).offset(page.offset)
+      : scopedQuery;
+    const allVideos = pagedQuery.all();
+    return allVideos.map((v) => ({
+      ...v,
+      tags: parseVideoMetadata(v.id, "tags", v.tags),
+    })) as import("./types").Video[];
+  } catch (error) {
+    logger.error(
+      "Error getting video summaries",
+      error instanceof Error ? error : new Error(String(error))
+    );
+    // Return empty array for backward compatibility with frontend
+    return [];
+  }
+}
+
+export function getVideoBySourceUrl(
+  sourceUrl: string,
+  mediaType: import("./types").MediaType = "video"
+): import("./types").Video | undefined {
+  try {
+    // Audio-only and video downloads for the same URL are separate library
+    // items, so every lookup is scoped to a media type. The default is "video"
+    // (with legacy null media_type treated as video) so video-only callers
+    // never accidentally match an audio row once one exists for the same URL;
+    // audio flows pass "audio" explicitly.
+    const condition =
+      mediaType === "audio"
+        ? and(eq(videos.sourceUrl, sourceUrl), eq(videos.mediaType, "audio"))!
+        : and(
+            eq(videos.sourceUrl, sourceUrl),
+            or(eq(videos.mediaType, "video"), isNull(videos.mediaType))
+          )!;
+
+    const result = db.select().from(videos).where(condition).get();
+
+    if (result) {
+      return mapVideoRow(result);
+    }
+    return undefined;
+  } catch (error) {
+    logger.error(
+      "Error getting video by sourceUrl",
+      error instanceof Error ? error : new Error(String(error))
+    );
+    throw new DatabaseError(
+      `Failed to get video by source URL: ${sourceUrl}`,
+      error instanceof Error ? error : new Error(String(error)),
+      "getVideoBySourceUrl"
+    );
+  }
+}
+
+export function getVideoById(
+  id: string,
+  role?: VideoCallerRole
+): import("./types").Video | undefined {
+  try {
+    const baseQuery = db.select().from(videos);
+    const video =
+      role === "visitor"
+        ? baseQuery
+            .where(
+              and(eq(videos.id, id), publicOnlyVisitorFilter())
+            )
+            .get()
+        : baseQuery.where(eq(videos.id, id)).get();
+    if (video) {
+      return mapVideoRow(video);
+    }
+    return undefined;
+  } catch (error) {
+    logger.error(
+      "Error getting video by id",
+      error instanceof Error ? error : new Error(String(error))
+    );
+    throw new DatabaseError(
+      `Failed to get video by id: ${id}`,
+      error instanceof Error ? error : new Error(String(error)),
+      "getVideoById"
+    );
+  }
+}
+
+/**
+ * Check if a video part already exists by sourceUrl
+ * Returns the existing video if found, undefined otherwise
+ */
+export function getVideoPartBySourceUrl(
+  sourceUrl: string
+): import("./types").Video | undefined {
+  return getVideoBySourceUrl(sourceUrl);
+}

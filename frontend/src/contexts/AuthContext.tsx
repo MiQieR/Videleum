@@ -1,0 +1,97 @@
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import React, { createContext, useCallback, useContext, useEffect, useMemo } from 'react';
+import { api } from '../utils/apiClient';
+import { authSettingsQueryOptions } from '../utils/settingsQueries';
+
+interface AuthContextType {
+    isAuthenticated: boolean;
+    loginRequired: boolean;
+    checkingAuth: boolean;
+    userRole: 'admin' | 'visitor' | null;
+    username: string | null;
+    login: (role?: 'admin' | 'visitor', username?: string | null) => void;
+    logout: () => void;
+}
+
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+    const queryClient = useQueryClient();
+
+    const {
+        data: authSettings,
+        error: authSettingsError,
+        isLoading: checkingAuth
+    } = useQuery(authSettingsQueryOptions);
+
+    const authenticatedRole =
+        authSettings?.authenticatedRole === 'admin' || authSettings?.authenticatedRole === 'visitor'
+            ? authSettings.authenticatedRole
+            : null;
+    const loginRequired = authSettings?.loginRequired !== false;
+    const isAuthenticated = !loginRequired || authenticatedRole !== null;
+    const userRole = authenticatedRole;
+    const username = authSettings?.authenticatedUsername ?? null;
+
+    useEffect(() => {
+        if (!authSettingsError) {
+            return;
+        }
+
+        console.error('Error checking auth settings:', authSettingsError);
+    }, [authSettingsError]);
+
+    const login = useCallback((role?: 'admin' | 'visitor', username?: string | null) => {
+        queryClient.setQueryData(authSettingsQueryOptions.queryKey, (current: any) => ({
+            ...(current ?? {}),
+            loginRequired: current?.loginRequired ?? true,
+            authenticatedRole: role ?? current?.authenticatedRole ?? 'admin',
+            authenticatedUsername: username ?? current?.authenticatedUsername ?? null,
+        }));
+        // Notify contexts to refetch settings
+        window.dispatchEvent(new CustomEvent('videleum-login'));
+        // Token is now stored in HTTP-only cookie by backend, no need to store it here
+    }, [queryClient]);
+
+    const logout = useCallback(async () => {
+        queryClient.setQueryData(authSettingsQueryOptions.queryKey, (current: any) => ({
+            ...(current ?? {}),
+            loginRequired: current?.loginRequired ?? true,
+            authenticatedRole: null,
+            authenticatedUsername: null,
+        }));
+        queryClient.removeQueries({ queryKey: ['favorite-collections'] });
+        queryClient.removeQueries({ queryKey: ['favorite-authors'] });
+
+        try {
+            // Call backend logout endpoint to clear HTTP-only cookies
+            await api.post('/settings/logout', {});
+        } catch (error) {
+            console.error('Error during logout:', error);
+            // Continue with logout even if backend call fails
+        }
+
+        // Invalidate and refetch auth settings to ensure fresh auth state
+        queryClient.invalidateQueries({ queryKey: ['authSettings'] });
+        queryClient.refetchQueries({ queryKey: ['authSettings'] });
+    }, [queryClient]);
+
+    const value = useMemo<AuthContextType>(() => ({
+        isAuthenticated, loginRequired, checkingAuth, userRole, username, login, logout,
+    }), [isAuthenticated, loginRequired, checkingAuth, userRole, username, login, logout]);
+
+    return (
+        <AuthContext.Provider value={value}>
+            {children}
+        </AuthContext.Provider>
+    );
+};
+
+// eslint-disable-next-line react-refresh/only-export-components
+export const useAuth = () => {
+    const context = useContext(AuthContext);
+    if (context === undefined) {
+        throw new Error('useAuth must be used within an AuthProvider');
+    }
+    return context;
+};

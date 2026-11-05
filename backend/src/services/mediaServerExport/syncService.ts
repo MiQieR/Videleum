@@ -1,0 +1,548 @@
+import fs from "fs-extra";
+import path from "path";
+import { AVATARS_DIR, IMAGES_DIR, VIDEOS_DIR } from "../../config/paths";
+import { logger } from "../../utils/logger";
+import {
+  copyFileSafeSync,
+  ensureDirSafeSync,
+  pathExistsSafeSync,
+  renameSafeSync,
+  resolveSafeChildPath,
+  writeFileSafeSync,
+} from "../../utils/security";
+import { getSettings } from "../storageService/settings";
+import { getArtifactOwners, getMediaServerArtifactOwners, getVideoById, getVideosForExport } from "../storageService/videoQueries";
+import { removeEmptyDirectoryChain } from "../storageService/fileHelpers";
+import type { Video } from "../storageService";
+import {
+  buildEpisodeNfo,
+  buildMovieNfo,
+  buildShowNfo,
+  normalizeVideoDateToDay,
+} from "./nfoBuilders";
+import { planMediaServerExportPaths } from "./pathPlanner";
+import { ArtifactReferenceIndex } from "./artifactReferenceIndex";
+import type {
+  MediaServerExportMode,
+  RemoveMediaServerArtifactsOptions,
+  SyncMediaServerArtifactsOptions,
+} from "./types";
+
+function getLibraryVideos(options?: {
+  libraryVideos?: Video[];
+  loadLibraryVideos?: () => Video[];
+}): Video[] {
+  if (options?.libraryVideos) {
+    return options.libraryVideos;
+  }
+
+  if (options?.loadLibraryVideos) return options.loadLibraryVideos();
+
+  return getVideosForExport();
+}
+
+function getMediaServerExportMode(): MediaServerExportMode {
+  const settings = getSettings() as { mediaServerExportMode?: MediaServerExportMode };
+  return settings.mediaServerExportMode || "off";
+}
+
+function getEffectiveMediaServerExportMode(
+  options: SyncMediaServerArtifactsOptions
+): MediaServerExportMode {
+  return options.modeOverride || getMediaServerExportMode();
+}
+
+function getAllowedRootForPath(targetPath: string): string {
+  return targetPath.startsWith(IMAGES_DIR + path.sep) ? IMAGES_DIR : VIDEOS_DIR;
+}
+
+function getAllowedRootForExistingArtifact(targetPath: string): string | null {
+  if (targetPath.startsWith(VIDEOS_DIR + path.sep)) {
+    return VIDEOS_DIR;
+  }
+  if (targetPath.startsWith(IMAGES_DIR + path.sep)) {
+    return IMAGES_DIR;
+  }
+  if (targetPath.startsWith(AVATARS_DIR + path.sep)) {
+    return AVATARS_DIR;
+  }
+  return null;
+}
+
+function removeOwnedArtifact(targetPath: string): void {
+  const allowedRoot = getAllowedRootForPath(targetPath);
+  if (!pathExistsSafeSync(targetPath, allowedRoot)) {
+    return;
+  }
+
+  fs.removeSync(targetPath);
+  removeEmptyDirectoryChain(path.dirname(targetPath), allowedRoot);
+}
+
+function atomicWriteTextFile(targetPath: string, contents: string): void {
+  const allowedRoot = getAllowedRootForPath(targetPath);
+  const targetDirectory = path.dirname(targetPath);
+  const tempPath = resolveSafeChildPath(
+    targetDirectory,
+    `.${path.basename(targetPath)}.tmp-${process.pid}-${Date.now()}`
+  );
+
+  ensureDirSafeSync(targetDirectory, allowedRoot);
+  writeFileSafeSync(tempPath, allowedRoot, contents, { encoding: "utf8" });
+  if (pathExistsSafeSync(targetPath, allowedRoot)) {
+    fs.removeSync(targetPath);
+  }
+  renameSafeSync(tempPath, allowedRoot, targetPath, allowedRoot);
+}
+
+function syncImageAlias(sourcePath: string, targetPath: string): void {
+  const allowedRoot = getAllowedRootForPath(targetPath);
+  const sourceAllowedRoot = getAllowedRootForExistingArtifact(sourcePath);
+  if (!sourceAllowedRoot) {
+    logger.warn("Skipping artwork sidecar sync for unmanaged source path", {
+      sourcePath,
+      targetPath,
+    });
+    return;
+  }
+
+  ensureDirSafeSync(path.dirname(targetPath), allowedRoot);
+  if (pathExistsSafeSync(targetPath, allowedRoot)) {
+    fs.removeSync(targetPath);
+  }
+
+  copyFileSafeSync(sourcePath, sourceAllowedRoot, targetPath, allowedRoot);
+}
+
+function resolveLocalArtworkPath(
+  webPath: string | undefined | null
+): string | null {
+  if (!webPath) {
+    return null;
+  }
+
+  if (webPath.startsWith("/videos/")) {
+    try {
+      const absolutePath = resolveSafeChildPath(
+        VIDEOS_DIR,
+        webPath.replace(/^\/videos\//, "")
+      );
+      return pathExistsSafeSync(absolutePath, VIDEOS_DIR) ? absolutePath : null;
+    } catch {
+      return null;
+    }
+  }
+
+  if (webPath.startsWith("/images/")) {
+    try {
+      const absolutePath = resolveSafeChildPath(
+        IMAGES_DIR,
+        webPath.replace(/^\/images\//, "")
+      );
+      return pathExistsSafeSync(absolutePath, IMAGES_DIR) ? absolutePath : null;
+    } catch {
+      return null;
+    }
+  }
+
+  if (webPath.startsWith("/avatars/")) {
+    try {
+      const absolutePath = resolveSafeChildPath(
+        AVATARS_DIR,
+        webPath.replace(/^\/avatars\//, "")
+      );
+      return pathExistsSafeSync(absolutePath, AVATARS_DIR) ? absolutePath : null;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function buildSourceInfoEnvelope(
+  video: Video,
+  rawSourceInfo?: unknown
+): Record<string, unknown> {
+  const subtitles = Array.isArray(video.subtitles)
+    ? video.subtitles.reduce<Record<string, Array<Record<string, unknown>>>>(
+        (acc, subtitle) => {
+          const ext = path.extname(subtitle.filename).replace(/^\./, "") || "vtt";
+          const key = subtitle.language || "unknown";
+          if (!acc[key]) {
+            acc[key] = [];
+          }
+          acc[key].push({
+            ext,
+            filename: subtitle.filename,
+            path: subtitle.path,
+          });
+          return acc;
+        },
+        {}
+      )
+    : {};
+
+  const synthesized: Record<string, unknown> = {
+    id: video.id,
+    title: video.title,
+    uploader: video.author || undefined,
+    upload_date: typeof video.date === "string" ? video.date.replace(/-/g, "") : undefined,
+    description: video.description || undefined,
+    webpage_url: video.sourceUrl || undefined,
+    duration:
+      video.duration !== undefined && video.duration !== null
+        ? Number(video.duration)
+        : undefined,
+    thumbnail: video.thumbnailPath || video.thumbnailUrl || undefined,
+    extractor: video.source || "unknown",
+    channel_url: video.channelUrl || undefined,
+    tags: Array.isArray(video.tags) ? video.tags : [],
+    subtitles,
+  };
+
+  const rawSourcePreserved =
+    typeof rawSourceInfo === "object" &&
+    rawSourceInfo !== null &&
+    !Array.isArray(rawSourceInfo);
+  const videleumMetadata = {
+    generatedBy: "videleum",
+    schemaVersion: 1,
+    rawSourcePreserved,
+  };
+
+  if (rawSourcePreserved) {
+    const rawSourceObject = rawSourceInfo as Record<string, unknown>;
+    return {
+      ...synthesized,
+      ...rawSourceObject,
+      _videleum: {
+        ...(typeof rawSourceObject._videleum === "object" &&
+        rawSourceObject._videleum !== null
+          ? rawSourceObject._videleum
+          : {}),
+        ...videleumMetadata,
+      },
+    };
+  }
+
+  return {
+    ...synthesized,
+    _videleum: videleumMetadata,
+  };
+}
+
+function matchesShowRoot(video: Video, showRootRelativeDir: string): boolean {
+  const plan = planMediaServerExportPaths(video);
+  return (
+    plan?.tvLayout.isTvCompatible === true &&
+    plan.tvLayout.showRootRelativeDir === showRootRelativeDir
+  );
+}
+
+function getShowVideos(
+  currentVideo: Video,
+  showRootRelativeDir: string,
+  libraryVideos: Video[]
+): Video[] {
+  const videosById = new Map<string, Video>();
+  videosById.set(currentVideo.id, currentVideo);
+
+  for (const video of libraryVideos) {
+    if (matchesShowRoot(video, showRootRelativeDir)) {
+      videosById.set(video.id, video);
+    }
+  }
+
+  return Array.from(videosById.values());
+}
+
+function chooseShowPosterSourcePath(showVideos: Video[]): string | null {
+  for (const video of showVideos) {
+    const avatarPath = resolveLocalArtworkPath(video.authorAvatarPath);
+    if (avatarPath) {
+      return avatarPath;
+    }
+  }
+
+  for (const video of showVideos) {
+    const thumbnailPath = resolveLocalArtworkPath(video.thumbnailPath);
+    if (thumbnailPath) {
+      return thumbnailPath;
+    }
+  }
+
+  return null;
+}
+
+function getShowPremiereDate(showVideos: Video[]): string | undefined {
+  const normalizedDates = showVideos
+    .map((video) => normalizeVideoDateToDay(video.date))
+    .filter((value): value is string => Boolean(value))
+    .sort();
+
+  return normalizedDates[0];
+}
+
+function syncShowArtifacts(video: Video, libraryVideos: Video[]): void {
+  const plan = planMediaServerExportPaths(video);
+  if (
+    !plan ||
+    !plan.tvLayout.isTvCompatible ||
+    !plan.tvLayout.showRootRelativeDir ||
+    !plan.showNfoAbsolutePath
+  ) {
+    return;
+  }
+
+  const showVideos = getShowVideos(
+    video,
+    plan.tvLayout.showRootRelativeDir,
+    libraryVideos
+  );
+  const showTitle = plan.tvLayout.showRootName || video.author || "Show";
+  const showNfo = buildShowNfo({
+    showTitle,
+    plot: "",
+    premiered: getShowPremiereDate(showVideos),
+    studio:
+      showVideos.find((candidate) => candidate.author)?.author || video.author,
+  });
+  atomicWriteTextFile(plan.showNfoAbsolutePath, showNfo);
+
+  const showPosterSourcePath = chooseShowPosterSourcePath(showVideos);
+  if (!showPosterSourcePath) {
+    for (const posterPath of plan.showPosterAbsolutePaths) {
+      removeOwnedArtifact(posterPath);
+    }
+    return;
+  }
+
+  for (const posterPath of plan.showPosterAbsolutePaths) {
+    syncImageAlias(showPosterSourcePath, posterPath);
+  }
+}
+
+export function syncMediaServerShowArtifactsForRecord(
+  video: Video,
+  options: SyncMediaServerArtifactsOptions = {}
+): void {
+  try {
+    const mode = getEffectiveMediaServerExportMode(options);
+    if (mode === "off") {
+      return;
+    }
+
+    const plan = planMediaServerExportPaths(video);
+    if (
+      !plan ||
+      !plan.tvLayout.isTvCompatible ||
+      !plan.tvLayout.showRootRelativeDir
+    ) {
+      return;
+    }
+
+    syncShowArtifacts(video, getLibraryVideos(options));
+  } catch (error) {
+    logger.error("Failed to sync media server show artifacts", error, {
+      videoId: video.id,
+      videoPath: video.videoPath,
+    });
+  }
+}
+
+export function syncMediaServerShowArtifactsForShowRoot(
+  showRootRelativeDir: string,
+  options: SyncMediaServerArtifactsOptions = {}
+): void {
+  try {
+    const mode = getEffectiveMediaServerExportMode(options);
+    if (mode === "off") {
+      return;
+    }
+
+    const libraryVideos = getLibraryVideos(options);
+    const showVideos = libraryVideos.filter((video) =>
+      matchesShowRoot(video, showRootRelativeDir)
+    );
+    const showRootAbsolutePath = resolveSafeChildPath(
+      VIDEOS_DIR,
+      showRootRelativeDir
+    );
+
+    if (showVideos.length === 0) {
+      // An unreadable episode still owns its existing show sidecars.
+      if (getMediaServerArtifactOwners().some((video) => matchesShowRoot(video, showRootRelativeDir))) return;
+      removeOwnedArtifact(resolveSafeChildPath(showRootAbsolutePath, "tvshow.nfo"));
+      for (const filename of ["show.jpg", "poster.jpg", "folder.jpg"]) {
+        removeOwnedArtifact(resolveSafeChildPath(showRootAbsolutePath, filename));
+      }
+      removeEmptyDirectoryChain(showRootAbsolutePath, VIDEOS_DIR);
+      return;
+    }
+
+    syncShowArtifacts(showVideos[0], libraryVideos);
+  } catch (error) {
+    logger.error("Failed to sync media server show artifacts by show root", error, {
+      showRootRelativeDir,
+    });
+  }
+}
+
+function syncEpisodeArtifacts(
+  video: Video,
+  _mode: Exclude<MediaServerExportMode, "off">,
+  nfoFormat: "episode" | "movie" = "episode"
+): void {
+  const plan = planMediaServerExportPaths(video);
+  if (!plan || !pathExistsSafeSync(plan.videoAbsolutePath, VIDEOS_DIR)) {
+    return;
+  }
+
+  const episodeThumbSourcePath = resolveLocalArtworkPath(video.thumbnailPath);
+  if (episodeThumbSourcePath) {
+    syncImageAlias(episodeThumbSourcePath, plan.episodeThumbAliasAbsolutePath);
+  } else {
+    removeOwnedArtifact(plan.episodeThumbAliasAbsolutePath);
+  }
+
+  const thumbFilename = episodeThumbSourcePath
+    ? path.basename(plan.episodeThumbAliasAbsolutePath)
+    : undefined;
+  const shouldWriteMovieNfo =
+    nfoFormat === "movie" && !plan.tvLayout.isTvCompatible;
+  const nfoContent = shouldWriteMovieNfo
+    ? buildMovieNfo({
+        video,
+        thumbFilename,
+      })
+    : buildEpisodeNfo({
+        video,
+        showTitle: plan.tvLayout.showRootName || video.author || "Show",
+        seasonNumber: plan.tvLayout.seasonNumber,
+        episodeNumber: plan.tvLayout.episodeNumber,
+        thumbFilename,
+      });
+  atomicWriteTextFile(plan.episodeNfoAbsolutePath, nfoContent);
+}
+
+export function syncMediaServerArtifactsForVideo(
+  videoId: string,
+  options: SyncMediaServerArtifactsOptions = {}
+): void {
+  try {
+    const video = getVideoById(videoId);
+    if (!video) {
+      return;
+    }
+
+    syncMediaServerArtifactsForRecord(video, options);
+  } catch (error) {
+    logger.error("Failed to sync media server artifacts by video id", error, {
+      videoId,
+    });
+  }
+}
+
+export function syncMediaServerArtifactsForRecord(
+  video: Video,
+  options: SyncMediaServerArtifactsOptions = {}
+): void {
+  try {
+    const mode = getEffectiveMediaServerExportMode(options);
+    if (mode === "off") {
+      return;
+    }
+
+    const plan = planMediaServerExportPaths(video);
+    if (!plan || !pathExistsSafeSync(plan.videoAbsolutePath, VIDEOS_DIR)) {
+      return;
+    }
+
+    syncEpisodeArtifacts(video, mode, options.nfoFormat);
+
+    if (mode === "nfo_and_source_json") {
+      const sourceJson = JSON.stringify(
+        buildSourceInfoEnvelope(video, options.rawSourceInfo),
+        null,
+        2
+      );
+      atomicWriteTextFile(
+        plan.episodeSourceJsonAbsolutePath,
+        `${sourceJson}\n`
+      );
+    }
+
+    if (plan.tvLayout.isTvCompatible && plan.tvLayout.showRootRelativeDir) {
+      syncShowArtifacts(video, getLibraryVideos(options));
+    }
+  } catch (error) {
+    logger.error("Failed to sync media server artifacts", error, {
+      videoId: video.id,
+      videoPath: video.videoPath,
+    });
+  }
+}
+
+const deletionArtifactReferences = new ArtifactReferenceIndex();
+
+export function removeMediaServerArtifactsForVideo(
+  video: Video,
+  options: RemoveMediaServerArtifactsOptions = {}
+): void {
+  try {
+    const plan = planMediaServerExportPaths(video);
+    if (!plan) {
+      return;
+    }
+
+    // Export may now be off while sidecars from previous exports still exist.
+    // Always remove unshared historical artifacts; reuse path plans across a
+    // batch while reconciling against fresh owners on every invocation.
+    if (options.preserveSharedArtifacts) {
+      const owners = options.libraryVideos ?? getArtifactOwners();
+      deletionArtifactReferences.update(owners, video.id);
+    }
+    const isShared = (artifact: string) => options.preserveSharedArtifacts === true &&
+      deletionArtifactReferences.has(artifact);
+    for (const artifact of [plan.episodeNfoAbsolutePath,
+      plan.episodeSourceJsonAbsolutePath, plan.episodeThumbAliasAbsolutePath]) {
+      if (!isShared(artifact)) removeOwnedArtifact(artifact);
+    }
+
+    if (!plan.tvLayout.isTvCompatible || !plan.tvLayout.showRootRelativeDir) {
+      return;
+    }
+
+    const showStillHasEpisodes = options.preserveSharedArtifacts
+      ? Boolean(plan.showNfoAbsolutePath && isShared(plan.showNfoAbsolutePath))
+      : (options.libraryVideos ?? getMediaServerArtifactOwners()).some(
+      (candidate) =>
+        candidate.id !== video.id &&
+        matchesShowRoot(candidate, plan.tvLayout.showRootRelativeDir as string)
+    );
+
+    if (showStillHasEpisodes) {
+      return;
+    }
+
+    if (plan.showNfoAbsolutePath) {
+      removeOwnedArtifact(plan.showNfoAbsolutePath);
+    }
+    for (const posterPath of plan.showPosterAbsolutePaths) {
+      removeOwnedArtifact(posterPath);
+    }
+    if (plan.tvLayout.showRootRelativeDir) {
+      const showRootAbsolutePath = resolveSafeChildPath(
+        VIDEOS_DIR,
+        plan.tvLayout.showRootRelativeDir
+      );
+      removeEmptyDirectoryChain(showRootAbsolutePath, VIDEOS_DIR);
+    }
+  } catch (error) {
+    logger.error("Failed to remove media server artifacts", error, {
+      videoId: video.id,
+      videoPath: video.videoPath,
+    });
+  }
+}
