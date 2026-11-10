@@ -110,3 +110,14 @@ The binary embeds the Lucide icon set and Videleum brand artwork, so the
 executable runs without external UI assets. Ship `yt-dlp` and `ffmpeg` either
 as system dependencies or point users at them from Settings. Cookies are always
 user-provided and must remain outside the application bundle.
+
+GitHub Actions builds both installers on every push to `main` and on manual
+dispatch:
+
+- macOS: universal `.app` bundle (Apple Silicon and Intel) packaged as a DMG.
+- Windows: x64 installer built with Inno Setup.
+
+Pushing a tag such as `v0.1.0` also publishes the DMG and installer on the
+corresponding GitHub Release. The macOS build is ad-hoc signed; distribution
+outside GitHub requires an Apple Developer ID signature and notarization.
+

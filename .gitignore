@@ -6,3 +6,6 @@ dev/
 *.db-journal
 .idea/
 .vscode/
+
+# Local packaging output
+/dist
