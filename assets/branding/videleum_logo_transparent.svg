@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1920" viewBox="0 0 1248 1248" role="img" aria-labelledby="title desc">
+  <title id="title">Video Media Fusion logo</title>
+  <desc id="desc">A colorful video-play symbol within a rounded rectangular speech bubble frame, with red, blue and purple gradients and pixel accents.</desc>
+  <defs>
+    <linearGradient id="red" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff1736"/>
+      <stop offset="1" stop-color="#f51636"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#12aaf6"/>
+      <stop offset="1" stop-color="#079de9"/>
+    </linearGradient>
+    <linearGradient id="purple" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4e08d0"/>
+      <stop offset="1" stop-color="#5600c9"/>
+    </linearGradient>
+    <linearGradient id="play" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff1a39"/>
+      <stop offset="1" stop-color="#f51635"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Main frame: red upper-left segment -->
+  <path fill="url(#red)" d="
+    M353 320
+    H573
+    V365
+    H615
+    V409
+    H382
+    C339.5 409 305 443.5 305 486
+    V679
+    H212
+    V461
+    C212 383 275 320 353 320
+    Z"/>
+
+  <!-- Main frame: purple lower-left speech-bubble segment -->
+  <path fill="url(#purple)" d="
+    M197 679
+    H305
+    V762
+    C305 804 339 838 382 838
+    H710
+    L674 916
+    H586
+    C565 916 548 923 532 935
+    L385 1049
+    C376 1056 370 1051 370 1040
+    V932
+    C370 922 364 916 353 916
+    H329
+    C256 916 197 857 197 785
+    Z"/>
+
+  <!-- Main frame: blue upper-right and lower-right segment -->
+  <path fill="url(#blue)" d="
+    M615 336
+    H850
+    C922 336 980 394 980 466
+    V690
+    H938
+    V750
+    H980
+    V785
+    C980 857 922 916 850 916
+    H674
+    L710 838
+    H823
+    C865.5 838 900 803.5 900 762
+    V485
+    C900 443 865.5 409 823 409
+    H615
+    Z"/>
+
+  <!-- Top pixel fragments around the red/blue join -->
+  <rect x="615" y="321" width="19" height="44" fill="url(#red)"/>
+  <rect x="634" y="272" width="44" height="47" fill="url(#red)"/>
+
+  <!-- Left purple pixel fragments -->
+  <rect x="197" y="565" width="37" height="40" fill="url(#purple)"/>
+  <rect x="155" y="606" width="42" height="45" fill="url(#purple)"/>
+  <rect x="197" y="651" width="43" height="28" fill="url(#purple)"/>
+
+  <!-- Right blue pixel fragments -->
+  <rect x="1008" y="652" width="38" height="40" fill="url(#blue)"/>
+  <rect x="979" y="691" width="30" height="34" fill="url(#blue)"/>
+  <rect x="1023" y="719" width="50" height="46" fill="url(#blue)"/>
+
+  <!-- White viewing window -->
+  <rect x="305" y="409" width="595" height="429" rx="77" ry="77" fill="#fff"/>
+
+  <!-- Central play symbol -->
+  <path fill="url(#play)" d="
+    M523 488
+    C531 488 540 491 548 496
+    L731 600
+    C753 613 753 645 731 658
+    L548 761
+    C521 777 487 758 487 727
+    V530
+    C487 506 501 488 523 488
+    Z"/>
+
+  <!-- Broadcast / wireless accent arcs -->
+  <path d="M900 210 C992 210 1073 286 1073 385" fill="none" stroke="url(#red)" stroke-width="39" stroke-linecap="round"/>
+  <path d="M900 279 C958 279 1010 327 1010 385" fill="none" stroke="url(#purple)" stroke-width="39" stroke-linecap="round"/>
+</svg>
